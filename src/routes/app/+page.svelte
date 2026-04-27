@@ -32,9 +32,16 @@
 		return raw != null && raw.length > 0 ? raw : emptySourceHint;
 	});
 
+	function getLiveObjUpAxis(objText: string): 'x' | 'y' | 'z' {
+		const m = objText.match(/^\s*#@up:\s*([xyz])\s*$/im);
+		const axis = (m?.[1] ?? 'y').toLowerCase();
+		return axis === 'x' || axis === 'z' ? axis : 'y';
+	}
+
 	function applyObjString(objText: string) {
 		const loader = new OBJLoader();
 		const group = loader.parse(objText);
+		const upAxis = getLiveObjUpAxis(objText);
 		const mat = new THREE.MeshStandardMaterial({
 			color: 0x7185d4,
 			metalness: 0.12,
@@ -45,6 +52,12 @@
 		group.traverse((o: THREE.Object3D) => {
 			if (o instanceof THREE.Mesh) o.material = mat;
 		});
+		// Canvas/Three.js is Y-up. Rotate incoming meshes if Live OBJ declares X-up or Z-up.
+		if (upAxis === 'z') {
+			group.rotation.x = -Math.PI / 2;
+		} else if (upAxis === 'x') {
+			group.rotation.z = Math.PI / 2;
+		}
 		renderObject = group;
 	}
 
