@@ -1,16 +1,18 @@
 <script lang="ts">
-	export let backgroundColor = '#e8ebf2';
-	export let showGrid = true;
-	export let showAxes = true;
-	export let wireframe = false;
-	export let objectColor = '#7185d4';
-	export let objectScale = 1;
-	export let objectPosX = 0;
-	export let objectPosY = 0;
-	export let objectPosZ = 0;
-	export let objectRotYDeg = 0;
-	export let ambientLightIntensity = 1;
-	export let directionalLightIntensity = 1.5;
+	let {
+		backgroundColor = $bindable('#e8ebf2'),
+		showGrid = $bindable(true),
+		showAxes = $bindable(true),
+		wireframe = $bindable(false),
+		objectColor = $bindable('#7185d4'),
+		objectScale = $bindable(1),
+		objectPosX = $bindable(0),
+		objectPosY = $bindable(0),
+		objectPosZ = $bindable(0),
+		objectRotYDeg = $bindable(0),
+		ambientLightIntensity = $bindable(1),
+		directionalLightIntensity = $bindable(1.5)
+	} = $props();
 </script>
 
 <div class="controls">
@@ -36,40 +38,10 @@
 </div>
 
 <style>
-	.controls {
-		display: grid;
-		gap: 12px;
-		overflow-y: auto;
-		padding-right: 4px;
-		height: 100%;
-	}
-	section {
-		background: rgba(255, 255, 255, 0.7);
-		border: 1px solid rgba(0, 0, 0, 0.08);
-		border-radius: 10px;
-		padding: 10px;
-		display: grid;
-		gap: 8px;
-	}
-	h3 {
-		margin: 0;
-		font-size: 12px;
-		text-transform: uppercase;
-		letter-spacing: 0.03em;
-		color: #555;
-	}
-	label {
-		display: grid;
-		grid-template-columns: 110px 1fr;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		color: #333;
-	}
-	label input[type='range'] {
-		width: 100%;
-	}
-	label.check {
-		grid-template-columns: 1fr;
-	}
+	.controls { display: grid; gap: 12px; overflow-y: auto; padding-right: 4px; height: 100%; }
+	section { background: rgba(255, 255, 255, 0.7); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 10px; padding: 10px; display: grid; gap: 8px; }
+	h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; color: #555; }
+	label { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; font-size: 12px; color: #333; }
+	label input[type='range'] { width: 100%; }
+	label.check { grid-template-columns: 1fr; }
 </style>

@@ -178,7 +178,7 @@
 		bind:objectRotYDeg
 		bind:ambientLightIntensity
 		bind:directionalLightIntensity
-		on:send={(e) => void sendPrompt(e.detail.text)}
+			onSend={(text) => void sendPrompt(text)}
 	/>
 </div>
 
