@@ -869,11 +869,19 @@ def resolve_object_anchor_world(
     anchor_name: str,
     object_by_name: Dict[str, LiveObject],
 ) -> Optional[Vec3]:
+    def object_origin(local_obj: LiveObject) -> Vec3:
+        params = local_obj.meta.get("params", {}) or {}
+        center = params.get("center", params.get("position", [0,0,0]))
+        if isinstance(center, list) and len(center) >= 3:
+            return (float(center[0]), float(center[1]), float(center[2]))
+        return (0.0, 0.0, 0.0)
+
     anchors = scene_obj.meta.get("anchors", {}) or {}
     local = anchors.get(anchor_name)
     local_is_world = False
     if isinstance(local, list) and len(local) >= 3:
-        p = (float(local[0]), float(local[1]), float(local[2]))
+        origin = object_origin(scene_obj)
+        p = (float(local[0]) + origin[0], float(local[1]) + origin[1], float(local[2]) + origin[2])
     else:
         p = mesh_anchor(scene_obj.mesh, anchor_name)
         if p is None:
