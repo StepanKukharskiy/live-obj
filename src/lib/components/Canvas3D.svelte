@@ -23,6 +23,8 @@
 	export let ambientLightIntensity = 1.0;
 	export let directionalLightIntensity = 1.5;
 	export let showWireframe = false;
+	/** Applied to the loaded `renderObject` mesh materials only (not grid/axes). */
+	export let objectColor = '#7185d4';
 	export let enableShadows = false;
 	export let fogEnabled = false;
 	export let fogNear = 10;
@@ -303,6 +305,30 @@
 		}, 16); // Debounce to ~60fps
 	}
 
+	function applyUserMeshColor() {
+		if (!mountedRenderObject || objectColor == null || objectColor === '') return;
+		const c = new THREE.Color();
+		try {
+			c.setStyle(objectColor);
+		} catch {
+			return;
+		}
+		mountedRenderObject.traverse((child: any) => {
+			if (!child.isMesh || !child.material) return;
+			const applyMat = (mat: any) => {
+				if (!mat) return;
+				// Per-vertex tints (common on OBJ) override uniform material.color until disabled.
+				if ('vertexColors' in mat) mat.vertexColors = false;
+				if (mat.color) mat.color.copy(c);
+			};
+			if (Array.isArray(child.material)) {
+				for (const mat of child.material) applyMat(mat);
+			} else {
+				applyMat(child.material);
+			}
+		});
+	}
+
 	function applySceneControls() {
 		if (!scene || !objects) return;
 		scene.background = transparentBackground ? null : new THREE.Color(backgroundColor);
@@ -314,7 +340,7 @@
 			if (lights.directionalLight) lights.directionalLight.intensity = directionalLightIntensity;
 		}
 
-		// Wireframe - optimize traversal
+		// Wireframe: all mesh materials in the scene
 		scene.traverse((child: any) => {
 			if (child.isMesh && child.material) {
 				if (Array.isArray(child.material)) {
@@ -326,6 +352,9 @@
 				}
 			}
 		});
+
+		// Mesh albedo: user-loaded object only (keeps in sync with panel; does not recolor grid/helpers)
+		applyUserMeshColor();
 
 		// Shadows - batch updates
 		if (renderer) {
@@ -421,6 +450,11 @@
 		} else if (objects?.cube) {
 			objects.cube.visible = true;
 			framedRenderObject = null;
+		}
+
+		// New mesh must pick up current objectColor / wireframe even if those props did not change.
+		if (scene && objects) {
+			applySceneControls();
 		}
 	}
 
@@ -710,25 +744,29 @@
 		updateLoadedBackgroundImage();
 	}
 
-	$: if (
-		scene &&
-		objects &&
-		lights &&
-		(backgroundColor ||
-			showGrid !== undefined ||
-			showAxes !== undefined ||
-			ambientLightIntensity ||
-			directionalLightIntensity ||
-			showWireframe !== undefined ||
-			enableShadows !== undefined ||
-			fogEnabled !== undefined ||
-			fogNear ||
-			fogFar ||
-			fogColor ||
-			cameraFov ||
-			toneMappingExposure)
-	) {
+	// Scene look + wireframe + shadows; debounced. (objectColor handled separately for instant mesh tint.)
+	$: if (scene && objects) {
+		void backgroundColor;
+		void transparentBackground;
+		void showGrid;
+		void showAxes;
+		void ambientLightIntensity;
+		void directionalLightIntensity;
+		void showWireframe;
+		void enableShadows;
+		void fogEnabled;
+		void fogNear;
+		void fogFar;
+		void fogColor;
+		void cameraFov;
+		void toneMappingExposure;
 		applySceneControlsDebounced();
+	}
+
+	// Immediate mesh tint when color changes (avoids debounce; does not require lights).
+	$: if (scene && mountedRenderObject) {
+		void objectColor;
+		applyUserMeshColor();
 	}
 </script>
 

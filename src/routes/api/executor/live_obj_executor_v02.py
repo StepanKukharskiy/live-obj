@@ -19,6 +19,16 @@ Adds first-pass support for:
     3. Differential growth curves
     4. Boids path simulation
 
+Parametric assemblies (v0.2+)
+-------------------------------
+- Assembly #@params: are numeric design variables (e.g. seat_width=0.5).
+- #@anchors: entries may be expressions using those param names, or literal lists, e.g.:
+  leg_FR=[(seat_width/2-leg_inset),-(seat_depth/2-leg_inset),leg_height/2]
+- Child #@source: procedural objects with #@parent: assembly_name receive merged param scope
+  from the parent, so lists like size=[leg_size,leg_size,leg_height] and center=anchor(chair_01.leg_FL)
+  (only anchor(assembly.anchor) calls allowed; no arbitrary Python) resolve before meshing.
+- Execution order: topological by #@parent, resolve assembly anchors, then expand each child.
+
 This is still intentionally minimal. It is not a production CAD/SDF/simulation
 kernel. It is a reference implementation that proves the format/execution model.
 
@@ -196,6 +206,260 @@ def parse_key_values(s: str) -> Dict[str, Any]:
         k, v = part.split("=", 1)
         result[k.strip()] = parse_scalar(v)
     return result
+
+
+# ----------------------------
+# Parametric: expressions + assembly scope
+# ----------------------------
+
+
+def parse_list_body(s: str) -> str:
+    """Return inner of [...] (first matching bracket pair) or original stripped."""
+    s = s.strip()
+    if s.startswith("[") and s.endswith("]"):
+        return s[1:-1].strip()
+    if s.startswith("(") and s.endswith(")"):
+        return s[1:-1].strip()
+    return s
+
+
+def _validate_safe_ast(node: ast.AST) -> None:
+    """Allow only safe numeric expressions + single anchor(assembly.anchor) calls."""
+    bad = (
+        ast.Import, ast.ImportFrom, ast.Lambda, ast.Await, ast.Yield, ast.Dict, ast.Set,
+        ast.GeneratorExp, ast.ListComp, ast.DictComp, ast.SetComp, ast.Starred, ast.Ellipsis,
+    )
+    for child in ast.walk(node):
+        if isinstance(child, bad):
+            raise ValueError("unsupported syntax in parametric expression")
+        if isinstance(child, ast.Call):
+            f = child.func
+            if not (isinstance(f, ast.Name) and f.id == "anchor"):
+                raise ValueError("only anchor(assembly.anchor_id) is allowed as a function call")
+            if len(child.args) != 1 or child.keywords:
+                raise ValueError("anchor() takes exactly one dotted reference")
+            a0 = child.args[0]
+            if not (isinstance(a0, ast.Attribute) and isinstance(a0.value, ast.Name)):
+                raise ValueError("use anchor(chair_01.leg_FL) (assembly.anchor name)")
+
+
+def _eval_ast_safe(
+    node: ast.AST,
+    env: Dict[str, Any],
+    obn: Dict[str, LiveObject],
+) -> Any:
+    if isinstance(node, ast.Expression):
+        return _eval_ast_safe(node.body, env, obn)
+    if isinstance(node, ast.Constant):
+        v = node.value
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            raise ValueError("string constants not allowed in numeric expressions (use unquoted param names)")
+        raise ValueError("unsupported constant type")
+    if isinstance(node, ast.Name):
+        if node.id not in env:
+            raise KeyError(f"unknown name in expression: {node.id}")
+        w = env[node.id]
+        if isinstance(w, (list, tuple)) and len(w) == 3:
+            raise TypeError("vector values cannot be used as scalars; reference components explicitly")
+        if isinstance(w, (int, float)):
+            return float(w)
+        raise TypeError(f"parameter {node.id!r} is not numeric")
+    if isinstance(node, ast.UnaryOp):
+        v = _eval_ast_safe(node.operand, env, obn)
+        if isinstance(node.op, ast.USub):
+            return -v
+        if isinstance(node.op, ast.UAdd):
+            return v
+        raise TypeError("unsupported unary op")
+    if isinstance(node, ast.BinOp):
+        a = _eval_ast_safe(node.left, env, obn)
+        b = _eval_ast_safe(node.right, env, obn)
+        if isinstance(node.op, ast.Add):
+            return a + b
+        if isinstance(node.op, ast.Sub):
+            return a - b
+        if isinstance(node.op, ast.Mult):
+            return a * b
+        if isinstance(node.op, ast.Div):
+            return a / b
+        if isinstance(node.op, ast.Pow):
+            return a ** b
+        raise TypeError("unsupported binary op")
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name) and node.func.id == "anchor":
+            if len(node.args) != 1 or node.keywords:
+                raise ValueError("anchor() takes one dotted reference")
+            arg0 = node.args[0]
+            if not (isinstance(arg0, ast.Attribute) and isinstance(arg0.value, ast.Name)):
+                raise ValueError("anchor(assembly_id.anchor_id)")
+            assembly_name = arg0.value.id
+            anchor_id = arg0.attr
+            ass = obn.get(assembly_name)
+            if ass is None:
+                raise KeyError(f"unknown assembly: {assembly_name}")
+            m = (ass.meta.get("anchors") or {})
+            vec = m.get(anchor_id)
+            if not (isinstance(vec, (list, tuple)) and len(vec) >= 3):
+                raise KeyError(f"anchor {assembly_name!r}.{anchor_id!r} not available (define #@anchors on the assembly, run assembly resolution first)")
+            return (float(vec[0]), float(vec[1]), float(vec[2]))
+    raise TypeError("unsupported expression form")
+
+
+def eval_mixed_value(expr_str: Any, env: Dict[str, Any], obn: Dict[str, LiveObject]) -> Any:
+    if isinstance(expr_str, bool):
+        return expr_str
+    if isinstance(expr_str, (int, float)):
+        return float(expr_str)
+    if isinstance(expr_str, (list, tuple)):
+        return [eval_mixed_value(p, env, obn) if isinstance(p, str) else float(p) if isinstance(p, (int, float)) else p for p in expr_str]
+    if not isinstance(expr_str, str):
+        return expr_str
+    s = expr_str.strip()
+    if not s:
+        return None
+    if s.startswith("[") and s.endswith("]"):
+        body = parse_list_body(s)
+        parts = split_top_level_commas(body)
+        return [_eval_arg_piece(p.strip(), env, obn) for p in parts if p.strip()]
+    if s.startswith("anchor(") or s.startswith("("):
+        tree = ast.parse(s, mode="eval")
+        _validate_safe_ast(tree)
+        return _eval_ast_safe(tree, env, obn)
+    if re.match(r"^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$", s) or re.match(r"^[-+]?[0-9]+$", s):
+        return float(s) if any(c in s for c in ".eE") else float(int(s))
+    try:
+        tree = ast.parse(s, mode="eval")
+        _validate_safe_ast(tree)
+        return _eval_ast_safe(tree, env, obn)
+    except SyntaxError as e:
+        raise ValueError(f"could not parse expression: {s!r}") from e
+
+
+def _eval_arg_piece(p: str, env: Dict[str, Any], obn: Dict[str, LiveObject]) -> Any:
+    return eval_mixed_value(p, env, obn)
+
+
+def assembly_param_env(params: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    env: Dict[str, float] = {}
+    if not params:
+        return env
+    for k, v in params.items():
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            env[k] = float(v)
+        elif isinstance(v, str) and (
+            re.match(r"^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$", v.strip())
+            or re.match(r"^[-+]?[0-9]+$", v.strip())
+        ):
+            vs = v.strip()
+            try:
+                env[k] = float(vs) if any(c in vs for c in ".eE") else float(int(vs))
+            except Exception:
+                pass
+    return env
+
+
+def resolve_assembly_anchors(asm: LiveObject, obn: Dict[str, LiveObject]) -> None:
+    if str(asm.meta.get("source", "")) != "assembly":
+        return
+    params = asm.meta.get("params") or {}
+    env0 = assembly_param_env(params)
+    raw = asm.meta.get("anchors") or {}
+    resolved: Dict[str, Any] = {}
+    for aname, aval in raw.items():
+        v = _resolve_anchor_value(aval, env0, obn)
+        if isinstance(v, (list, tuple)) and len(v) >= 3:
+            resolved[aname] = (float(v[0]), float(v[1]), float(v[2]))
+        else:
+            raise ValueError(f"anchor {aname!r} must resolve to a 3-vector, got {v!r}")
+    asm.meta["anchors"] = resolved
+
+
+def _resolve_anchor_value(aval: Any, env0: Dict[str, float], obn: Dict[str, LiveObject]) -> Any:
+    if isinstance(aval, (int, float)):
+        return float(aval)
+    if isinstance(aval, (list, tuple)) and len(aval) == 3:
+        env = dict(env0)
+        out = []
+        for i, p in enumerate(aval):
+            if isinstance(p, (int, float)):
+                out.append(float(p))
+            elif isinstance(p, str):
+                r = _eval_string_or_scalar(p, env, obn)
+                if isinstance(r, (int, float)):
+                    out.append(float(r))
+                elif isinstance(r, (list, tuple)) and len(r) == 3:
+                    raise ValueError("nested vectors not supported in one anchor component")
+                else:
+                    raise TypeError("anchor list element type")
+        return tuple(out)  # type: ignore
+    if isinstance(aval, str) and aval.strip().startswith("["):
+        body = parse_list_body(aval)
+        parts = [x.strip() for x in split_top_level_commas(body) if x.strip()]
+        env = dict(env0)
+        if len(parts) != 3:
+            raise ValueError("anchor list must have three comma-separated values")
+        return tuple(_eval_string_or_scalar(p, env, obn) for p in parts)  # type: ignore
+    if isinstance(aval, str):
+        env = dict(env0)
+        return _eval_string_or_scalar(aval, env, obn)
+    return aval
+
+
+def _eval_string_or_scalar(s: str, env: Dict[str, Any], obn: Dict[str, LiveObject]) -> Any:
+    t = s.strip()
+    if not t:
+        return 0.0
+    r = eval_mixed_value(t, env, obn)
+    if isinstance(r, (list, tuple)) and len(r) == 3 and not t.startswith("["):
+        # single anchor() call returns 3-tuple; fine
+        return r
+    if isinstance(r, (int, float)):
+        return float(r)
+    if isinstance(r, (list, tuple)) and len(r) == 3:
+        if t.startswith("anchor("):
+            return r
+    return r
+
+
+def topological_objects(objects: List[LiveObject], obn: Dict[str, LiveObject]) -> List[LiveObject]:
+    seen: set = set()
+    out: List[LiveObject] = []
+
+    def visit(o: LiveObject) -> None:
+        if o.name in seen:
+            return
+        p = o.meta.get("parent")
+        if p and str(p) in obn:
+            visit(obn[str(p)])
+        seen.add(o.name)
+        out.append(o)
+
+    for o in objects:
+        visit(o)
+    return out
+
+
+def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[str, Any]:
+    base: Dict[str, float] = {}
+    pn = obj.meta.get("parent")
+    if pn and str(pn) in obn:
+        pobj = obn[str(pn)]
+        if str(pobj.meta.get("source", "")) == "assembly":
+            base = dict(assembly_param_env(pobj.meta.get("params") or {}))
+    raw = obj.meta.get("params") or {}
+    merged: Dict[str, Any] = {}
+    for k, v in raw.items():
+        if not isinstance(v, str):
+            merged[k] = v
+        else:
+            env: Dict[str, Any] = {**base, **merged}
+            merged[k] = eval_mixed_value(v.strip(), env, obn)
+    out = {**base, **merged}
+    return out
 
 
 def parse_tokens(s: str) -> Dict[str, Any]:
@@ -1058,6 +1322,13 @@ def apply_ops(mesh: Mesh, obj: LiveObject) -> Mesh:
 # Object execution
 # ----------------------------
 
+def _as_float3(val: Any, default: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    v = val if val is not None else default
+    if isinstance(v, (list, tuple)) and len(v) >= 3:
+        return (float(v[0]), float(v[1]), float(v[2]))
+    raise TypeError(f"expected 3 floats, got {val!r}")
+
+
 def generate_procedural(obj: LiveObject) -> Mesh:
     typ = str(obj.meta.get("type", "mesh"))
     params = obj.meta.get("params", {}) or {}
@@ -1065,12 +1336,13 @@ def generate_procedural(obj: LiveObject) -> Mesh:
     if typ == "mesh":
         return obj.mesh.copy()
 
-    center = params.get("center", params.get("position", [0,0,0]))
-    center = tuple(map(float, center))
+    center = _as_float3(params.get("center", params.get("position", [0, 0, 0])), (0.0, 0.0, 0.0))
 
     if typ == "box":
-        size = params.get("size", [params.get("width",1), params.get("depth",params.get("length",1)), params.get("height",1)])
-        return box_mesh(center, tuple(map(float, size)))
+        size = params.get("size", [params.get("width", 1), params.get("depth", params.get("length", 1)), params.get("height", 1)])
+        if isinstance(size, str):
+            raise TypeError("size should be a 3-vector after parametric resolution")
+        return box_mesh(center, _as_float3(size, (1.0, 1.0, 1.0)))
     if typ == "cylinder":
         return cylinder_mesh(
             str(params.get("axis","z")),
@@ -1110,13 +1382,23 @@ def generate_simulation(obj: LiveObject) -> Mesh:
 
 
 def execute_scene(scene: Scene) -> Scene:
-    for obj in scene.objects:
+    obn: Dict[str, LiveObject] = {o.name: o for o in scene.objects}
+    order = topological_objects(scene.objects, obn)
+    for obj in order:
+        if str(obj.meta.get("source", "")) == "assembly":
+            resolve_assembly_anchors(obj, obn)
+    for obj in order:
         source = str(obj.meta.get("source", "llm_mesh"))
-
         if source == "assembly":
             continue
         if source == "procedural":
-            base = generate_procedural(obj)
+            oldp = obj.meta.get("params")
+            obj.meta["params"] = get_effective_params(obj, obn)
+            try:
+                base = generate_procedural(obj)
+            finally:
+                if oldp is not None:
+                    obj.meta["params"] = oldp
         elif source == "sdf":
             base = generate_sdf(obj)
         elif source == "simulation":
