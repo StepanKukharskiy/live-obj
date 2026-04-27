@@ -28,6 +28,7 @@
 		objectRotYDeg = $bindable(0),
 		ambientLightIntensity = $bindable(1),
 		directionalLightIntensity = $bindable(1.5),
+		onLiveObjMetadataChange,
 		onSend
 	}: {
 		showPanel?: boolean;
@@ -50,6 +51,7 @@
 		objectRotYDeg?: number;
 		ambientLightIntensity?: number;
 		directionalLightIntensity?: number;
+		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onSend?: (text: string) => void;
 	} = $props();
 
@@ -57,17 +59,17 @@
 </script>
 
 {#if showPanel}
-	<aside class="side-panel" aria-label="Live OBJ chat">
+	<aside class="side-panel planner-panel" aria-label="Live OBJ chat">
 		<header class="panel-head">
 			<h1 class="title">Live OBJ</h1>
 			<button type="button" class="icon-btn" onclick={() => (showPanel = false)} title="Close panel">✕</button>
 		</header>
-		<div class="panel-tabs" role="tablist" aria-label="Panel tabs">
+		<div class="panel-tabs planner-tabs" role="tablist" aria-label="Panel tabs">
 			<button type="button" class:active={activeTab === 'chat'} onclick={() => (activeTab = 'chat')}>Chat</button>
 			<button type="button" class:active={activeTab === 'output'} onclick={() => (activeTab = 'output')}>Live OBJ Output</button>
 			<button type="button" class:active={activeTab === 'controls'} onclick={() => (activeTab = 'controls')}>Controls</button>
 		</div>
-		<div class="panel-content">
+		<div class="panel-content planner-tab-panel">
 			{#if activeTab === 'chat'}
 				<LiveObjChatTab {msgs} {busy} {statusLine} {onSend} />
 			{:else if activeTab === 'output'}
@@ -86,6 +88,8 @@
 					bind:objectRotYDeg
 					bind:ambientLightIntensity
 					bind:directionalLightIntensity
+					liveObjText={liveObjText}
+					onLiveObjMetadataChange={onLiveObjMetadataChange}
 				/>
 			{/if}
 		</div>
@@ -95,13 +99,16 @@
 {/if}
 
 <style>
-	.side-panel { position: absolute; z-index: 10; top: 16px; left: 16px; width: min(520px, calc(100vw - 32px)); height: min(86vh, 780px); display: flex; flex-direction: column; background: rgba(255, 255, 255, 0.55); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 16px; padding: 14px 16px 16px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08); }
-	.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-	.title { margin: 0; font-size: 1.1rem; font-weight: 600; color: #1a1a1a; }
-	.icon-btn, .reopen { border: none; background: rgba(0, 0, 0, 0.06); border-radius: 8px; width: 32px; height: 32px; cursor: pointer; color: #333; }
+	.side-panel { position: absolute; top: 16px; left: 16px; width: min(520px, calc(100vw - 32px)); height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 16px; background: rgba(255, 255, 255, 0.95); color: #1a1a1a; backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); box-shadow: 0 12px 48px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.04); z-index: 10; box-sizing: border-box; }
+	.panel-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; }
+	.title { margin: 0; font-size: 1rem; font-weight: 600; color: #1a1a1a; }
+	.icon-btn, .reopen { border: none; background: rgba(0, 0, 0, 0.05); border-radius: 20px; width: 32px; height: 32px; cursor: pointer; color: #666; }
+	.icon-btn:hover, .reopen:hover { background: rgba(0, 0, 0, 0.1); color: #1a1a1a; }
 	.reopen { position: absolute; z-index: 10; top: 16px; left: 16px; width: 44px; height: 44px; font-size: 18px; }
-	.panel-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
-	.panel-tabs button { border: 1px solid rgba(0, 0, 0, 0.1); background: rgba(255, 255, 255, 0.7); border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
-	.panel-tabs button.active { border-color: #0000eb; background: rgba(0, 0, 235, 0.08); color: #0000a8; font-weight: 600; }
-	.panel-content { flex: 1; min-height: 0; }
+	.panel-tabs { display: flex; gap: 6px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; }
+	.panel-tabs::-webkit-scrollbar { display: none; }
+	.panel-tabs button { border: none; border-radius: 0; padding: 10px 12px; background: transparent; color: #666; font-size: 14px; font-weight: 500; cursor: pointer; position: relative; white-space: nowrap; }
+	.panel-tabs button.active { color: #0000eb; font-weight: 600; }
+	.panel-tabs button.active::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; background: #0000eb; border-radius: 999px; }
+	.panel-content { flex: 1; min-height: 0; overflow: hidden; padding: 8px 12px 12px; }
 </style>

@@ -50,10 +50,12 @@
 					material.forEach((m) => {
 						if ('color' in m) (m as THREE.MeshStandardMaterial).color.set(objectColor);
 						if ('wireframe' in m) (m as THREE.MeshStandardMaterial).wireframe = wireframe;
+						if ('needsUpdate' in m) (m as THREE.Material).needsUpdate = true;
 					});
 				} else if (material && 'color' in material) {
 					(material as THREE.MeshStandardMaterial).color.set(objectColor);
 					(material as THREE.MeshStandardMaterial).wireframe = wireframe;
+					(material as THREE.Material).needsUpdate = true;
 				}
 			}
 		});
@@ -89,6 +91,33 @@
 		else if (upAxis === 'x') group.rotation.z = Math.PI / 2;
 		renderObject = group;
 		applyObjectControls();
+	}
+
+
+	async function regenerateFromMetadata(updatedLiveObj: string) {
+		if (!updatedLiveObj.trim()) return;
+		statusLine = null;
+		liveObjText = updatedLiveObj;
+		try {
+			const res = await fetch('/api/live-obj/execute', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ liveObj: updatedLiveObj })
+			});
+			const payload = (await res.json().catch(() => ({}))) as {
+				message?: string;
+				liveObj?: string;
+				executedObj?: string;
+			};
+			if (!res.ok) throw new Error(payload.message || res.statusText || 'Metadata regeneration failed');
+			liveObjText = payload.liveObj ?? updatedLiveObj;
+			executedObjText = payload.executedObj ?? '';
+			sourceTab = 'executed';
+			if (payload.executedObj) applyObjString(payload.executedObj);
+		} catch (e) {
+			const m = e instanceof Error ? e.message : String(e);
+			statusLine = `Metadata regenerate failed: ${m}`;
+		}
 	}
 
 	async function sendPrompt(text: string) {
@@ -154,6 +183,7 @@
 			{showAxes}
 			{ambientLightIntensity}
 			{directionalLightIntensity}
+			showWireframe={wireframe}
 		/>
 	</div>
 
@@ -178,7 +208,8 @@
 		bind:objectRotYDeg
 		bind:ambientLightIntensity
 		bind:directionalLightIntensity
-			onSend={(text) => void sendPrompt(text)}
+		onLiveObjMetadataChange={(updatedText) => void regenerateFromMetadata(updatedText)}
+		onSend={(text) => void sendPrompt(text)}
 	/>
 </div>
 
