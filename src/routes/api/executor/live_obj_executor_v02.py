@@ -101,6 +101,7 @@ import argparse
 import ast
 import math
 import random
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -235,6 +236,17 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         if body == "sdf:":
             block = "sdf"
             continue
+        if body == "anchors:":
+            block = "anchors"
+            meta["anchors"] = {}
+            continue
+
+        if block == "anchors" and body.startswith("-"):
+            anchor_body = body[1:].strip()
+            if "=" in anchor_body:
+                k, v = anchor_body.split("=", 1)
+                meta.setdefault("anchors", {})[k.strip()] = parse_scalar(v)
+            continue
 
         if block in {"ops", "sdf"} and body.startswith("-"):
             parsed = parse_tokens(body)
@@ -250,6 +262,38 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         key, val = key.strip(), val.strip()
         if key in {"params", "transform", "rules"}:
             meta[key] = parse_key_values(val)
+        elif key == "gen":
+            parsed_gen = parse_tokens(val)
+            if parsed_gen.get("op"):
+                meta["type"] = parsed_gen.get("op")
+            merged_params = dict(meta.get("params", {}) or {})
+            for k, v in parsed_gen.items():
+                if k in {"cmd", "op", "args"}:
+                    continue
+                merged_params[k] = v
+            if merged_params:
+                meta["params"] = merged_params
+        elif key == "op":
+            parsed_op = parse_tokens(val)
+            if parsed_op:
+                ops.append(parsed_op)
+        elif key == "anchor":
+            parsed_anchor = parse_tokens(f"anchor {val}")
+            anchor_name = parsed_anchor.get("name", parsed_anchor.get("id"))
+            anchor_pos = parsed_anchor.get("position")
+            if anchor_name and isinstance(anchor_pos, list) and len(anchor_pos) >= 3:
+                meta.setdefault("anchors", {})[str(anchor_name)] = anchor_pos
+        elif key == "constraint":
+            parsed_constraint = parse_tokens(val)
+            if parsed_constraint.get("op") == "attach":
+                self_anchor = parsed_constraint.get("self")
+                target = parsed_constraint.get("target")
+                if self_anchor and target:
+                    mode = parsed_constraint.get("mode", parsed_constraint.get("solve"))
+                    attach_val = f"self={self_anchor} target={target}"
+                    if mode:
+                        attach_val += f" mode={mode}"
+                    meta["attach"] = attach_val
         elif key in {"children", "tags"}:
             meta[key] = [x.strip() for x in val.split(",") if x.strip()]
         else:
@@ -750,6 +794,129 @@ def apply_transform(mesh: Mesh, transform: Dict[str, Any]) -> Mesh:
     return out
 
 
+def apply_transform_to_point(point: Vec3, transform: Dict[str, Any]) -> Vec3:
+    pos = transform.get("position", [0,0,0])
+    scale = transform.get("scale", [1,1,1])
+    rot = transform.get("rotation", [0,0,0])
+    px,py,pz = map(float, pos)
+    sx,sy,sz = map(float, scale)
+    rx,ry,rz = [math.radians(float(a)) for a in rot]
+
+    x,y,z = point
+    x,y,z = (x*sx, y*sy, z*sz)
+    y,z = y*math.cos(rx)-z*math.sin(rx), y*math.sin(rx)+z*math.cos(rx)
+    x,z = x*math.cos(ry)+z*math.sin(ry), -x*math.sin(ry)+z*math.cos(ry)
+    x,y = x*math.cos(rz)-y*math.sin(rz), x*math.sin(rz)+y*math.cos(rz)
+    return (x+px, y+py, z+pz)
+
+
+def translate_mesh(mesh: Mesh, delta: Vec3) -> Mesh:
+    dx,dy,dz = delta
+    out = mesh.copy()
+    out.vertices = [(x+dx, y+dy, z+dz) for x,y,z in out.vertices]
+    return out
+
+
+def compute_bbox(mesh: Mesh) -> Optional[Tuple[float, float, float, float, float, float]]:
+    if not mesh.vertices:
+        return None
+    xs = [v[0] for v in mesh.vertices]
+    ys = [v[1] for v in mesh.vertices]
+    zs = [v[2] for v in mesh.vertices]
+    return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
+
+
+def mesh_anchor(mesh: Mesh, anchor_name: str) -> Optional[Vec3]:
+    bbox = compute_bbox(mesh)
+    if bbox is None:
+        return None
+    minx, maxx, miny, maxy, minz, maxz = bbox
+    cx, cy, cz = ((minx+maxx)/2, (miny+maxy)/2, (minz+maxz)/2)
+    anchors = {
+        "center": (cx, cy, cz),
+        "top_center": (cx, cy, maxz),
+        "bottom_center": (cx, cy, minz),
+        "left_center": (minx, cy, cz),
+        "right_center": (maxx, cy, cz),
+        "front_center": (cx, maxy, cz),
+        "back_center": (cx, miny, cz),
+    }
+    return anchors.get(anchor_name)
+
+
+def parse_attach_spec(attach_val: Any) -> Optional[Tuple[str, str, str]]:
+    text = str(attach_val or "").strip()
+    if not text:
+        return None
+
+    match = re.match(r"^([A-Za-z0-9_-]+)\s+to\s+([A-Za-z0-9_.-]+)\.([A-Za-z0-9_-]+)$", text)
+    if match:
+        return (match.group(1), match.group(2), match.group(3))
+
+    explicit_self = re.search(r"(?:self_anchor|self)=([A-Za-z0-9_-]+)", text)
+    explicit_target = re.search(r"(?:to|target)=([A-Za-z0-9_.-]+)\.([A-Za-z0-9_-]+)", text)
+    explicit_mode = re.search(r"(?:mode|solve)=([A-Za-z0-9_-]+)", text)
+    if explicit_mode and explicit_mode.group(1).lower() not in {"translate", "translation"}:
+        return None
+    if explicit_self and explicit_target:
+        return (explicit_self.group(1), explicit_target.group(1), explicit_target.group(2))
+
+    return None
+
+
+def resolve_object_anchor_world(
+    scene_obj: LiveObject,
+    anchor_name: str,
+    object_by_name: Dict[str, LiveObject],
+) -> Optional[Vec3]:
+    anchors = scene_obj.meta.get("anchors", {}) or {}
+    local = anchors.get(anchor_name)
+    local_is_world = False
+    if isinstance(local, list) and len(local) >= 3:
+        p = (float(local[0]), float(local[1]), float(local[2]))
+    else:
+        p = mesh_anchor(scene_obj.mesh, anchor_name)
+        if p is None:
+            return None
+        # mesh-derived anchors are already in object/world coordinates after generation+ops
+        local_is_world = True
+
+    if local_is_world:
+        return p
+
+    cur: Optional[LiveObject] = scene_obj
+    out = p
+    while cur is not None:
+        transform = cur.meta.get("transform")
+        if isinstance(transform, dict):
+            out = apply_transform_to_point(out, transform)
+        parent_name = cur.meta.get("parent")
+        cur = object_by_name.get(str(parent_name)) if parent_name else None
+    return out
+
+
+def apply_attach_constraints(scene: Scene) -> None:
+    object_by_name = {o.name: o for o in scene.objects}
+    for obj in scene.objects:
+        spec = parse_attach_spec(obj.meta.get("attach"))
+        if not spec:
+            continue
+        self_anchor, target_obj_name, target_anchor = spec
+        target_obj = object_by_name.get(target_obj_name)
+        if target_obj is None:
+            continue
+        self_world = resolve_object_anchor_world(obj, self_anchor, object_by_name)
+        target_world = resolve_object_anchor_world(target_obj, target_anchor, object_by_name)
+        if self_world is None or target_world is None:
+            continue
+        delta = (
+            target_world[0] - self_world[0],
+            target_world[1] - self_world[1],
+            target_world[2] - self_world[2],
+        )
+        obj.mesh = translate_mesh(obj.mesh, delta)
+
+
 def op_displace(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
     field = str(op.get("field", "wave"))
     axis = str(op.get("axis", "z"))
@@ -928,6 +1095,8 @@ def execute_scene(scene: Scene) -> Scene:
             base = obj.mesh.copy()
 
         obj.mesh = apply_ops(base, obj)
+
+    apply_attach_constraints(scene)
 
     return scene
 
