@@ -24,6 +24,13 @@
 	let ambientLightIntensity = $state(1);
 	let directionalLightIntensity = $state(1.5);
 	let wireframe = $state(false);
+	let enableShadows = $state(false);
+	let fogEnabled = $state(false);
+	let fogNear = $state(10);
+	let fogFar = $state(50);
+	let fogColor = $state('#f8fafc');
+	let cameraFov = $state(50);
+	let toneMappingExposure = $state(1);
 
 	let objectColor = $state('#7185d4');
 	let objectScale = $state(1);
@@ -43,32 +50,14 @@
 		renderObject.position.set(objectPosX, objectPosY, objectPosZ);
 		renderObject.scale.setScalar(objectScale);
 		renderObject.rotation.y = (objectRotYDeg * Math.PI) / 180;
-		renderObject.traverse((o: THREE.Object3D) => {
-			if (o instanceof THREE.Mesh) {
-				const material = o.material;
-				if (Array.isArray(material)) {
-					material.forEach((m) => {
-						if ('color' in m) (m as THREE.MeshStandardMaterial).color.set(objectColor);
-						if ('wireframe' in m) (m as THREE.MeshStandardMaterial).wireframe = wireframe;
-						if ('needsUpdate' in m) (m as THREE.Material).needsUpdate = true;
-					});
-				} else if (material && 'color' in material) {
-					(material as THREE.MeshStandardMaterial).color.set(objectColor);
-					(material as THREE.MeshStandardMaterial).wireframe = wireframe;
-					(material as THREE.Material).needsUpdate = true;
-				}
-			}
-		});
 	}
 
 	$effect(() => {
-		objectColor;
 		objectScale;
 		objectPosX;
 		objectPosY;
 		objectPosZ;
 		objectRotYDeg;
-		wireframe;
 		applyObjectControls();
 	});
 
@@ -159,7 +148,7 @@
 				{
 					role: 'assistant',
 					content: payload.executorWarning
-						? 'Received model output. Executor had issues; check status and Output tab.'
+						? 'Received model output. Executor had issues; check status and the Adjust tab.'
 						: 'Updated scene applied. You can keep chatting to add/remove/modify objects.'
 				}
 			];
@@ -179,11 +168,19 @@
 			className="app-canvas"
 			{backgroundColor}
 			{renderObject}
+			{objectColor}
 			{showGrid}
 			{showAxes}
 			{ambientLightIntensity}
 			{directionalLightIntensity}
 			showWireframe={wireframe}
+			{enableShadows}
+			{fogEnabled}
+			{fogNear}
+			{fogFar}
+			{fogColor}
+			{cameraFov}
+			{toneMappingExposure}
 		/>
 	</div>
 
@@ -208,6 +205,13 @@
 		bind:objectRotYDeg
 		bind:ambientLightIntensity
 		bind:directionalLightIntensity
+		bind:enableShadows
+		bind:fogEnabled
+		bind:fogNear
+		bind:fogFar
+		bind:fogColor
+		bind:cameraFov
+		bind:toneMappingExposure
 		onLiveObjMetadataChange={(updatedText) => void regenerateFromMetadata(updatedText)}
 		onSend={(text) => void sendPrompt(text)}
 	/>

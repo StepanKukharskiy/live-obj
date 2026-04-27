@@ -1,0 +1,24 @@
+#@scene
+#@units: meters
+#@up: y
+#@live_obj_version: 0.1
+
+o chair_01
+#@source: assembly
+#@params: seat_width=0.5,seat_depth=1.0,seat_height=0.55,seat_thickness=0.12,leg_inset=0.02,leg_size=0.09,leg_height=0.56
+#@anchors:
+#@ - seat_center=[0,0,seat_height]
+#@ - leg_FL=[-(seat_width/2-leg_inset),-(seat_depth/2-leg_inset),leg_height/2]
+#@ - leg_FR=[(seat_width/2-leg_inset),-(seat_depth/2-leg_inset),leg_height/2]
+
+o leg_FL
+#@parent: chair_01
+#@source: procedural
+#@type: box
+#@params: center=anchor(chair_01.leg_FL),size=[leg_size,leg_size,leg_height]
+
+o seat
+#@parent: chair_01
+#@source: procedural
+#@type: box
+#@params: center=anchor(chair_01.seat_center),size=[seat_width,seat_depth,seat_thickness]

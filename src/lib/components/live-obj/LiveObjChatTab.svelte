@@ -23,26 +23,34 @@
 	}
 </script>
 
-<div class="chat-tab">
-	<div class="messages" role="log">
+<div class="planner-chat-shell">
+	<div class="planner-chat-thread" role="log">
 		{#if msgs.length === 0}
-			<div class="welcome">
-				Describe a scene or ask for edits like “add a lamp”, “remove the sphere”, or “make the table red”.
+			<div class="planner-chat-welcome">
+				<p class="planner-chat-guide-copy">
+					Describe a scene or ask for edits like “add a lamp”, “remove the sphere”, or “make the table red”.
+				</p>
 			</div>
 		{:else}
 			{#each msgs as m}
-				<div class="bubble" class:user={m.role === 'user'}>
-					{m.content}
+				<div
+					class="planner-chat-row"
+					class:assistant={m.role === 'assistant'}
+					class:user={m.role === 'user'}
+				>
+					<div class="planner-chat-bubble">
+						<div class="planner-chat-content">{m.content}</div>
+					</div>
 				</div>
 			{/each}
 		{/if}
 	</div>
 
 	{#if statusLine}
-		<div class="status" role="status">{statusLine}</div>
+		<div class="planner-status" role="status">{statusLine}</div>
 	{/if}
 
-	<div class="composer">
+	<div class="planner-chat-input-shell">
 		<textarea
 			rows="2"
 			placeholder="Ask for generation or iterative edits..."
@@ -55,21 +63,10 @@
 				}
 			}}
 		></textarea>
-		<button type="button" class="send" disabled={busy || !input.trim()} onclick={submit}>
-			{busy ? '…' : 'Send'}
-		</button>
+		<div class="planner-chat-input-actions">
+			<button type="button" class="send-button" disabled={busy || !input.trim()} onclick={submit}>
+				{busy ? '…' : 'Send'}
+			</button>
+		</div>
 	</div>
 </div>
-
-<style>
-	.chat-tab { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; }
-	.messages { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
-	.welcome { padding: 12px; background: rgba(255, 255, 255, 0.7); border-radius: 10px; color: #555; line-height: 1.45; }
-	.bubble { align-self: flex-start; max-width: 100%; padding: 8px 12px; border-radius: 12px; background: rgba(255, 255, 255, 0.9); color: #222; line-height: 1.4; white-space: pre-wrap; }
-	.bubble.user { align-self: flex-end; background: rgba(0, 0, 235, 0.1); }
-	.status { font-size: 11px; color: #a35b00; }
-	.composer { display: flex; gap: 8px; align-items: flex-end; }
-	.composer textarea { flex: 1; resize: none; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; }
-	.send { flex-shrink: 0; padding: 8px 14px; border: none; border-radius: 10px; background: #0000eb; color: #fff; font-weight: 600; cursor: pointer; }
-	.send:disabled { opacity: 0.5; cursor: not-allowed; }
-</style>
