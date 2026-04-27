@@ -226,7 +226,7 @@
 </div>
 
 <style>
-	.planner-panel-body { display: grid; gap: 12px; min-height: 0; overflow: auto; padding-right: 4px; }
+	.planner-panel-body { display: grid; gap: 12px; min-height: 0; height: 100%; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
 	.planner-object-section { border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 12px; background: rgba(255, 255, 255, 0.6); overflow: hidden; }
 	.planner-object-header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: rgba(0, 0, 0, 0.02); border-bottom: 1px solid rgba(0, 0, 0, 0.06); }
 	.planner-object-title-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex: 1; min-width: 0; }

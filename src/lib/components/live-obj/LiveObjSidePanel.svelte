@@ -110,5 +110,5 @@
 	.panel-tabs button { border: none; border-radius: 0; padding: 10px 12px; background: transparent; color: #666; font-size: 14px; font-weight: 500; cursor: pointer; position: relative; white-space: nowrap; }
 	.panel-tabs button.active { color: #0000eb; font-weight: 600; }
 	.panel-tabs button.active::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; background: #0000eb; border-radius: 999px; }
-	.panel-content { flex: 1; min-height: 0; overflow: hidden; padding: 8px 12px 12px; }
+	.panel-content { flex: 1; min-height: 0; overflow: hidden; padding: 8px 12px 12px; display: flex; flex-direction: column; }
 </style>
