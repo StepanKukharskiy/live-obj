@@ -869,6 +869,13 @@ def resolve_object_anchor_world(
     anchor_name: str,
     object_by_name: Dict[str, LiveObject],
 ) -> Optional[Vec3]:
+    def point_bbox_distance(point: Vec3, bbox: Tuple[float, float, float, float, float, float]) -> float:
+        minx, maxx, miny, maxy, minz, maxz = bbox
+        dx = 0.0 if minx <= point[0] <= maxx else min(abs(point[0] - minx), abs(point[0] - maxx))
+        dy = 0.0 if miny <= point[1] <= maxy else min(abs(point[1] - miny), abs(point[1] - maxy))
+        dz = 0.0 if minz <= point[2] <= maxz else min(abs(point[2] - minz), abs(point[2] - maxz))
+        return dx + dy + dz
+
     def object_origin(local_obj: LiveObject) -> Vec3:
         params = local_obj.meta.get("params", {}) or {}
         center = params.get("center", params.get("position", [0,0,0]))
@@ -880,8 +887,23 @@ def resolve_object_anchor_world(
     local = anchors.get(anchor_name)
     local_is_world = False
     if isinstance(local, list) and len(local) >= 3:
-        origin = object_origin(scene_obj)
-        p = (float(local[0]) + origin[0], float(local[1]) + origin[1], float(local[2]) + origin[2])
+        raw = (float(local[0]), float(local[1]), float(local[2]))
+        mesh_bbox = compute_bbox(scene_obj.mesh)
+        # Authoring is mixed in the wild: some scenes emit object-local anchor vectors,
+        # others emit already-world anchor points. If mesh exists, pick the interpretation
+        # that best matches the current generated mesh bbox.
+        if mesh_bbox is not None:
+            origin = object_origin(scene_obj)
+            local_candidate = (raw[0] + origin[0], raw[1] + origin[1], raw[2] + origin[2])
+            transform = scene_obj.meta.get("transform")
+            if isinstance(transform, dict):
+                local_candidate = apply_transform_to_point(local_candidate, transform)
+            abs_candidate = raw
+            p = local_candidate if point_bbox_distance(local_candidate, mesh_bbox) <= point_bbox_distance(abs_candidate, mesh_bbox) else abs_candidate
+            local_is_world = True
+        else:
+            origin = object_origin(scene_obj)
+            p = (raw[0] + origin[0], raw[1] + origin[1], raw[2] + origin[2])
     else:
         p = mesh_anchor(scene_obj.mesh, anchor_name)
         if p is None:
