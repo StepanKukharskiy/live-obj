@@ -1,8 +1,9 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-const OPENAI_IMAGES_API_URL = 'https://api.openai.com/v1/images/edits';
+const DEFAULT_OPENAI_IMAGES_API_URL = 'https://api.openai.com/v1/images/edits';
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
+const OPENAI_IMAGES_TIMEOUT_MS = 90_000;
 
 function pickString(...candidates: Array<string | undefined>): string {
 	for (const c of candidates) {
@@ -37,6 +38,11 @@ async function urlToDataUrl(url: string): Promise<string> {
 	return `data:${mimeType};base64,${Buffer.from(arrayBuffer).toString('base64')}`;
 }
 
+function networkErrorMessage(err: unknown): string {
+	if (err instanceof Error) return err.message;
+	return String(err);
+}
+
 export const POST: RequestHandler = async ({ request }) => {
 	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string };
 	try {
@@ -54,6 +60,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const { env } = await import('$env/dynamic/private');
 	const apiKey = pickString(process.env.OPENAI_API_KEY, env.OPENAI_API_KEY, process.env.DEFAULT_OPENAI_API_KEY, env.DEFAULT_OPENAI_API_KEY);
+	const imagesApiUrl = pickString(process.env.OPENAI_IMAGES_API_URL, env.OPENAI_IMAGES_API_URL, process.env.OPENAI_API_URL, env.OPENAI_API_URL, DEFAULT_OPENAI_IMAGES_API_URL);
 	if (!apiKey) throw error(500, 'OPENAI_API_KEY is not configured');
 
 	const sceneMetadata = metadataFromLiveObj(liveObjText);
@@ -65,13 +72,27 @@ export const POST: RequestHandler = async ({ request }) => {
 	form.append('size', '1024x1024');
 	form.append('image', dataUrlToBlob(screenshotDataUrl), 'scene-screenshot.jpg');
 
-	const response = await fetch(OPENAI_IMAGES_API_URL, {
-		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${apiKey}`
-		},
-		body: form
-	});
+	const abortController = new AbortController();
+	const timeout = setTimeout(() => abortController.abort(), OPENAI_IMAGES_TIMEOUT_MS);
+	let response: Response;
+	try {
+		response = await fetch(imagesApiUrl, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${apiKey}`
+			},
+			body: form,
+			signal: abortController.signal
+		});
+	} catch (err) {
+		const message =
+			err instanceof Error && err.name === 'AbortError'
+				? `Image provider request timed out after ${Math.round(OPENAI_IMAGES_TIMEOUT_MS / 1000)}s`
+				: `Unable to reach image provider (${imagesApiUrl}): ${networkErrorMessage(err)}`;
+		throw error(502, message);
+	} finally {
+		clearTimeout(timeout);
+	}
 
 	const payload = (await response.json().catch(() => ({}))) as {
 		error?: { message?: string };
@@ -90,7 +111,11 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	if (first.url) {
-		return json({ imageDataUrl: await urlToDataUrl(first.url) });
+		try {
+			return json({ imageDataUrl: await urlToDataUrl(first.url) });
+		} catch (err) {
+			throw error(502, `Image provider returned URL but proxy fetch failed: ${networkErrorMessage(err)}`);
+		}
 	}
 
 	throw error(502, 'Provider response did not include image content');
