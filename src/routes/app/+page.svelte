@@ -79,7 +79,12 @@
 		const group = loader.parse(objText);
 		const upAxis = getLiveObjUpAxis(objText);
 		const hasPerObjectMaterials = /^\s*usemtl\s+/im.test(objText);
-		preserveObjMaterials = hasPerObjectMaterials;
+		const objectNameSet = new Set<string>();
+		group.traverse((o: THREE.Object3D) => {
+			if (o instanceof THREE.Mesh && o.name) objectNameSet.add(o.name);
+		});
+		const hasMultipleNamedObjects = objectNameSet.size > 1;
+		preserveObjMaterials = hasPerObjectMaterials || hasMultipleNamedObjects;
 		const fallbackMat = new THREE.MeshStandardMaterial({
 			color: objectColor,
 			metalness: 0.12,
@@ -90,13 +95,14 @@
 		});
 		group.traverse((o: THREE.Object3D) => {
 			if (!(o instanceof THREE.Mesh)) return;
-			if (!hasPerObjectMaterials) {
+			if (!hasPerObjectMaterials && !hasMultipleNamedObjects) {
 				o.material = fallbackMat;
 				return;
 			}
 			const materialToStandard = (material: THREE.Material): THREE.MeshStandardMaterial => {
 				const base = material as THREE.MeshPhongMaterial & { name?: string };
-				const color = base.name ? materialColorFromName(base.name) : new THREE.Color(objectColor);
+				const colorName = hasPerObjectMaterials ? base.name : o.name;
+				const color = colorName ? materialColorFromName(colorName) : new THREE.Color(objectColor);
 				return new THREE.MeshStandardMaterial({
 					color,
 					metalness: 0.12,
