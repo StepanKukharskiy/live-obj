@@ -4,11 +4,42 @@ import type { ChatCompletionMessage } from '$lib/server/llm/chat';
 import { DEFAULT_LIVE_OBJ_MODEL, requestLiveObjFromLlm } from '$lib/server/llm/liveObjChat';
 import { expandLiveObjWithExecutor, stripCodeFences } from '$lib/server/liveObj/pipeline';
 
+type WireHistoryItem = {
+	role: string;
+	content: string;
+	imageUrl?: string;
+};
+
 type Body = {
 	userMessage?: string;
-	history?: Array<{ role: string; content: string }>;
+	imageUrl?: string;
+	history?: WireHistoryItem[];
 	model?: string;
 };
+
+function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[] {
+	return items
+		.filter((m) => m.role === 'user' || m.role === 'assistant')
+		.map((m) => {
+			if (m.role === 'assistant') {
+				return { role: 'assistant', content: m.content };
+			}
+			const img = m.imageUrl?.trim();
+			if (img) {
+				const text =
+					m.content?.trim() ||
+					'Generate or update the Live OBJ scene from this reference image.';
+				return {
+					role: 'user',
+					content: [
+						{ type: 'text', text },
+						{ type: 'image_url', image_url: { url: img } }
+					]
+				};
+			}
+			return { role: 'user', content: m.content };
+		});
+}
 
 /**
  * 1) LLM (via `requestChatCompletion` / same prompt as `api/llm`) → Live OBJ text
@@ -22,23 +53,19 @@ export const POST: RequestHandler = async ({ request }) => {
 		throw error(400, 'Invalid JSON');
 	}
 
-	const userMessage = body.userMessage?.trim();
-	if (!userMessage) {
-		throw error(400, 'userMessage is required');
+	const userMessage = body.userMessage?.trim() ?? '';
+	const imageUrl = body.imageUrl?.trim();
+	if (!userMessage && !imageUrl) {
+		throw error(400, 'userMessage or imageUrl is required');
 	}
 
 	const model = (body.model?.trim() || DEFAULT_LIVE_OBJ_MODEL) as string;
 	const rawHistory = body.history ?? [];
-	const history: ChatCompletionMessage[] = rawHistory
-		.filter(
-			(m): m is ChatCompletionMessage =>
-				(m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string'
-		)
-		.map((m) => ({ role: m.role, content: m.content }));
+	const history: ChatCompletionMessage[] = wireHistoryToMessages(rawHistory);
 
 	let rawLlm: string;
 	try {
-		rawLlm = await requestLiveObjFromLlm(userMessage, history, model);
+		rawLlm = await requestLiveObjFromLlm(userMessage, history, model, { imageDataUrl: imageUrl });
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		throw error(502, `LLM failed: ${message}`);

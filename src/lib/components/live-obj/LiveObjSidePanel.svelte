@@ -5,7 +5,7 @@
 	import LiveObjSceneTab from './LiveObjSceneTab.svelte';
 	import type { SourceTab } from './LiveObjOutputTab.svelte';
 
-	type ChatMsg = { role: 'user' | 'assistant'; content: string };
+	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
 	type PanelTab = 'chat' | 'adjust' | 'scene';
 
 	let {
@@ -67,7 +67,7 @@
 		cameraFov?: number;
 		toneMappingExposure?: number;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
-		onSend?: (text: string) => void;
+		onSend?: (payload: { text: string; model: string; imageDataUrl?: string }) => void;
 	} = $props();
 
 	let activeTab = $state<PanelTab>('chat');

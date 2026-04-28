@@ -6,9 +6,16 @@ const sveltekitPrivateEnvPromise: Promise<Record<string, string | undefined> | n
 	.then(({ env }) => env)
 	.catch(() => null);
 
+/** OpenAI-compatible multimodal parts for chat completions (vision). */
+export type ChatContentPart =
+	| { type: 'text'; text: string }
+	| { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } };
+
+export type ChatMessageContent = string | ChatContentPart[];
+
 export interface ChatCompletionMessage {
 	role: 'system' | 'user' | 'assistant';
-	content: string;
+	content: ChatMessageContent;
 }
 
 export interface RequestChatCompletionOptions {

@@ -1,0 +1,4 @@
+# Railway uses Nixpacks by default. Node is auto-detected from package.json; Python is not.
+# The Live OBJ pipeline shells out to live_obj_executor_v02.py — install Python in the image.
+[phases.setup]
+nixPkgs = ["...", "python312"]

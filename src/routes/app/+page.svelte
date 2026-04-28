@@ -5,7 +5,7 @@
 	import LiveObjSidePanel from '$lib/components/live-obj/LiveObjSidePanel.svelte';
 	import type { SourceTab } from '$lib/components/live-obj/LiveObjOutputTab.svelte';
 
-	type ChatMsg = { role: 'user' | 'assistant'; content: string };
+	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
 
 	let showPanel = $state(true);
 	let msgs = $state<ChatMsg[]>([]);
@@ -109,20 +109,35 @@
 		}
 	}
 
-	async function sendPrompt(text: string) {
-		if (!text.trim() || busy) return;
+	async function sendPrompt(payload: { text: string; model: string; imageDataUrl?: string }) {
+		const { text, model, imageDataUrl } = payload;
+		if ((!text.trim() && !imageDataUrl) || busy) return;
 		statusLine = null;
 		busy = true;
 
 		const priorMsgs = [...msgs];
-		msgs = [...priorMsgs, { role: 'user', content: text }];
-		const history = priorMsgs.map((m) => ({ role: m.role, content: m.content }));
+		const userLine: ChatMsg = {
+			role: 'user',
+			content: text,
+			...(imageDataUrl ? { imageDataUrl } : {})
+		};
+		msgs = [...priorMsgs, userLine];
+		const history = priorMsgs.map((m) => ({
+			role: m.role,
+			content: m.content,
+			...(m.imageDataUrl ? { imageUrl: m.imageDataUrl } : {})
+		}));
 
 		try {
 			const res = await fetch('/api/live-obj', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ userMessage: text, history, model: 'gpt-5.5' })
+				body: JSON.stringify({
+					userMessage: text,
+					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
+					history,
+					model
+				})
 			});
 			const payload = (await res.json().catch(() => ({}))) as {
 				message?: string;
@@ -213,7 +228,7 @@
 		bind:cameraFov
 		bind:toneMappingExposure
 		onLiveObjMetadataChange={(updatedText) => void regenerateFromMetadata(updatedText)}
-		onSend={(text) => void sendPrompt(text)}
+		onSend={(p) => void sendPrompt(p)}
 	/>
 </div>
 

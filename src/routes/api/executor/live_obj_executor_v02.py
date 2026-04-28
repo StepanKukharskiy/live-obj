@@ -195,16 +195,65 @@ def split_top_level_commas(s: str) -> List[str]:
     return parts
 
 
+def parse_key_values_space_separated(s: str) -> Dict[str, Any]:
+    """Parse `count=12 offset=[0,0,1]` (space-separated pairs; bracket values may contain commas)."""
+    result: Dict[str, Any] = {}
+    i, n = 0, len(s)
+    while i < n:
+        while i < n and s[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        eq = s.find("=", i)
+        if eq < 0:
+            break
+        key = s[i:eq].strip()
+        i = eq + 1
+        while i < n and s[i].isspace():
+            i += 1
+        if i >= n:
+            result[key] = True
+            break
+        if s[i] == "[":
+            depth, j = 0, i
+            while j < n:
+                if s[j] == "[":
+                    depth += 1
+                elif s[j] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+            val = s[i:j]
+            i = j
+        else:
+            j = i
+            while j < n and not s[j].isspace():
+                j += 1
+            val = s[i:j]
+            i = j
+        result[key] = parse_scalar(val.strip())
+    return result
+
+
 def parse_key_values(s: str) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
-    for part in split_top_level_commas(s):
+    parts = split_top_level_commas(s)
+    ambiguous = False
+    for part in parts:
         if not part:
             continue
         if "=" not in part:
             result[part.strip()] = True
             continue
         k, v = part.split("=", 1)
+        if " " in v.strip() and re.search(r"\s+[A-Za-z_][A-Za-z0-9_]*\s*=", v):
+            ambiguous = True
+            break
         result[k.strip()] = parse_scalar(v)
+    if ambiguous:
+        return parse_key_values_space_separated(s.strip())
     return result
 
 
@@ -443,6 +492,13 @@ def topological_objects(objects: List[LiveObject], obn: Dict[str, LiveObject]) -
     return out
 
 
+# Param keys whose values are axis labels (x/y/z), not numeric expressions or param refs.
+_AXIS_PARAM_KEYS = frozenset({"axis"})
+
+# LLM-authored enum tokens (path=helix, mode=linear, …) are single identifiers, not param refs.
+_SINGLE_IDENTIFIER_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[str, Any]:
     base: Dict[str, float] = {}
     pn = obj.meta.get("parent")
@@ -456,8 +512,18 @@ def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[st
         if not isinstance(v, str):
             merged[k] = v
         else:
-            env: Dict[str, Any] = {**base, **merged}
-            merged[k] = eval_mixed_value(v.strip(), env, obn)
+            vs = v.strip()
+            if k in _AXIS_PARAM_KEYS and vs in ("x", "y", "z"):
+                merged[k] = vs
+            else:
+                env: Dict[str, Any] = {**base, **merged}
+                try:
+                    merged[k] = eval_mixed_value(vs, env, obn)
+                except KeyError:
+                    if _SINGLE_IDENTIFIER_TOKEN.match(vs):
+                        merged[k] = vs
+                    else:
+                        raise
     out = {**base, **merged}
     return out
 
@@ -560,10 +626,20 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
                     meta["attach"] = attach_val
         elif key in {"children", "tags"}:
             meta[key] = [x.strip() for x in val.split(",") if x.strip()]
+        elif key in {"array", "radial_array", "sweep"}:
+            meta[key] = parse_key_values(val)
         else:
             meta[key] = parse_scalar(val)
 
     return meta, ops, sdf_ops
+
+
+def _cylinder_anchor_is_base(obj: LiveObject) -> bool:
+    """True if center=anchor(assembly.base|floor|bottom) — anchor is floor contact, not volume midpoint."""
+    blob = "\n".join(obj.meta_lines)
+    return bool(
+        re.search(r"center\s*=\s*anchor\s*\([^)]+\.(base|floor|bottom)\s*\)", blob, re.I)
+    )
 
 
 def parse_obj(path: Path) -> Scene:
@@ -632,10 +708,19 @@ def box_mesh(center: Vec3, size: Vec3) -> Mesh:
     return Mesh(v, f)
 
 
-def cylinder_mesh(axis: str, center: Vec3, radius: float, depth: float, segments: int = 16) -> Mesh:
+def cylinder_mesh(
+    axis: str,
+    center: Vec3,
+    radius: float,
+    depth: float,
+    segments: int = 16,
+    *,
+    base_aligned: bool = False,
+) -> Mesh:
     cx, cy, cz = center
     verts, faces = [], []
     axis = axis.lower()
+    z0, z1 = (0.0, depth) if base_aligned else (-depth / 2, depth / 2)
 
     def pt(side: float, a: float) -> Vec3:
         ca, sa = math.cos(a), math.sin(a)
@@ -647,9 +732,9 @@ def cylinder_mesh(axis: str, center: Vec3, radius: float, depth: float, segments
 
     r1, r2 = [], []
     for i in range(segments):
-        verts.append(pt(-depth/2, 2*math.pi*i/segments)); r1.append(len(verts))
+        verts.append(pt(z0, 2 * math.pi * i / segments)); r1.append(len(verts))
     for i in range(segments):
-        verts.append(pt(depth/2, 2*math.pi*i/segments)); r2.append(len(verts))
+        verts.append(pt(z1, 2 * math.pi * i / segments)); r2.append(len(verts))
     faces.append(list(reversed(r1)))
     faces.append(r2)
     for i in range(segments):
@@ -753,11 +838,28 @@ class SDFNoiseDisplace(SDFExpr):
         return self.base.dist(p) + self.strength * n
 
 
-def build_sdf(obj: LiveObject) -> Optional[SDFExpr]:
+def _resolve_sdf_value(v: Any, env: Dict[str, Any], obn: Dict[str, LiveObject]) -> Any:
+    """Turn assembly param names / expressions in SDF tokens into numbers (or anchor vectors)."""
+    if isinstance(v, str):
+        vs = v.strip()
+        if not vs:
+            return v
+        try:
+            tree = ast.parse(vs, mode="eval")
+            _validate_safe_ast(tree)
+            return eval_mixed_value(vs, env, obn)
+        except (SyntaxError, ValueError, KeyError, TypeError):
+            return v
+    if isinstance(v, list):
+        return [_resolve_sdf_value(x, env, obn) for x in v]
+    return v
+
+
+def build_sdf(sdf_ops: List[Dict[str, Any]]) -> Optional[SDFExpr]:
     registry: Dict[str, SDFExpr] = {}
     current: Optional[SDFExpr] = None
 
-    for cmd in obj.sdf_ops:
+    for cmd in sdf_ops:
         c = cmd.get("cmd")
         if c == "box":
             sid = str(cmd.get("id", f"box_{len(registry)}"))
@@ -926,6 +1028,96 @@ def tube_between(a: Vec3, b: Vec3, radius: float, segments: int = 8) -> Mesh:
     return Mesh(verts, faces)
 
 
+def spiral_treads_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
+    """Wedge-like tread boxes along a rising helix (LLM spiral stair preset)."""
+    count = int(params.get("count", params.get("step_count", 12)))
+    total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
+    total_h = float(params.get("total_height", 3.0))
+    rise = float(params.get("rise_per_step", total_h / max(1, count)))
+    r_in = float(params.get("inner_radius", 0.25))
+    r_out = float(params.get("outer_radius", 1.0))
+    thick = float(params.get("thickness", params.get("tread_thickness", 0.05)))
+    tread_deg = float(params.get("tread_angle_degrees", 24))
+    tread_ang = math.radians(max(1.0, tread_deg))
+    cx, cy, cz = center
+    mesh = Mesh()
+    r_mid = 0.5 * (r_in + r_out)
+    radial = max(0.02, r_out - r_in)
+    tangential = max(0.03, r_mid * tread_ang)
+    for i in range(count):
+        frac = (i * rise) / max(total_h, 1e-6)
+        theta = total_turn * frac
+        z0 = cz + i * rise
+        zc = z0 + thick / 2
+        cr, sr = math.cos(theta), math.sin(theta)
+        px = cx + r_mid * cr
+        py = cy + r_mid * sr
+        hx, hy, hz = radial / 2, tangential / 2, thick / 2
+        corners: List[Vec3] = []
+        for szgn in (-1, 1):
+            for srgn, stgn in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                ox = srgn * hx * cr + stgn * hy * (-sr)
+                oy = srgn * hx * sr + stgn * hy * cr
+                oz = szgn * hz
+                corners.append((px + ox, py + oy, zc + oz))
+        base = len(mesh.vertices)
+        mesh.vertices.extend(corners)
+
+        def fi(*idx: int) -> Face:
+            return [base + i for i in idx]
+
+        mesh.faces.append(fi(0, 1, 2, 3))
+        mesh.faces.append(fi(4, 7, 6, 5))
+        mesh.faces.append(fi(0, 4, 5, 1))
+        mesh.faces.append(fi(1, 5, 6, 2))
+        mesh.faces.append(fi(2, 6, 7, 3))
+        mesh.faces.append(fi(3, 7, 4, 0))
+    return mesh
+
+
+def spiral_post_array_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
+    """Vertical cylinders along the stair spiral at outer radius."""
+    count = int(params.get("count", params.get("step_count", 12)))
+    total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
+    total_h = float(params.get("total_height", 3.0))
+    rise = float(params.get("rise_per_step", total_h / max(1, count)))
+    r = float(params.get("radius", 1.0))
+    post_r = float(params.get("post_radius", 0.025))
+    ph = float(params.get("post_height", 0.9))
+    cx, cy, cz = center
+    mesh = Mesh()
+    for i in range(count):
+        frac = (i * rise) / max(total_h, 1e-6)
+        theta = total_turn * frac
+        px = cx + r * math.cos(theta)
+        py = cy + r * math.sin(theta)
+        pz = cz + i * rise
+        mesh.extend(cylinder_mesh("z", (px, py, pz + ph / 2), post_r, ph, 12))
+    return mesh
+
+
+def helix_sweep_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
+    """Tube along a circular helix; profile=circle uses profile_radius."""
+    cx, cy, cz = center
+    pr = float(params.get("profile_radius", 0.035))
+    path_r = float(params.get("path_radius", 1.0))
+    turn = math.radians(float(params.get("total_turn_degrees", 360)))
+    segs = max(4, int(params.get("segments", 48)))
+    start_z = float(params.get("start_z", 0))
+    end_z = float(params.get("end_z", float(params.get("height", 3.0))))
+    tube_seg = max(6, min(12, max(4, segs // 12)))
+    mesh = Mesh()
+    pts: List[Vec3] = []
+    for i in range(segs + 1):
+        t = i / segs
+        th = turn * t
+        zz = cz + start_z + t * (end_z - start_z)
+        pts.append((cx + path_r * math.cos(th), cy + path_r * math.sin(th), zz))
+    for i in range(len(pts) - 1):
+        mesh.extend(tube_between(pts[i], pts[i + 1], pr, tube_seg))
+    return mesh
+
+
 def differential_growth_mesh(params: Dict[str, Any]) -> Mesh:
     radius = float(params.get("radius", 1.0))
     n = int(params.get("points", 32))
@@ -1035,6 +1227,38 @@ def boids_mesh(params: Dict[str, Any]) -> Mesh:
 # ----------------------------
 # Mesh ops
 # ----------------------------
+
+def _resolve_vec3_meta(
+    val: Any,
+    env: Dict[str, Any],
+    obn: Dict[str, LiveObject],
+    defaults: Tuple[float, float, float],
+) -> List[float]:
+    """Resolve position/rotation/scale lists that may contain param names or expressions (from #@transform)."""
+    if not isinstance(val, (list, tuple)) or len(val) < 3:
+        return [defaults[0], defaults[1], defaults[2]]
+    out: List[float] = []
+    for i in range(3):
+        p = val[i]
+        if isinstance(p, (int, float)):
+            out.append(float(p))
+        elif isinstance(p, str):
+            out.append(float(eval_mixed_value(p.strip(), env, obn)))
+        else:
+            raise TypeError(f"transform component must be number or expression, got {p!r}")
+    return out
+
+
+def resolve_transform_dict(transform: Dict[str, Any], env: Dict[str, Any], obn: Dict[str, LiveObject]) -> Dict[str, Any]:
+    t = dict(transform)
+    if "position" in t:
+        t["position"] = _resolve_vec3_meta(t["position"], env, obn, (0.0, 0.0, 0.0))
+    if "scale" in t:
+        t["scale"] = _resolve_vec3_meta(t["scale"], env, obn, (1.0, 1.0, 1.0))
+    if "rotation" in t:
+        t["rotation"] = _resolve_vec3_meta(t["rotation"], env, obn, (0.0, 0.0, 0.0))
+    return t
+
 
 def apply_transform(mesh: Mesh, transform: Dict[str, Any]) -> Mesh:
     pos = transform.get("position", [0,0,0])
@@ -1276,6 +1500,146 @@ def op_array(mesh: Mesh, count: int, offset: Vec3) -> Mesh:
     return out
 
 
+def rotate_mesh_z(mesh: Mesh, rad: float) -> Mesh:
+    """CCW rotation in XY (standard right-handed Z-up)."""
+    if abs(rad) < 1e-12:
+        return mesh.copy()
+    c, s = math.cos(rad), math.sin(rad)
+    out = Mesh(faces=[list(f) for f in mesh.faces])
+    for x, y, z in mesh.vertices:
+        out.vertices.append((x * c - y * s, x * s + y * c, z))
+    return out
+
+
+def _resolve_meta_spec_dict(spec: Any, env: Dict[str, Any], obn: Dict[str, LiveObject]) -> Optional[Dict[str, Any]]:
+    if spec is None:
+        return None
+    if isinstance(spec, str):
+        spec = parse_key_values(spec)
+    if not isinstance(spec, dict):
+        return None
+    out: Dict[str, Any] = {}
+    for k, v in spec.items():
+        if isinstance(v, str):
+            vs = v.strip()
+            try:
+                out[k] = eval_mixed_value(vs, env, obn)
+            except KeyError:
+                if _SINGLE_IDENTIFIER_TOKEN.match(vs):
+                    out[k] = vs
+                else:
+                    raise
+        elif isinstance(v, list):
+            row: List[Any] = []
+            for el in v:
+                if isinstance(el, str):
+                    row.append(eval_mixed_value(el.strip(), env, obn))
+                elif isinstance(el, (int, float)):
+                    row.append(float(el))
+                else:
+                    row.append(el)
+            out[k] = row
+        else:
+            out[k] = v
+    return out
+
+
+def apply_meta_instancing(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
+    """#@array (linear) and/or #@radial_array (around Z): combined gives spiral step placement."""
+    arr_raw = obj.meta.get("array")
+    rad_raw = obj.meta.get("radial_array")
+    if not arr_raw and not rad_raw:
+        return mesh
+    env = get_effective_params(obj, obn)
+    arr = _resolve_meta_spec_dict(arr_raw, env, obn) or {}
+    rad = _resolve_meta_spec_dict(rad_raw, env, obn) or {}
+    count = 1
+    if arr:
+        count = max(count, int(arr.get("count", 1)))
+    if rad:
+        count = max(count, int(rad.get("count", 1)))
+    count = max(1, count)
+
+    ox = oy = oz = 0.0
+    if arr:
+        off = arr.get("offset", [0, 0, 0])
+        if isinstance(off, (list, tuple)) and len(off) >= 3:
+            ox, oy, oz = float(off[0]), float(off[1]), float(off[2])
+
+    axis = str(rad.get("axis", "z")).lower() if rad else "z"
+    radius = float(rad.get("radius", 0.0)) if rad else 0.0
+
+    if rad and not arr:
+        out = Mesh()
+        for i in range(count):
+            th = 2 * math.pi * i / count
+            if axis == "z":
+                dx, dy, dz = radius * math.cos(th), radius * math.sin(th), 0.0
+            elif axis == "y":
+                dx, dy, dz = radius * math.cos(th), 0.0, radius * math.sin(th)
+            else:
+                dx, dy, dz = 0.0, radius * math.cos(th), radius * math.sin(th)
+            m = mesh.copy()
+            m.vertices = [(x + dx, y + dy, z + dz) for x, y, z in m.vertices]
+            out.extend(m)
+        return out
+    if arr and not rad:
+        return op_array(mesh, count, (ox, oy, oz))
+
+    # Combined linear + radial: spiral stairs — rotate in XY so box +Y (tread depth) points radially outward.
+    out = Mesh()
+    for i in range(count):
+        th = 2 * math.pi * i / count
+        orient = (th - math.pi / 2) if axis == "z" else 0.0
+        if axis == "z":
+            dx = radius * math.cos(th) + ox * i
+            dy = radius * math.sin(th) + oy * i
+            dz = oz * i
+        elif axis == "y":
+            dx = radius * math.cos(th) + ox * i
+            dy = oy * i
+            dz = radius * math.sin(th) + oz * i
+        else:
+            dx = ox * i
+            dy = radius * math.cos(th) + oy * i
+            dz = radius * math.sin(th) + oz * i
+        m = rotate_mesh_z(mesh, orient)
+        m.vertices = [(x + dx, y + dy, z + dz) for x, y, z in m.vertices]
+        out.extend(m)
+    return out
+
+
+def curve_sweep_tube_mesh(params: Dict[str, Any], center: Vec3, sweep: Dict[str, Any]) -> Mesh:
+    """Vertical helix tube: params radius=path radius, height=vertical span; sweep.radius = tube radius."""
+    path_r = float(params.get("radius", 1.0))
+    height = float(params.get("height", 3.0))
+    tr = sweep.get("radius", params.get("handrail_radius", 0.05))
+    if isinstance(tr, str) and tr.strip() in params:
+        tr = params[tr.strip()]
+    tube_r = float(tr)
+    theta_top = 2 * math.pi
+    if params.get("total_turn_degrees") is not None:
+        theta_top = math.radians(float(params["total_turn_degrees"]))
+    elif params.get("step_count") is not None:
+        sc = max(1, int(float(params["step_count"])))
+        theta_top = 2 * math.pi * (sc - 1) / sc if sc > 1 else 2 * math.pi
+    segs = max(32, int(float(params.get("segments", 48))))
+    cx, cy, cz = center
+    mesh = Mesh()
+    pts: List[Vec3] = []
+    for i in range(segs + 1):
+        t = i / segs
+        # Match #@radial_array steps: angle at step i is 2π·i/n; top step has θ = 2π·(n-1)/n.
+        # Rail descends from anchor (t=0 top) to t=1 bottom: θ goes from θ_top down to 0.
+        th = theta_top * (1.0 - t)
+        zz = cz - t * height
+        pts.append((cx + path_r * math.cos(th), cy + path_r * math.sin(th), zz))
+    tube_seg = max(6, min(12, segs // 8))
+    for i in range(len(pts) - 1):
+        mesh.extend(tube_between(pts[i], pts[i + 1], tube_r, tube_seg))
+    return mesh
+
+
 def op_tread(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
     count = int(op.get("count", 12))
     depth = float(op.get("depth", 0.035))
@@ -1332,11 +1696,27 @@ def _as_float3(val: Any, default: Tuple[float, float, float]) -> Tuple[float, fl
 def generate_procedural(obj: LiveObject) -> Mesh:
     typ = str(obj.meta.get("type", "mesh"))
     params = obj.meta.get("params", {}) or {}
+    center = _as_float3(params.get("center", params.get("position", [0, 0, 0])), (0.0, 0.0, 0.0))
 
     if typ == "mesh":
+        gen = str(params.get("generator", ""))
+        if gen == "spiral_treads":
+            return spiral_treads_mesh(params, center)
+        if gen == "spiral_post_array":
+            return spiral_post_array_mesh(params, center)
         return obj.mesh.copy()
 
-    center = _as_float3(params.get("center", params.get("position", [0, 0, 0])), (0.0, 0.0, 0.0))
+    if typ == "sweep":
+        path = str(params.get("path", "line"))
+        if path == "helix":
+            return helix_sweep_mesh(params, center)
+        return obj.mesh.copy()
+
+    if typ == "curve":
+        sw = obj.meta.get("sweep")
+        if isinstance(sw, dict) and str(sw.get("profile", "circle")).lower() == "circle":
+            return curve_sweep_tube_mesh(params, center, sw)
+        return obj.mesh.copy()
 
     if typ == "box":
         size = params.get("size", [params.get("width", 1), params.get("depth", params.get("length", 1)), params.get("height", 1)])
@@ -1344,12 +1724,25 @@ def generate_procedural(obj: LiveObject) -> Mesh:
             raise TypeError("size should be a 3-vector after parametric resolution")
         return box_mesh(center, _as_float3(size, (1.0, 1.0, 1.0)))
     if typ == "cylinder":
+        axis = str(params.get("axis", "z")).lower()
+        depth = float(params.get("depth", params.get("height", params.get("width", 1))))
+        base_aligned = str(params.get("align", "")).lower() in ("base", "bottom") or _cylinder_anchor_is_base(obj)
+        if params.get("center") is None and params.get("position") is None:
+            if base_aligned:
+                center = (0.0, 0.0, 0.0)
+            elif axis == "z":
+                center = (0.0, 0.0, depth / 2)
+            elif axis == "y":
+                center = (0.0, depth / 2, 0.0)
+            else:
+                center = (depth / 2, 0.0, 0.0)
         return cylinder_mesh(
-            str(params.get("axis","z")),
+            axis,
             center,
-            float(params.get("radius",0.5)),
-            float(params.get("depth", params.get("height", params.get("width",1)))),
-            int(params.get("segments",16)),
+            float(params.get("radius", 0.5)),
+            depth,
+            int(params.get("segments", 16)),
+            base_aligned=base_aligned,
         )
     if typ in {"surface_grid", "heightfield"}:
         return surface_grid(float(params.get("width",10)), float(params.get("depth",10)), int(params.get("resolution",20)), center)
@@ -1357,9 +1750,14 @@ def generate_procedural(obj: LiveObject) -> Mesh:
     return obj.mesh.copy()
 
 
-def generate_sdf(obj: LiveObject) -> Mesh:
+def generate_sdf(obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     params = obj.meta.get("params", {}) or {}
-    expr = build_sdf(obj)
+    env = get_effective_params(obj, obn)
+    resolved_ops = [
+        {k: _resolve_sdf_value(val, env, obn) for k, val in cmd.items()}
+        for cmd in obj.sdf_ops
+    ]
+    expr = build_sdf(resolved_ops)
     if expr is None:
         return obj.mesh.copy()
     bounds = params.get("bounds", [[-2,-2,-2],[2,2,2]])
@@ -1388,6 +1786,10 @@ def execute_scene(scene: Scene) -> Scene:
         if str(obj.meta.get("source", "")) == "assembly":
             resolve_assembly_anchors(obj, obn)
     for obj in order:
+        if isinstance(obj.meta.get("transform"), dict):
+            env = get_effective_params(obj, obn)
+            obj.meta["transform"] = resolve_transform_dict(obj.meta["transform"], env, obn)
+    for obj in order:
         source = str(obj.meta.get("source", "llm_mesh"))
         if source == "assembly":
             continue
@@ -1396,11 +1798,12 @@ def execute_scene(scene: Scene) -> Scene:
             obj.meta["params"] = get_effective_params(obj, obn)
             try:
                 base = generate_procedural(obj)
+                base = apply_meta_instancing(base, obj, obn)
             finally:
                 if oldp is not None:
                     obj.meta["params"] = oldp
         elif source == "sdf":
-            base = generate_sdf(obj)
+            base = generate_sdf(obj, obn)
         elif source == "simulation":
             base = generate_simulation(obj)
         else:
