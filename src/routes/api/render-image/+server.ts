@@ -90,7 +90,6 @@ export const POST: RequestHandler = async ({ request }) => {
 	const form = new FormData();
 	form.append('model', OPENAI_IMAGE_MODEL);
 	form.append('prompt', fullPrompt);
-	form.append('size', '1024x1024');
 	form.append('image', dataUrlToBlob(screenshotDataUrl), 'scene-screenshot.jpg');
 
 	const abortController = new AbortController();
@@ -142,7 +141,6 @@ export const POST: RequestHandler = async ({ request }) => {
 				body: JSON.stringify({
 					model: OPENAI_IMAGE_MODEL,
 					prompt: fullPrompt,
-					size: '1024x1024',
 					image: dataUrlToBase64Payload(screenshotDataUrl)
 				})
 			});

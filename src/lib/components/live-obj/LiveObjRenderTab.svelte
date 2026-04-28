@@ -12,16 +12,19 @@
 	let generatedImageDataUrl = $state('');
 	let busy = $state(false);
 	let errorLine = $state<string | null>(null);
-	let isFullscreen = $state(false);
 	let fullscreenImageDataUrl = $state('');
+	let fullscreenDialog: HTMLDialogElement | null = $state(null);
 
 	function openFullscreen(imageDataUrl: string) {
 		fullscreenImageDataUrl = imageDataUrl;
-		isFullscreen = true;
+		if (!fullscreenDialog) return;
+		if (typeof fullscreenDialog.showModal === 'function') {
+			fullscreenDialog.showModal();
+		}
 	}
 
 	function closeFullscreen() {
-		isFullscreen = false;
+		if (fullscreenDialog?.open) fullscreenDialog.close();
 		fullscreenImageDataUrl = '';
 	}
 
@@ -173,14 +176,16 @@
 	{/if}
 </div>
 
-{#if isFullscreen && fullscreenImageDataUrl}
-	<div class="live-obj-render-fullscreen" onclick={closeFullscreen}>
-		<div class="live-obj-render-fullscreen-inner" onclick={(e) => e.stopPropagation()}>
+<dialog bind:this={fullscreenDialog} class="live-obj-render-dialog" onclose={closeFullscreen} onclick={(e) => {
+	if (e.target === fullscreenDialog) closeFullscreen();
+}}>
+	{#if fullscreenImageDataUrl}
+		<div class="live-obj-render-fullscreen-inner">
 			<img src={fullscreenImageDataUrl} alt="Fullscreen render preview" />
 			<button type="button" class="send-button live-obj-render-fullscreen-close" onclick={closeFullscreen}>Close</button>
 		</div>
-	</div>
-{/if}
+	{/if}
+</dialog>
 
 <style>
 	.live-obj-render-tab {
@@ -230,17 +235,19 @@
 		padding: 0;
 		border-radius: 8px;
 	}
-	.live-obj-render-fullscreen {
-		position: fixed;
-		inset: 0;
-		z-index: 1100;
-		display: grid;
-		place-items: center;
+	.live-obj-render-dialog {
+		border: none;
+		padding: 0;
+		margin: auto;
+		background: transparent;
+		max-width: 95vw;
+		max-height: 95vh;
+	}
+	.live-obj-render-dialog::backdrop {
 		background: rgba(0, 0, 0, 0.72);
-		padding: 20px;
 	}
 	.live-obj-render-fullscreen-inner {
-		max-width: min(1200px, 95vw);
+		max-width: min(1400px, 95vw);
 		max-height: 95vh;
 		display: flex;
 		flex-direction: column;
@@ -249,7 +256,7 @@
 	}
 	.live-obj-render-fullscreen-inner img {
 		max-width: 100%;
-		max-height: calc(95vh - 56px);
+		max-height: calc(95vh - 62px);
 		object-fit: contain;
 		border-radius: 10px;
 		background: #111;
