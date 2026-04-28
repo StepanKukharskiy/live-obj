@@ -12,6 +12,28 @@
 	let generatedImageDataUrl = $state('');
 	let busy = $state(false);
 	let errorLine = $state<string | null>(null);
+	let isFullscreen = $state(false);
+	let fullscreenImageDataUrl = $state('');
+
+	function openFullscreen(imageDataUrl: string) {
+		fullscreenImageDataUrl = imageDataUrl;
+		isFullscreen = true;
+	}
+
+	function closeFullscreen() {
+		isFullscreen = false;
+		fullscreenImageDataUrl = '';
+	}
+
+	function downloadImage(imageDataUrl: string, filenamePrefix: string) {
+		if (!imageDataUrl) return;
+		const link = document.createElement('a');
+		link.href = imageDataUrl;
+		link.download = `${filenamePrefix}-${Date.now()}.png`;
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+	}
 
 	function takeScreenshot() {
 		errorLine = null;
@@ -84,6 +106,10 @@
 		<div class="planner-render-preview">
 			<div class="planner-render-title">Scene screenshot</div>
 			<img src={screenshotDataUrl} alt="Scene capture preview" />
+			<div class="planner-render-image-actions">
+				<button type="button" class="send-button" onclick={() => downloadImage(screenshotDataUrl, 'scene-screenshot')}>Download</button>
+				<button type="button" class="send-button" onclick={() => openFullscreen(screenshotDataUrl)}>Fullscreen</button>
+			</div>
 		</div>
 	{/if}
 
@@ -91,6 +117,10 @@
 		<div class="planner-render-preview">
 			<div class="planner-render-title">Generated image</div>
 			<img src={generatedImageDataUrl} alt="Generated render result" />
+			<div class="planner-render-image-actions">
+				<button type="button" class="send-button" onclick={() => downloadImage(generatedImageDataUrl, 'rendered-image')}>Download</button>
+				<button type="button" class="send-button" onclick={() => openFullscreen(generatedImageDataUrl)}>Fullscreen</button>
+			</div>
 		</div>
 	{/if}
 
@@ -98,6 +128,15 @@
 		<div class="planner-status" role="status">{errorLine}</div>
 	{/if}
 </div>
+
+{#if isFullscreen && fullscreenImageDataUrl}
+	<div class="live-obj-render-fullscreen" onclick={closeFullscreen}>
+		<div class="live-obj-render-fullscreen-inner" onclick={(e) => e.stopPropagation()}>
+			<img src={fullscreenImageDataUrl} alt="Fullscreen render preview" />
+			<button type="button" class="send-button live-obj-render-fullscreen-close" onclick={closeFullscreen}>Close</button>
+		</div>
+	</div>
+{/if}
 
 <style>
 	.live-obj-render-tab {
@@ -135,5 +174,37 @@
 		border-radius: 10px;
 		border: 1px solid rgba(0, 0, 0, 0.1);
 		background: rgba(255, 255, 255, 0.4);
+	}
+	.planner-render-image-actions {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.live-obj-render-fullscreen {
+		position: fixed;
+		inset: 0;
+		z-index: 1100;
+		display: grid;
+		place-items: center;
+		background: rgba(0, 0, 0, 0.72);
+		padding: 20px;
+	}
+	.live-obj-render-fullscreen-inner {
+		max-width: min(1200px, 95vw);
+		max-height: 95vh;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		align-items: stretch;
+	}
+	.live-obj-render-fullscreen-inner img {
+		max-width: 100%;
+		max-height: calc(95vh - 56px);
+		object-fit: contain;
+		border-radius: 10px;
+		background: #111;
+	}
+	.live-obj-render-fullscreen-close {
+		align-self: flex-end;
 	}
 </style>
