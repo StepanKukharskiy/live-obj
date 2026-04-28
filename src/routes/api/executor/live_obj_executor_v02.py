@@ -560,11 +560,20 @@ def assembly_params_eval_env(params: Optional[Dict[str, Any]], obn: Dict[str, Li
 
 def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[str, Any]:
     base: Dict[str, Any] = {}
+
+    # Inherit params from all ancestor assemblies (root -> leaf) so nested assemblies
+    # can still resolve references to top-level design variables.
+    lineage: List[LiveObject] = []
     pn = obj.meta.get("parent")
-    if pn and str(pn) in obn:
+    while pn and str(pn) in obn:
         pobj = obn[str(pn)]
-        if str(pobj.meta.get("source", "")) == "assembly":
-            base = dict(assembly_params_eval_env(pobj.meta.get("params") or {}, obn))
+        lineage.append(pobj)
+        pn = pobj.meta.get("parent")
+
+    for anc in reversed(lineage):
+        if str(anc.meta.get("source", "")) == "assembly":
+            base = {**base, **assembly_params_eval_env(anc.meta.get("params") or {}, obn)}
+
     raw = obj.meta.get("params") or {}
     merged: Dict[str, Any] = {}
     for k, v in raw.items():
