@@ -30,6 +30,12 @@ function dataUrlToBlob(dataUrl: string): Blob {
 	return new Blob([bytes], { type: mime });
 }
 
+function dataUrlToBase64Payload(dataUrl: string): string {
+	const m = dataUrl.match(/^data:.+;base64,(.+)$/);
+	if (!m) throw new Error('Invalid data URL payload');
+	return m[1];
+}
+
 async function urlToDataUrl(url: string): Promise<string> {
 	const proxyRes = await fetch(url);
 	if (!proxyRes.ok) throw new Error(`Image proxy fetch failed: ${proxyRes.status}`);
@@ -94,16 +100,58 @@ export const POST: RequestHandler = async ({ request }) => {
 		clearTimeout(timeout);
 	}
 
-	const payload = (await response.json().catch(() => ({}))) as {
+	const initialPayload = (await response.json().catch(() => ({}))) as {
 		error?: { message?: string };
+		detail?: unknown;
 		data?: Array<{ b64_json?: string; url?: string }>;
 	};
 
-	if (!response.ok) {
-		throw error(response.status, payload.error?.message ?? 'Image generation failed');
+	const providerMessage = initialPayload.error?.message ?? JSON.stringify(initialPayload.detail ?? '');
+
+	// Some OpenAI-compatible providers validate as JSON-only and reject multipart with:
+	// [{'type': 'dict_type', 'loc': ('body',), 'msg': 'Input should be a valid dictionary'}]
+	// Retry with JSON body in that case.
+	const shouldRetryAsJson =
+		!response.ok && response.status === 422 && providerMessage.includes('dict_type');
+
+	if (shouldRetryAsJson) {
+		try {
+			response = await fetch(imagesApiUrl, {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					model: OPENAI_IMAGE_MODEL,
+					prompt: fullPrompt,
+					size: '1024x1024',
+					image: dataUrlToBase64Payload(screenshotDataUrl)
+				})
+			});
+		} catch (err) {
+			throw error(502, `Unable to reach image provider (${imagesApiUrl}) on JSON fallback: ${networkErrorMessage(err)}`);
+		}
 	}
 
-	const first = payload.data?.[0];
+	let finalPayload = initialPayload;
+	if (shouldRetryAsJson) {
+		finalPayload = (await response.json().catch(() => ({}))) as {
+			error?: { message?: string };
+			detail?: unknown;
+			data?: Array<{ b64_json?: string; url?: string }>;
+		};
+	}
+
+	if (!response.ok) {
+		const message =
+			finalPayload.error?.message ??
+			(typeof finalPayload.detail === 'string' ? finalPayload.detail : JSON.stringify(finalPayload.detail ?? '')) ??
+			'Image generation failed';
+		throw error(response.status, message);
+	}
+
+	const first = finalPayload.data?.[0];
 	if (!first) throw error(502, 'No image returned by provider');
 
 	if (first.b64_json) {
