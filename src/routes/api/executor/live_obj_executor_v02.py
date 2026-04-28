@@ -593,9 +593,20 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         if body == "sdf:":
             block = "sdf"
             continue
+        if body == "params:":
+            block = "params"
+            meta.setdefault("params", {})
+            continue
         if body == "anchors:":
             block = "anchors"
             meta["anchors"] = {}
+            continue
+
+        if block == "params":
+            params_body = body[1:].strip() if body.startswith("-") else body
+            if params_body:
+                for k, v in parse_key_values(params_body).items():
+                    meta.setdefault("params", {})[k] = v
             continue
 
         if block == "anchors" and body.startswith("-"):
