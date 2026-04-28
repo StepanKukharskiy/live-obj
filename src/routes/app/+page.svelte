@@ -40,6 +40,17 @@
 	let objectPosY = $state(0);
 	let objectPosZ = $state(0);
 	let objectRotYDeg = $state(0);
+	let preserveObjMaterials = $state(false);
+
+	function materialColorFromName(name: string): THREE.Color {
+		let hash = 0;
+		for (let i = 0; i < name.length; i += 1) {
+			hash = (hash << 5) - hash + name.charCodeAt(i);
+			hash |= 0;
+		}
+		const hue = ((hash % 360) + 360) % 360;
+		return new THREE.Color().setHSL(hue / 360, 0.45, 0.56);
+	}
 
 	function getLiveObjUpAxis(objText: string): 'x' | 'y' | 'z' {
 		const m = objText.match(/^\s*#@up:\s*([xyz])\s*$/im);
@@ -67,7 +78,9 @@
 		const loader = new OBJLoader();
 		const group = loader.parse(objText);
 		const upAxis = getLiveObjUpAxis(objText);
-		const mat = new THREE.MeshStandardMaterial({
+		const hasPerObjectMaterials = /^\s*usemtl\s+/im.test(objText);
+		preserveObjMaterials = hasPerObjectMaterials;
+		const fallbackMat = new THREE.MeshStandardMaterial({
 			color: objectColor,
 			metalness: 0.12,
 			roughness: 0.48,
@@ -76,7 +89,28 @@
 			wireframe
 		});
 		group.traverse((o: THREE.Object3D) => {
-			if (o instanceof THREE.Mesh) o.material = mat;
+			if (!(o instanceof THREE.Mesh)) return;
+			if (!hasPerObjectMaterials) {
+				o.material = fallbackMat;
+				return;
+			}
+			const materialToStandard = (material: THREE.Material): THREE.MeshStandardMaterial => {
+				const base = material as THREE.MeshPhongMaterial & { name?: string };
+				const color = base.name ? materialColorFromName(base.name) : new THREE.Color(objectColor);
+				return new THREE.MeshStandardMaterial({
+					color,
+					metalness: 0.12,
+					roughness: 0.48,
+					side: THREE.DoubleSide,
+					flatShading: false,
+					wireframe
+				});
+			};
+			if (Array.isArray(o.material)) {
+				o.material = o.material.map((material) => materialToStandard(material));
+				return;
+			}
+			o.material = materialToStandard(o.material);
 		});
 		if (upAxis === 'z') group.rotation.x = -Math.PI / 2;
 		else if (upAxis === 'x') group.rotation.z = Math.PI / 2;
@@ -199,6 +233,7 @@
 			{backgroundColor}
 			{renderObject}
 			{objectColor}
+			respectObjectMaterials={preserveObjMaterials}
 			{showGrid}
 			{showAxes}
 			{ambientLightIntensity}

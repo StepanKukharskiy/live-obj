@@ -25,6 +25,7 @@
 	export let showWireframe = false;
 	/** Applied to the loaded `renderObject` mesh materials only (not grid/axes). */
 	export let objectColor = '#7185d4';
+	export let respectObjectMaterials = false;
 	export let enableShadows = false;
 	export let fogEnabled = false;
 	export let fogNear = 10;
@@ -307,6 +308,7 @@
 	}
 
 	function applyUserMeshColor() {
+		if (respectObjectMaterials) return;
 		if (!mountedRenderObject || objectColor == null || objectColor === '') return;
 		const c = new THREE.Color();
 		try {
