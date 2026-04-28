@@ -16,7 +16,8 @@ export function createCamera(width, height) {
 export function createRenderer(canvas) {
 	const r = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 	r.setPixelRatio(Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2));
-	r.setSize(canvas.clientWidth, canvas.clientHeight);
+	/* false = do not set canvas CSS width/height so fluid CSS (100%) keeps sizing with the window */
+	r.setSize(canvas.clientWidth, canvas.clientHeight, false);
 	r.outputColorSpace = THREE.SRGBColorSpace;
 	return r;
 }

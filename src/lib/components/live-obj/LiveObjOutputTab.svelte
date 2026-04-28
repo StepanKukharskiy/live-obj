@@ -57,18 +57,31 @@
 </div>
 
 <style>
+	/* Block column: tab body scrolls; min-height only on the editor strip (not a flex-filled cage). */
 	.planner-output-block {
 		margin: 0;
-		height: 100%;
-		min-height: 0;
+		padding: 12px 14px 14px;
+		box-sizing: border-box;
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
-		padding: 12px 14px 14px;
+		min-width: 0;
 	}
-	.live-obj-source-editor {
-		flex: 1;
-		min-height: 220px;
+	.planner-output-block .live-obj-source-editor {
+		flex: none;
+		width: 100%;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		min-height: clamp(120px, 20vh, 320px);
+	}
+	/* planner-panel.css uses flex:1 + tall editor mins — override so toolbar stays in-flow below the editor */
+	.planner-output-block .live-obj-source-editor :global(.monaco-editor-wrapper) {
+		flex: 1 1 auto;
+		min-height: 0;
+	}
+	.planner-output-block .live-obj-source-editor :global(.editor-container) {
+		min-height: clamp(72px, 14vh, 260px) !important;
 	}
 	.planner-section-head {
 		align-items: center;

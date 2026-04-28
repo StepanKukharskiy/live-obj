@@ -40,7 +40,7 @@
 			{executedObjText}
 		/>
 	</div>
-		<div class="planner-object-section">
+	<div class="planner-object-section">
 		<div class="planner-object-header">
 			<div class="planner-object-title-stack"><strong>Object</strong></div>
 		</div>
@@ -75,27 +75,17 @@
 </div>
 
 <style>
-	/* Let this tab’s natural height grow; the side panel’s `.planner-tab-panel` scrolls (don’t fill 100vh in one column). */
+	/* Block stack; `.planner-tab-panel` scrolls — no fixed-height box (that + overflow:hidden clipped Monaco’s toolbar). */
 	.live-obj-adjust {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
+		display: block;
 		box-sizing: border-box;
 		min-width: 0;
 	}
-	/* Bounded code area: Object + metadata stack below and scroll with the tab. */
+	.live-obj-adjust > * + * {
+		margin-top: 12px;
+	}
 	.live-obj-adjust-output {
-		flex: 0 0 auto;
 		width: 100%;
 		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		overflow: hidden;
-		height: clamp(240px, 40vh, 480px);
-		min-height: 220px;
-	}
-	.live-obj-adjust-output :global(.planner-output-block) {
-		flex: 1;
-		min-height: 0;
 	}
 </style>

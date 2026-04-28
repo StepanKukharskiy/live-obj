@@ -93,14 +93,6 @@
 		editor.updateOptions({ readOnly });
 	}
 
-	$: if (isFullscreen && fullscreenDialog && !fullscreenDialog.open) {
-		fullscreenDialog.showModal();
-	}
-
-	$: if (!isFullscreen && fullscreenDialog?.open) {
-		fullscreenDialog.close();
-	}
-
 	$: {
 		document.body.classList.toggle('monaco-fullscreen-open', isFullscreen);
 	}
@@ -164,6 +156,11 @@
 
 	function toggleFullscreen() {
 		isFullscreen = !isFullscreen;
+		if (isFullscreen) {
+			fullscreenDialog?.showModal();
+		} else {
+			fullscreenDialog?.close();
+		}
 	}
 
 	function handleReset() {
@@ -184,6 +181,7 @@
 		if (e.key === 'Escape' && isFullscreen) {
 			e.preventDefault();
 			isFullscreen = false;
+			fullscreenDialog?.close();
 		}
 	}
 

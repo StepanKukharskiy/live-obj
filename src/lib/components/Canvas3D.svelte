@@ -59,6 +59,7 @@
 	let framedRenderObject: any = null;
 	let containerWidth = 800;
 	let containerHeight = 600;
+	let canvasShell: HTMLDivElement | undefined;
 	let cadEdges: CadEdgeRenderer | null = null;
 	let loadedBackgroundImage: HTMLImageElement | null = null;
 	let loadedBackgroundImageUrl = '';
@@ -559,7 +560,22 @@
 			camera.aspect = aspect;
 		}
 		camera.updateProjectionMatrix();
-		renderer.setSize(safeWidth, safeHeight);
+		/* Third arg false: never pin canvas.style width/height — that breaks resize (clientWidth stays stuck). */
+		renderer.setSize(safeWidth, safeHeight, false);
+	}
+
+	/** Sync renderer + camera + CAD pass to the canvas CSS size (and DPR). Uses ResizeObserver + resize listeners because window resize alone misses layout-only changes and does not drive Svelte updates. */
+	function syncCanvasDimensions() {
+		if (!renderer || !canvas) return;
+		const rect = canvas.getBoundingClientRect();
+		const w = Math.max(1, Math.round(rect.width));
+		const h = Math.max(1, Math.round(rect.height));
+		containerWidth = w;
+		containerHeight = h;
+		const pr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2);
+		renderer.setPixelRatio(pr);
+		applyCameraResize(w, h);
+		cadEdges?.setSize(w, h);
 	}
 
 	function updateCameraProjection() {
@@ -598,6 +614,10 @@
 				? createOrthographicCamera(containerWidth, containerHeight)
 				: createCamera(containerWidth, containerHeight);
 
+		// Setup renderer (strip stale Three inline px sizes from older builds — those freeze layout size)
+		canvas.style.removeProperty('width');
+		canvas.style.removeProperty('height');
+
 		// Setup renderer
 		renderer = createRenderer(canvas);
 		ensureCadEdges();
@@ -616,19 +636,24 @@
 		// Start animation loop
 		animate(performance.now());
 
-		// Handle window resize
-		const handleWindowResize = () => {
-			applyCameraResize(canvas.clientWidth, canvas.clientHeight);
-			const width = Math.max(1, canvas.clientWidth);
-			const height = Math.max(1, canvas.clientHeight);
-			cadEdges?.setSize(width, height);
-		};
+		syncCanvasDimensions();
 
+		const handleWindowResize = () => syncCanvasDimensions();
 		window.addEventListener('resize', handleWindowResize);
 
-		// Cleanup on destroy
+		const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+		if (vv) vv.addEventListener('resize', handleWindowResize);
+
+		let canvasResizeObserver: ResizeObserver | undefined;
+		if (canvasShell && typeof ResizeObserver !== 'undefined') {
+			canvasResizeObserver = new ResizeObserver(() => syncCanvasDimensions());
+			canvasResizeObserver.observe(canvasShell);
+		}
+
 		return () => {
 			window.removeEventListener('resize', handleWindowResize);
+			if (vv) vv.removeEventListener('resize', handleWindowResize);
+			canvasResizeObserver?.disconnect();
 		};
 	});
 
@@ -717,27 +742,12 @@
 		renderFrame();
 	}
 
-	// Handle prop changes
-	$: if (renderer && canvas) {
-		const newWidth = canvas.clientWidth;
-		const newHeight = canvas.clientHeight;
-		if (newWidth !== containerWidth || newHeight !== containerHeight) {
-			containerWidth = newWidth;
-			containerHeight = newHeight;
-			applyCameraResize(newWidth, newHeight);
-		}
-	}
-
 	$: if (renderer && camera && cameraProjection) {
 		updateCameraProjection();
 	}
 
 	$: if (scene && camera && objects && renderObject !== undefined) {
 		updateRenderObject();
-	}
-
-	$: if (cadEdges) {
-		cadEdges.setSize(containerWidth, containerHeight);
 	}
 
 	$: if (backgroundImageUrl !== loadedBackgroundImageUrl) {
@@ -771,6 +781,7 @@
 </script>
 
 <div
+	bind:this={canvasShell}
 	class={`canvas-shell ${className}`}
 	class:canvas-shell--monochrome-bg={renderMode === 'outline' && !!backgroundImageUrl}
 	style:background-image={backgroundImageUrl ? `url(${backgroundImageUrl})` : 'none'}
