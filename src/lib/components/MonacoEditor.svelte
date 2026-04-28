@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick, type Snippet } from 'svelte';
 	import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
 	import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 	import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
@@ -7,26 +7,45 @@
 	import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 	import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 
-	export let value: string = '';
-	export let language: string = 'json';
-	export let readOnly: boolean = false;
-	export let theme: string = 'vs-dark';
-	/** When true, hides Reset/Apply (e.g. read-only file preview). */
-	export let viewOnly: boolean = false;
+	type Props = {
+		value?: string;
+		language?: string;
+		readOnly?: boolean;
+		theme?: string;
+		/** When true, hides Reset/Apply (e.g. read-only file preview). */
+		viewOnly?: boolean;
+		/** Light chrome for side panel: grey bar + brand accent; pairs with theme="vs". */
+		panelChrome?: boolean;
+		/** Placed in the bottom toolbar immediately before the fullscreen control. */
+		toolbarExtra?: Snippet;
+		/** Apply toolbar button and Ctrl/Cmd+S when not read-only */
+		onApply?: () => void;
+		/** Reset toolbar button — parent typically reloads bindable value */
+		onReset?: () => void;
+	};
 
-	const dispatch = createEventDispatcher<{
-		reset: void;
-		apply: void;
-	}>();
+	let {
+		value = $bindable(''),
+		language = 'json',
+		readOnly = false,
+		theme = 'vs-dark',
+		viewOnly = false,
+		panelChrome = false,
+		toolbarExtra,
+		onApply,
+		onReset
+	}: Props = $props();
 
-	let monaco: typeof Monaco | null = null;
-	let editor: Monaco.editor.IStandaloneCodeEditor | null = null;
+	/** Must be reactive: plain `let` does not re-run `$effect` after `onMount` assigns the async import. */
+	let monaco = $state.raw<typeof Monaco | null>(null);
+	/** Tracked so `$effect` that syncs `value` re-runs once the instance exists (plain `let` is not reactive). */
+	let editor = $state.raw<Monaco.editor.IStandaloneCodeEditor | null>(null);
 	let activeContainer: HTMLDivElement | null = null;
 	let panelContainer: HTMLDivElement | null = null;
 	let fullscreenContainer: HTMLDivElement | null = null;
 	let fullscreenDialog: HTMLDialogElement | null = null;
 	let resizeObserver: ResizeObserver | null = null;
-	let isFullscreen = false;
+	let isFullscreen = $state(false);
 
 	onMount(async () => {
 		self.MonacoEnvironment = {
@@ -73,32 +92,40 @@
 		document.body.classList.remove('monaco-fullscreen-open');
 	});
 
-	$: desiredContainer = isFullscreen ? fullscreenContainer : panelContainer;
-	$: if (monaco && desiredContainer) {
-		recreateEditor(desiredContainer);
-	}
+	const desiredContainer = $derived(isFullscreen ? fullscreenContainer : panelContainer);
 
-	$: if (editor && value !== editor.getValue()) {
-		editor.setValue(value);
-	}
+	$effect(() => {
+		if (monaco && desiredContainer) {
+			recreateEditor(desiredContainer);
+		}
+	});
 
-	$: if (editor && language) {
-		const model = editor.getModel();
+	$effect(() => {
+		if (editor && value !== editor.getValue()) {
+			editor.setValue(value);
+		}
+	});
+
+	$effect(() => {
+		const ed = editor;
+		if (!ed || !language) return;
+		const model = ed.getModel();
 		if (model) {
 			monaco?.editor.setModelLanguage(model, language);
 		}
-	}
+	});
 
-	$: if (editor) {
+	$effect(() => {
+		if (!editor) return;
 		editor.updateOptions({ readOnly });
-	}
+	});
 
-	$: {
+	$effect(() => {
 		document.body.classList.toggle('monaco-fullscreen-open', isFullscreen);
-	}
+	});
 
 	function recreateEditor(target: HTMLDivElement) {
-		if (!monaco || !monaco.editor) {
+		if (!monaco?.editor) {
 			return;
 		}
 		if (activeContainer === target && editor) {
@@ -142,6 +169,11 @@
 			editor.restoreViewState(viewState);
 		}
 
+		// Match bindable `value` once the instance exists (covers effect ordering vs async monaco load).
+		if (editor.getValue() !== value) {
+			editor.setValue(value);
+		}
+
 		editor.onDidChangeModelContent(() => {
 			value = editor?.getValue() ?? '';
 		});
@@ -151,7 +183,7 @@
 		});
 		resizeObserver.observe(target);
 		activeContainer = target;
-		requestAnimationFrame(() => editor?.layout());
+		void tick().then(() => editor?.layout());
 	}
 
 	function toggleFullscreen() {
@@ -163,18 +195,21 @@
 		}
 	}
 
-	function handleReset() {
-		dispatch('reset');
+	function handleApply() {
+		if (readOnly) return;
+		onApply?.();
 	}
 
-	function handleApply() {
-		dispatch('apply');
+	function handleReset() {
+		onReset?.();
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
 		if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-			e.preventDefault();
-			handleApply();
+			if (!readOnly) {
+				e.preventDefault();
+				handleApply();
+			}
 			return;
 		}
 
@@ -192,16 +227,25 @@
 	}
 </script>
 
-<div class="monaco-editor-wrapper" on:keydown={handleKeyDown} role="region" aria-label="Monaco Editor">
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions (Capture Ctrl/Cmd+S for apply; fullscreen Escape) -->
+<div
+	class="monaco-editor-wrapper"
+	class:monaco-editor-wrapper--panel={panelChrome}
+	onkeydown={handleKeyDown}
+	role="region"
+	tabindex="-1"
+	aria-label="Monaco Editor"
+>
 	<div class="editor-container" bind:this={panelContainer}></div>
 
-	<div class="editor-toolbar">
+	<div class="editor-toolbar" class:editor-toolbar--panel={panelChrome}>
 		<div class="toolbar-left">
-			<span class="language-badge">{language}</span>
+			<span class="language-badge" class:language-badge--panel={panelChrome}>{language}</span>
 		</div>
 		<div class="toolbar-right">
+			{#if toolbarExtra}<div class="monaco-toolbar-slot">{@render toolbarExtra()}</div>{/if}
 			{#if !viewOnly}
-				<button type="button" class="toolbar-btn" on:click={handleReset} title="Reset to current">
+				<button type="button" class="toolbar-btn" onclick={handleReset} title="Reset to current">
 					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
 						<path d="M3 3v5h5" />
@@ -210,8 +254,8 @@
 				</button>
 				<button
 					type="button"
-					class="toolbar-btn primary"
-					on:click={handleApply}
+					class="toolbar-btn toolbar-btn--accent"
+					onclick={handleApply}
 					title="Apply changes (Ctrl+S)"
 				>
 					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -222,8 +266,8 @@
 			{/if}
 			<button
 				type="button"
-				class="toolbar-btn icon-only"
-				on:click={toggleFullscreen}
+				class="toolbar-btn icon-only toolbar-btn-fs"
+				onclick={toggleFullscreen}
 				title="Fullscreen"
 				aria-label="Fullscreen"
 			>
@@ -238,14 +282,20 @@
 <dialog
 	class="monaco-editor-dialog"
 	bind:this={fullscreenDialog}
-	on:keydown={handleKeyDown}
-	on:close={handleDialogClose}
+	onkeydown={handleKeyDown}
+	onclose={handleDialogClose}
 >
-	<div class="monaco-editor-overlay" role="region" aria-label="Monaco Editor Fullscreen">
+	<div
+		class="monaco-editor-overlay"
+		class:monaco-editor-overlay--panel={panelChrome}
+		role="region"
+		aria-label="Monaco Editor Fullscreen"
+	>
 		<button
 			type="button"
 			class="fullscreen-exit"
-			on:click={toggleFullscreen}
+			class:fullscreen-exit--panel={panelChrome}
+			onclick={toggleFullscreen}
 			aria-label="Exit fullscreen"
 			title="Exit fullscreen"
 		>
@@ -254,25 +304,21 @@
 			</svg>
 		</button>
 		<div class="editor-container overlay-container" bind:this={fullscreenContainer}></div>
-		<div class="editor-toolbar fullscreen-toolbar">
+		<div class="editor-toolbar fullscreen-toolbar" class:editor-toolbar--panel={panelChrome}>
 			<div class="toolbar-left">
-				<span class="language-badge">{language}</span>
+				<span class="language-badge" class:language-badge--panel={panelChrome}>{language}</span>
 			</div>
 			<div class="toolbar-right">
+				{#if toolbarExtra}<div class="monaco-toolbar-slot">{@render toolbarExtra()}</div>{/if}
 				{#if !viewOnly}
-					<button type="button" class="toolbar-btn" on:click={handleReset} title="Reset to current">
+					<button type="button" class="toolbar-btn" onclick={handleReset} title="Reset to current">
 						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
 							<path d="M3 3v5h5" />
 						</svg>
 						<span>Reset</span>
 					</button>
-					<button
-						type="button"
-						class="toolbar-btn primary"
-						on:click={handleApply}
-						title="Apply changes (Ctrl+S)"
-					>
+					<button type="button" class="toolbar-btn toolbar-btn--accent" onclick={handleApply} title="Apply changes (Ctrl+S)">
 						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M5 12l5 5L20 7" />
 						</svg>
@@ -281,8 +327,8 @@
 				{/if}
 				<button
 					type="button"
-					class="toolbar-btn icon-only"
-					on:click={toggleFullscreen}
+					class="toolbar-btn icon-only toolbar-btn-fs"
+					onclick={toggleFullscreen}
 					title="Exit fullscreen"
 					aria-label="Exit fullscreen"
 				>
@@ -304,6 +350,12 @@
 		background: #0d1117;
 		overflow: hidden;
 		position: relative;
+	}
+
+	.monaco-editor-wrapper--panel {
+		background: #f4f5f7;
+		border: 1px solid rgba(0, 0, 0, 0.08);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 	}
 
 	.monaco-editor-dialog {
@@ -328,8 +380,13 @@
 		background: #0d1117;
 	}
 
+	.monaco-editor-overlay--panel {
+		background: #f4f5f7;
+	}
+
 	.editor-container {
-		min-height: 300px;
+		flex: 1 1 auto;
+		min-height: 200px;
 		min-width: 0;
 	}
 
@@ -345,10 +402,20 @@
 		padding: 8px 12px;
 		background: rgba(255, 255, 255, 0.03);
 		border-top: 1px solid rgba(255, 255, 255, 0.06);
+		flex-shrink: 0;
+	}
+
+	.editor-toolbar--panel {
+		background: #ececef;
+		border-top: 1px solid rgba(0, 0, 0, 0.08);
 	}
 
 	.fullscreen-toolbar {
 		border-top: 1px solid rgba(255, 255, 255, 0.08);
+	}
+
+	.monaco-editor-overlay--panel .fullscreen-toolbar {
+		border-top: 1px solid rgba(0, 0, 0, 0.08);
 	}
 
 	.toolbar-left {
@@ -361,6 +428,15 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+
+	.monaco-toolbar-slot {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
 	}
 
 	.language-badge {
@@ -372,6 +448,12 @@
 		border-radius: 4px;
 		text-transform: uppercase;
 		letter-spacing: 0.5px;
+	}
+
+	.language-badge--panel {
+		color: #444;
+		background: rgba(255, 255, 255, 0.65);
+		border: 1px solid rgba(0, 0, 0, 0.06);
 	}
 
 	.toolbar-btn {
@@ -389,6 +471,17 @@
 		transition: all 0.2s;
 	}
 
+	.editor-toolbar--panel .toolbar-btn:not(.toolbar-btn--accent):not(.toolbar-btn-fs) {
+		border-color: rgba(0, 0, 0, 0.1);
+		color: #333;
+		background: rgba(255, 255, 255, 0.55);
+	}
+
+	.editor-toolbar--panel .toolbar-btn:not(.toolbar-btn--accent):not(.toolbar-btn-fs):hover {
+		background: rgba(0, 0, 0, 0.06);
+		border-color: rgba(0, 0, 0, 0.14);
+	}
+
 	.toolbar-btn:hover {
 		background: rgba(255, 255, 255, 0.06);
 		border-color: rgba(255, 255, 255, 0.2);
@@ -399,24 +492,32 @@
 		padding: 6px;
 	}
 
-	.toolbar-btn.icon-only span {
-		display: none;
-	}
-
 	.toolbar-btn svg {
 		width: 14px;
 		height: 14px;
 	}
 
-	.toolbar-btn.primary {
-		background: #2563eb;
-		border-color: #2563eb;
+	.toolbar-btn--accent {
+		background: #0000eb;
+		border-color: #0000eb;
 		color: #fff;
 	}
 
-	.toolbar-btn.primary:hover {
-		background: #1d4ed8;
-		border-color: #1d4ed8;
+	.toolbar-btn--accent:hover {
+		background: #0000c0;
+		border-color: #0000c0;
+	}
+
+	.editor-toolbar--panel .toolbar-btn-fs {
+		border-color: rgba(0, 0, 0, 0.1);
+		color: #333;
+		background: rgba(255, 255, 255, 0.55);
+	}
+
+	.editor-toolbar--panel .toolbar-btn-fs:hover {
+		border-color: #0000eb;
+		color: #0000eb;
+		background: rgba(0, 0, 235, 0.06);
 	}
 
 	.fullscreen-exit {
@@ -437,9 +538,21 @@
 		transition: all 0.2s;
 	}
 
+	.fullscreen-exit--panel {
+		background: rgba(255, 255, 255, 0.9);
+		color: #333;
+		border: 1px solid rgba(0, 0, 0, 0.1);
+	}
+
 	.fullscreen-exit:hover {
 		background: rgba(255, 255, 255, 0.2);
 		transform: scale(1.05);
+	}
+
+	.fullscreen-exit--panel:hover {
+		background: #fff;
+		border-color: #0000eb;
+		color: #0000eb;
 	}
 
 	.fullscreen-exit svg {

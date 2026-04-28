@@ -14,7 +14,10 @@
 		liveObjText = '',
 		rawLlmText = '',
 		executedObjText = '',
-		onLiveObjMetadataChange
+		sceneEpoch = 0,
+		sourceApplyBusy = false,
+		onLiveObjMetadataChange,
+		onApplyEditedSource
 	}: {
 		sourceTab?: SourceTab;
 		objectColor?: string;
@@ -26,7 +29,10 @@
 		liveObjText?: string;
 		rawLlmText?: string;
 		executedObjText?: string;
+		sceneEpoch?: number;
+		sourceApplyBusy?: boolean;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
+		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
 	} = $props();
 </script>
 
@@ -38,6 +44,9 @@
 			{liveObjText}
 			{rawLlmText}
 			{executedObjText}
+			{sceneEpoch}
+			applyBusy={sourceApplyBusy}
+			onApplySource={onApplyEditedSource}
 		/>
 	</div>
 	<div class="planner-object-section">

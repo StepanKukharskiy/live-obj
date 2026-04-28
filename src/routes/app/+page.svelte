@@ -16,6 +16,8 @@
 	let liveObjText = $state('');
 	let rawLlmText = $state('');
 	let executedObjText = $state('');
+	let sceneEpoch = $state(0);
+	let sourceApplyBusy = $state(false);
 	let renderObject = $state<THREE.Object3D | null>(null);
 
 	let backgroundColor = $state('#e8ebf2');
@@ -102,6 +104,7 @@
 			liveObjText = payload.liveObj ?? updatedLiveObj;
 			executedObjText = payload.executedObj ?? '';
 			sourceTab = 'executed';
+			sceneEpoch += 1;
 			if (payload.executedObj) applyObjString(payload.executedObj);
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
@@ -153,6 +156,7 @@
 			executedObjText = payload.executedObj ?? '';
 			if (payload.executedObj) applyObjString(payload.executedObj);
 			sourceTab = 'executed';
+			sceneEpoch += 1;
 
 			if (payload.executorWarning) {
 				statusLine = `Executor: ${payload.executorWarning}`;
@@ -173,6 +177,17 @@
 			msgs = [...msgs, { role: 'assistant', content: `Error: ${m}` }];
 		} finally {
 			busy = false;
+		}
+	}
+
+	async function applyEditedSource(sceneText: string) {
+		if (!sceneText.trim()) return;
+		sourceApplyBusy = true;
+		statusLine = null;
+		try {
+			await regenerateFromMetadata(sceneText);
+		} finally {
+			sourceApplyBusy = false;
 		}
 	}
 </script>
@@ -208,6 +223,8 @@
 		{liveObjText}
 		{rawLlmText}
 		{executedObjText}
+		{sceneEpoch}
+		{sourceApplyBusy}
 		bind:backgroundColor
 		bind:showGrid
 		bind:showAxes
@@ -228,6 +245,7 @@
 		bind:cameraFov
 		bind:toneMappingExposure
 		onLiveObjMetadataChange={(updatedText) => void regenerateFromMetadata(updatedText)}
+		onApplyEditedSource={(text) => void applyEditedSource(text)}
 		onSend={(p) => void sendPrompt(p)}
 	/>
 </div>

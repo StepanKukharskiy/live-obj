@@ -7,7 +7,7 @@ const config = {
 		runes: ({ filename }) => {
 			const f = filename.replace(/\\/g, '/');
 			if (f.split('/').includes('node_modules')) return undefined;
-			if (f.endsWith('Canvas3D.svelte') || f.endsWith('MonacoEditor.svelte')) return false;
+			if (f.endsWith('Canvas3D.svelte')) return false;
 			return true;
 		}
 	},

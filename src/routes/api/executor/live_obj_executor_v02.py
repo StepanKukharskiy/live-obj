@@ -390,32 +390,11 @@ def _eval_arg_piece(p: str, env: Dict[str, Any], obn: Dict[str, LiveObject]) -> 
     return eval_mixed_value(p, env, obn)
 
 
-def assembly_param_env(params: Optional[Dict[str, Any]]) -> Dict[str, float]:
-    env: Dict[str, float] = {}
-    if not params:
-        return env
-    for k, v in params.items():
-        if isinstance(v, bool):
-            continue
-        if isinstance(v, (int, float)):
-            env[k] = float(v)
-        elif isinstance(v, str) and (
-            re.match(r"^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$", v.strip())
-            or re.match(r"^[-+]?[0-9]+$", v.strip())
-        ):
-            vs = v.strip()
-            try:
-                env[k] = float(vs) if any(c in vs for c in ".eE") else float(int(vs))
-            except Exception:
-                pass
-    return env
-
-
 def resolve_assembly_anchors(asm: LiveObject, obn: Dict[str, LiveObject]) -> None:
     if str(asm.meta.get("source", "")) != "assembly":
         return
     params = asm.meta.get("params") or {}
-    env0 = assembly_param_env(params)
+    env0 = assembly_params_eval_env(params, obn)
     raw = asm.meta.get("anchors") or {}
     resolved: Dict[str, Any] = {}
     for aname, aval in raw.items():
@@ -427,7 +406,7 @@ def resolve_assembly_anchors(asm: LiveObject, obn: Dict[str, LiveObject]) -> Non
     asm.meta["anchors"] = resolved
 
 
-def _resolve_anchor_value(aval: Any, env0: Dict[str, float], obn: Dict[str, LiveObject]) -> Any:
+def _resolve_anchor_value(aval: Any, env0: Dict[str, Any], obn: Dict[str, LiveObject]) -> Any:
     if isinstance(aval, (int, float)):
         return float(aval)
     if isinstance(aval, (list, tuple)) and len(aval) == 3:
@@ -499,13 +478,61 @@ _AXIS_PARAM_KEYS = frozenset({"axis"})
 _SINGLE_IDENTIFIER_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+def assembly_params_eval_env(params: Optional[Dict[str, Any]], obn: Dict[str, LiveObject]) -> Dict[str, Any]:
+    """Resolve assembly #@params values for anchors and inherited child params — same rules as child param merge:
+    string values may be arithmetic expressions referencing other params (e.g. rise_per_step=num_steps * 0.04).
+    Multiple passes allow params to appear in any order in the OBJ metadata."""
+    merged: Dict[str, Any] = {}
+    pending = {k: v for k, v in (params or {}).items() if not isinstance(v, bool)}
+    if not pending:
+        return merged
+    max_rounds = max(len(pending) + 2, 12)
+    for _ in range(max_rounds):
+        if not pending:
+            return merged
+        settled: List[str] = []
+        for k, v in list(pending.items()):
+            if not isinstance(v, str):
+                if isinstance(v, (int, float)):
+                    merged[k] = float(v)
+                else:
+                    merged[k] = v
+                settled.append(k)
+                continue
+            vs = v.strip()
+            if k in _AXIS_PARAM_KEYS and vs in ("x", "y", "z"):
+                merged[k] = vs
+                settled.append(k)
+                continue
+            try:
+                merged[k] = eval_mixed_value(vs, {**merged}, obn)
+                settled.append(k)
+            except KeyError:
+                if _SINGLE_IDENTIFIER_TOKEN.match(vs):
+                    merged[k] = vs
+                    settled.append(k)
+        for k in settled:
+            pending.pop(k, None)
+        if not settled:
+            break
+    if pending:
+        k0, v0 = next(iter(pending.items()))
+        if isinstance(v0, str):
+            eval_mixed_value(v0.strip(), {**merged}, obn)
+        raise ValueError(
+            f"could not resolve assembly #@params (missing refs or cyclic?): "
+            f"stuck keys {list(pending.keys())!r}"
+        )
+    return merged
+
+
 def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[str, Any]:
-    base: Dict[str, float] = {}
+    base: Dict[str, Any] = {}
     pn = obj.meta.get("parent")
     if pn and str(pn) in obn:
         pobj = obn[str(pn)]
         if str(pobj.meta.get("source", "")) == "assembly":
-            base = dict(assembly_param_env(pobj.meta.get("params") or {}))
+            base = dict(assembly_params_eval_env(pobj.meta.get("params") or {}, obn))
     raw = obj.meta.get("params") or {}
     merged: Dict[str, Any] = {}
     for k, v in raw.items():
@@ -1097,14 +1124,43 @@ def spiral_post_array_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
 
 
 def helix_sweep_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
-    """Tube along a circular helix; profile=circle uses profile_radius."""
+    """Tube along a circular helix (rising along +Z).
+
+    Prefer explicit ``profile_radius`` (tube) and ``path_radius`` (XY helix). For legacy `#@ sweep path=helix`
+    payloads that only set ``radius``, that value is interpreted as tube cross-section; use ``path_radius`` for XY.
+    """
     cx, cy, cz = center
-    pr = float(params.get("profile_radius", 0.035))
-    path_r = float(params.get("path_radius", 1.0))
-    turn = math.radians(float(params.get("total_turn_degrees", 360)))
-    segs = max(4, int(params.get("segments", 48)))
-    start_z = float(params.get("start_z", 0))
-    end_z = float(params.get("end_z", float(params.get("height", 3.0))))
+    pr: float
+    if params.get("profile_radius") is not None:
+        pr = float(params["profile_radius"])
+    elif params.get("tube_radius") is not None:
+        pr = float(params["tube_radius"])
+    else:
+        pr = float(params.get("radius", 0.035))
+
+    path_r: float
+    if params.get("path_radius") is not None:
+        path_r = float(params["path_radius"])
+    elif params.get("helix_radius") is not None:
+        path_r = float(params["helix_radius"])
+    else:
+        path_r = 1.0
+
+    if params.get("turns") is not None:
+        turn = float(params["turns"]) * 2 * math.pi
+    elif params.get("start_angle") is not None and params.get("end_angle") is not None:
+        turn = math.radians(float(params["end_angle"]) - float(params["start_angle"]))
+    else:
+        turn = math.radians(float(params.get("total_turn_degrees", 360)))
+
+    height = float(params.get("height", params.get("total_rise", 3.0)))
+    start_z = float(params.get("start_z", params.get("z_offset", 0.0)))
+    if params.get("end_z") is not None:
+        end_z = float(params["end_z"])
+    else:
+        end_z = start_z + height
+
+    segs = max(8, int(float(params.get("segments", 48))))
     tube_seg = max(6, min(12, max(4, segs // 12)))
     mesh = Mesh()
     pts: List[Vec3] = []
@@ -1586,7 +1642,8 @@ def apply_meta_instancing(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject
     if arr and not rad:
         return op_array(mesh, count, (ox, oy, oz))
 
-    # Combined linear + radial: spiral stairs — rotate in XY so box +Y (tread depth) points radially outward.
+    # Combined linear + radial: spiral stairs — rotate in XY so local +Y (second size component → depth / radial run)
+    # points outward; local +X (width) runs tangentially along the arc.
     out = Mesh()
     for i in range(count):
         th = 2 * math.pi * i / count
@@ -1609,30 +1666,103 @@ def apply_meta_instancing(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject
     return out
 
 
-def curve_sweep_tube_mesh(params: Dict[str, Any], center: Vec3, sweep: Dict[str, Any]) -> Mesh:
-    """Vertical helix tube: params radius=path radius, height=vertical span; sweep.radius = tube radius."""
-    path_r = float(params.get("radius", 1.0))
-    height = float(params.get("height", 3.0))
+def _infer_handrail_radius_from_radial_steps(steps_obj: LiveObject, obn: Dict[str, LiveObject]) -> Optional[float]:
+    """Radial distance to tread box center orbit for `#@radial_array` spirals."""
+    env = get_effective_params(steps_obj, obn)
+    rad_raw = steps_obj.meta.get("radial_array")
+    specs = _resolve_meta_spec_dict(rad_raw, env, obn) if rad_raw else None
+    pole = env.get("pole_radius", env.get("inner_radius"))
+    sz = env.get("size")
+    # Spiral instancing rotates +local Y radially outward; size[1] = radial run, size[0] ≈ chord.
+    radial_half = float(sz[1]) / 2.0 if isinstance(sz, (list, tuple)) and len(sz) >= 2 else None
+    tangential_half = float(sz[0]) / 2.0 if isinstance(sz, (list, tuple)) and len(sz) >= 2 else None
+    if specs and specs.get("radius") is not None and pole is not None and radial_half is not None and tangential_half is not None:
+        explicit = float(specs["radius"])
+        pf = float(pole)
+        # Common authoring bug: `radius=pole_radius + step_width/2` instead of `+ step_depth/2`.
+        wrong_guess = pf + tangential_half
+        right_guess = pf + radial_half
+        if abs(explicit - wrong_guess) < 1e-4 and abs(explicit - right_guess) > 1e-4:
+            return right_guess
+        return explicit
+    if specs and specs.get("radius") is not None:
+        return float(specs["radius"])
+    if pole is None or not isinstance(sz, (list, tuple)) or len(sz) < 2:
+        return None
+    return float(pole) + float(sz[1]) / 2.0
+
+
+def _curve_sweep_resolve_path_radius(
+    params: Dict[str, Any], sweep: Dict[str, Any], obn: Optional[Dict[str, LiveObject]]
+) -> float:
+    """Params often say `radius=handrail_radius` (tube)—that must NOT become XY path radius (~0.05 m). Prefer `along=steps`."""
+    if params.get("path_radius") is not None:
+        return float(params["path_radius"])
+    if params.get("helix_radius") is not None:
+        return float(params["helix_radius"])
+
+    sweep_tube_r: Optional[float] = None
+    if sweep.get("radius") is not None:
+        sr = sweep["radius"]
+        if not isinstance(sr, str):
+            sweep_tube_r = float(sr)
+
+    pr = params.get("radius")
+    ambiguous_tube_duplicate = False
+    if pr is not None:
+        prv = float(pr)
+        if sweep_tube_r is not None and abs(prv - sweep_tube_r) < 1e-5:
+            ambiguous_tube_duplicate = True
+        elif sweep_tube_r is not None and prv < 3.0 * sweep_tube_r:
+            ambiguous_tube_duplicate = True
+
+    along = sweep.get("along") or params.get("along")
+    if along and obn:
+        sob = obn.get(str(along).strip())
+        if sob is not None:
+            inf = _infer_handrail_radius_from_radial_steps(sob, obn)
+            if inf is not None:
+                return inf
+
+    if pr is not None and not ambiguous_tube_duplicate:
+        return float(pr)
+    return 1.0
+
+
+def curve_sweep_tube_mesh(
+    params: Dict[str, Any], center: Vec3, sweep: Dict[str, Any], obn: Optional[Dict[str, LiveObject]] = None
+) -> Mesh:
+    """Helical sweep tube ascending +Z. `sweep.radius` = tube; XY path from `path_radius` / `along=steps`.
+
+    `#@radial_array` + box: after `rotate_mesh_z`, local +Y points outward radially, so
+    `size=[width, depth, height]` → **depth (Y)** = tread run (radial thickness), **width (X)** ≈ chord / along-arc length.
+    Prefer `#@radial_array: radius=pole_radius + depth/2` (not `+ width/2`).
+    """
+    path_r = _curve_sweep_resolve_path_radius(params, sweep, obn)
     tr = sweep.get("radius", params.get("handrail_radius", 0.05))
-    if isinstance(tr, str) and tr.strip() in params:
-        tr = params[tr.strip()]
-    tube_r = float(tr)
+    if isinstance(tr, (int, float)):
+        tube_r = float(tr)
+    else:
+        tube_r = float(params.get("handrail_radius", 0.05))
+
+    height = float(params.get("height", params.get("pole_height", params.get("total_rise", 3.0))))
+    z0 = float(params.get("base_z", params.get("z0", params.get("start_z", 0.0))))
+
     theta_top = 2 * math.pi
     if params.get("total_turn_degrees") is not None:
         theta_top = math.radians(float(params["total_turn_degrees"]))
     elif params.get("step_count") is not None:
         sc = max(1, int(float(params["step_count"])))
         theta_top = 2 * math.pi * (sc - 1) / sc if sc > 1 else 2 * math.pi
+
     segs = max(32, int(float(params.get("segments", 48))))
     cx, cy, cz = center
     mesh = Mesh()
     pts: List[Vec3] = []
     for i in range(segs + 1):
         t = i / segs
-        # Match #@radial_array steps: angle at step i is 2π·i/n; top step has θ = 2π·(n-1)/n.
-        # Rail descends from anchor (t=0 top) to t=1 bottom: θ goes from θ_top down to 0.
-        th = theta_top * (1.0 - t)
-        zz = cz - t * height
+        th = theta_top * t
+        zz = cz + z0 + t * height
         pts.append((cx + path_r * math.cos(th), cy + path_r * math.sin(th), zz))
     tube_seg = max(6, min(12, segs // 8))
     for i in range(len(pts) - 1):
@@ -1693,7 +1823,58 @@ def _as_float3(val: Any, default: Tuple[float, float, float]) -> Tuple[float, fl
     raise TypeError(f"expected 3 floats, got {val!r}")
 
 
-def generate_procedural(obj: LiveObject) -> Mesh:
+def merge_sweep_params_with_along_helix(
+    sw_params: Dict[str, Any], along_raw: Any, obn: Dict[str, LiveObject]
+) -> Dict[str, Any]:
+    """Resolve `#@type: sweep` + `along=some_curve` by merging helix path parameters from the named `curve` object."""
+    out = dict(sw_params)
+    along_name = str(along_raw or "").strip()
+    tube_profile: Optional[float] = None
+    if str(out.get("profile", "")).lower() == "circle":
+        tr = out.get("radius", out.get("rail_radius", out.get("stringer_radius")))
+        if tr is not None:
+            tube_profile = float(tr)
+
+    cur = obn.get(along_name) if along_name else None
+    if cur is None:
+        if tube_profile is not None:
+            out["profile_radius"] = tube_profile
+        return out
+
+    cp = get_effective_params(cur, obn)
+    shape = str(cp.get("shape", "")).lower()
+    if str(cur.meta.get("type", "")).lower() != "curve" and shape != "helix":
+        if tube_profile is not None:
+            out["profile_radius"] = tube_profile
+        return out
+
+    if cp.get("radius") is not None:
+        out["path_radius"] = float(cp["radius"])
+    if cp.get("height") is not None:
+        out["height"] = float(cp["height"])
+    elif cp.get("total_rise") is not None:
+        out["height"] = float(cp["total_rise"])
+    if cp.get("turns") is not None:
+        out["turns"] = float(cp["turns"])
+    if cp.get("total_turn_degrees") is not None:
+        out["total_turn_degrees"] = float(cp["total_turn_degrees"])
+    if cp.get("start_angle") is not None:
+        out["start_angle"] = float(cp["start_angle"])
+    if cp.get("end_angle") is not None:
+        out["end_angle"] = float(cp["end_angle"])
+    if cp.get("segments") is not None:
+        out["segments"] = int(float(cp["segments"]))
+    if cp.get("z_offset") is not None:
+        z_off = float(cp["z_offset"])
+        out["start_z"] = z_off
+        out["z_offset"] = z_off
+
+    if tube_profile is not None:
+        out["profile_radius"] = tube_profile
+    return out
+
+
+def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = None) -> Mesh:
     typ = str(obj.meta.get("type", "mesh"))
     params = obj.meta.get("params", {}) or {}
     center = _as_float3(params.get("center", params.get("position", [0, 0, 0])), (0.0, 0.0, 0.0))
@@ -1707,15 +1888,19 @@ def generate_procedural(obj: LiveObject) -> Mesh:
         return obj.mesh.copy()
 
     if typ == "sweep":
-        path = str(params.get("path", "line"))
-        if path == "helix":
-            return helix_sweep_mesh(params, center)
+        p = dict(params)
+        along = p.get("along")
+        if along and obn is not None:
+            p = merge_sweep_params_with_along_helix(p, along, obn)
+        path_k = str(p.get("path", p.get("shape", "line"))).lower()
+        if path_k == "helix" or p.get("path_radius") is not None or bool(along and obn is not None):
+            return helix_sweep_mesh(p, center)
         return obj.mesh.copy()
 
     if typ == "curve":
         sw = obj.meta.get("sweep")
         if isinstance(sw, dict) and str(sw.get("profile", "circle")).lower() == "circle":
-            return curve_sweep_tube_mesh(params, center, sw)
+            return curve_sweep_tube_mesh(params, center, sw, obn)
         return obj.mesh.copy()
 
     if typ == "box":
@@ -1797,7 +1982,7 @@ def execute_scene(scene: Scene) -> Scene:
             oldp = obj.meta.get("params")
             obj.meta["params"] = get_effective_params(obj, obn)
             try:
-                base = generate_procedural(obj)
+                base = generate_procedural(obj, obn)
                 base = apply_meta_instancing(base, obj, obn)
             finally:
                 if oldp is not None:

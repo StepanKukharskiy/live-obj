@@ -17,6 +17,8 @@
 		liveObjText = '',
 		rawLlmText = '',
 		executedObjText = '',
+		sceneEpoch = 0,
+		sourceApplyBusy = false,
 		backgroundColor = $bindable('#e8ebf2'),
 		showGrid = $bindable(true),
 		showAxes = $bindable(true),
@@ -37,6 +39,7 @@
 		cameraFov = $bindable(50),
 		toneMappingExposure = $bindable(1),
 		onLiveObjMetadataChange,
+		onApplyEditedSource,
 		onSend
 	}: {
 		showPanel?: boolean;
@@ -47,6 +50,8 @@
 		liveObjText?: string;
 		rawLlmText?: string;
 		executedObjText?: string;
+		sceneEpoch?: number;
+		sourceApplyBusy?: boolean;
 		backgroundColor?: string;
 		showGrid?: boolean;
 		showAxes?: boolean;
@@ -67,6 +72,7 @@
 		cameraFov?: number;
 		toneMappingExposure?: number;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
+		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
 		onSend?: (payload: { text: string; model: string; imageDataUrl?: string }) => void;
 	} = $props();
 
@@ -116,7 +122,10 @@
 					{liveObjText}
 					{rawLlmText}
 					{executedObjText}
+					{sceneEpoch}
+					{sourceApplyBusy}
 					onLiveObjMetadataChange={onLiveObjMetadataChange}
+					onApplyEditedSource={onApplyEditedSource}
 				/>
 			{:else}
 				<LiveObjSceneTab

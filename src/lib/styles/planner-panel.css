@@ -334,6 +334,48 @@
 	transform: none;
 }
 
+/* Monaco toolbar slot (aligned with fullscreen) — neutral chip + accent apply */
+.planner-panel .planner-monaco-action-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 6px 12px;
+	border-radius: 6px;
+	border: 1px solid rgba(0, 0, 0, 0.1);
+	background: rgba(255, 255, 255, 0.55);
+	color: #333;
+	font-size: 12px;
+	font-weight: 600;
+	font-family: inherit;
+	cursor: pointer;
+	transition:
+		background 0.2s,
+		border-color 0.2s,
+		color 0.2s;
+}
+
+.planner-panel .planner-monaco-action-btn:hover:not(:disabled) {
+	background: rgba(0, 0, 0, 0.06);
+	border-color: rgba(0, 0, 0, 0.14);
+}
+
+.planner-panel .planner-monaco-action-btn:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.planner-panel .planner-monaco-action-btn--accent {
+	border-color: #0000eb;
+	background: #0000eb;
+	color: #fff;
+}
+
+.planner-panel .planner-monaco-action-btn--accent:hover:not(:disabled) {
+	background: #0000c0;
+	border-color: #0000c0;
+}
+
 .planner-status,
 .planner-bubble-inline-status {
 	font-size: 13px;

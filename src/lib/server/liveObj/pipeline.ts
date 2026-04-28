@@ -6,13 +6,7 @@ import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
-export function stripCodeFences(text: string): string {
-	let t = text.trim();
-	const fence = /^```(?:[a-zA-Z0-9_-]+)?\s*\n?([\s\S]*?)```$/m;
-	const m = t.match(fence);
-	if (m) t = m[1].trim();
-	return t;
-}
+export { stripCodeFences } from '$lib/liveObj/stripCodeFences';
 
 function resolveExecutorScript(): string {
 	const env = process.env.LIVE_OBJ_EXECUTOR_PATH;
