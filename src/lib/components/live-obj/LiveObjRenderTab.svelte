@@ -107,8 +107,30 @@
 			<div class="planner-render-title">Scene screenshot</div>
 			<img src={screenshotDataUrl} alt="Scene capture preview" />
 			<div class="planner-render-image-actions">
-				<button type="button" class="send-button" onclick={() => downloadImage(screenshotDataUrl, 'scene-screenshot')}>Download</button>
-				<button type="button" class="send-button" onclick={() => openFullscreen(screenshotDataUrl)}>Fullscreen</button>
+				<button
+					type="button"
+					class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
+					title="Download screenshot"
+					aria-label="Download screenshot"
+					onclick={() => downloadImage(screenshotDataUrl, 'scene-screenshot')}
+				>
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
+						<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+						<polyline points="7 10 12 15 17 10"/>
+						<line x1="12" y1="15" x2="12" y2="3"/>
+					</svg>
+				</button>
+				<button
+					type="button"
+					class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
+					title="View screenshot fullscreen"
+					aria-label="View screenshot fullscreen"
+					onclick={() => openFullscreen(screenshotDataUrl)}
+				>
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
+						<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+					</svg>
+				</button>
 			</div>
 		</div>
 	{/if}
@@ -118,8 +140,30 @@
 			<div class="planner-render-title">Generated image</div>
 			<img src={generatedImageDataUrl} alt="Generated render result" />
 			<div class="planner-render-image-actions">
-				<button type="button" class="send-button" onclick={() => downloadImage(generatedImageDataUrl, 'rendered-image')}>Download</button>
-				<button type="button" class="send-button" onclick={() => openFullscreen(generatedImageDataUrl)}>Fullscreen</button>
+				<button
+					type="button"
+					class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
+					title="Download generated image"
+					aria-label="Download generated image"
+					onclick={() => downloadImage(generatedImageDataUrl, 'rendered-image')}
+				>
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
+						<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+						<polyline points="7 10 12 15 17 10"/>
+						<line x1="12" y1="15" x2="12" y2="3"/>
+					</svg>
+				</button>
+				<button
+					type="button"
+					class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
+					title="View generated image fullscreen"
+					aria-label="View generated image fullscreen"
+					onclick={() => openFullscreen(generatedImageDataUrl)}
+				>
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
+						<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+					</svg>
+				</button>
 			</div>
 		</div>
 	{/if}
@@ -179,6 +223,12 @@
 		display: flex;
 		gap: 8px;
 		flex-wrap: wrap;
+	}
+	.planner-monaco-action-btn--icon-only {
+		width: 32px;
+		height: 32px;
+		padding: 0;
+		border-radius: 8px;
 	}
 	.live-obj-render-fullscreen {
 		position: fixed;
