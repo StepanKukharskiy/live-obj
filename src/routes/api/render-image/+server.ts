@@ -49,6 +49,18 @@ function networkErrorMessage(err: unknown): string {
 	return String(err);
 }
 
+function deriveImagesApiUrl(
+	explicitImagesApiUrl: string,
+	fallbackApiUrl: string
+): string {
+	if (explicitImagesApiUrl) return explicitImagesApiUrl;
+	if (!fallbackApiUrl) return DEFAULT_OPENAI_IMAGES_API_URL;
+	return fallbackApiUrl.replace(
+		/(\/v1\/(?:chat\/completions|responses))\/?$/i,
+		'/v1/images/edits'
+	);
+}
+
 export const POST: RequestHandler = async ({ request }) => {
 	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string };
 	try {
@@ -66,7 +78,10 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const { env } = await import('$env/dynamic/private');
 	const apiKey = pickString(process.env.OPENAI_API_KEY, env.OPENAI_API_KEY, process.env.DEFAULT_OPENAI_API_KEY, env.DEFAULT_OPENAI_API_KEY);
-	const imagesApiUrl = pickString(process.env.OPENAI_IMAGES_API_URL, env.OPENAI_IMAGES_API_URL, process.env.OPENAI_API_URL, env.OPENAI_API_URL, DEFAULT_OPENAI_IMAGES_API_URL);
+	const imagesApiUrl = deriveImagesApiUrl(
+		pickString(process.env.OPENAI_IMAGES_API_URL, env.OPENAI_IMAGES_API_URL),
+		pickString(process.env.OPENAI_API_URL, env.OPENAI_API_URL)
+	);
 	if (!apiKey) throw error(500, 'OPENAI_API_KEY is not configured');
 
 	const sceneMetadata = metadataFromLiveObj(liveObjText);
@@ -112,7 +127,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	// [{'type': 'dict_type', 'loc': ('body',), 'msg': 'Input should be a valid dictionary'}]
 	// Retry with JSON body in that case.
 	const shouldRetryAsJson =
-		!response.ok && response.status === 422 && providerMessage.includes('dict_type');
+		!response.ok &&
+		(response.status === 400 || response.status === 422) &&
+		providerMessage.includes('dict_type');
 
 	if (shouldRetryAsJson) {
 		try {

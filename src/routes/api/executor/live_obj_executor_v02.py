@@ -1302,6 +1302,11 @@ def _resolve_vec3_meta(
     defaults: Tuple[float, float, float],
 ) -> List[float]:
     """Resolve position/rotation/scale lists that may contain param names or expressions (from #@transform)."""
+    if isinstance(val, str):
+        s = val.strip()
+        if s.startswith("[") and s.endswith("]"):
+            parts = [p.strip() for p in split_top_level_commas(parse_list_body(s)) if p.strip()]
+            val = parts if len(parts) >= 3 else val
     if not isinstance(val, (list, tuple)) or len(val) < 3:
         return [defaults[0], defaults[1], defaults[2]]
     out: List[float] = []
