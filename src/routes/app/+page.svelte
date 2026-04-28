@@ -52,6 +52,38 @@
 		return new THREE.Color().setHSL(hue / 360, 0.45, 0.56);
 	}
 
+	function materialColorFromTag(tag: string): THREE.Color {
+		const key = tag.trim().toLowerCase();
+		const presets: Record<string, string> = {
+			warm_oak: '#9b6a3f',
+			oak: '#9b6a3f',
+			walnut: '#6f4b32',
+			maple: '#c89f73',
+			pine: '#caa472',
+			ash: '#bda488',
+			steel: '#8f98a1',
+			black_metal: '#2f3238',
+			white_paint: '#e7e7e5'
+		};
+		return new THREE.Color(presets[key] ?? materialColorFromName(key));
+	}
+
+	function parseObjectMaterialTags(sourceText: string): Map<string, string> {
+		const byObject = new Map<string, string>();
+		let currentObject: string | null = null;
+		for (const line of sourceText.split(/\r?\n/)) {
+			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
+			if (objectMatch) {
+				currentObject = objectMatch[1];
+				continue;
+			}
+			if (!currentObject) continue;
+			const materialMatch = line.match(/^\s*#@\s*-\s*material\s+name=([a-zA-Z0-9_\-.]+)/);
+			if (materialMatch) byObject.set(currentObject, materialMatch[1]);
+		}
+		return byObject;
+	}
+
 	function getLiveObjUpAxis(objText: string): 'x' | 'y' | 'z' {
 		const m = objText.match(/^\s*#@up:\s*([xyz])\s*$/im);
 		const axis = (m?.[1] ?? 'y').toLowerCase();
@@ -74,17 +106,22 @@
 		applyObjectControls();
 	});
 
-	function applyObjString(objText: string) {
+	function applyObjString(objText: string, sourceTextForMetadata: string = objText) {
 		const loader = new OBJLoader();
 		const group = loader.parse(objText);
 		const upAxis = getLiveObjUpAxis(objText);
 		const hasPerObjectMaterials = /^\s*usemtl\s+/im.test(objText);
+		const materialTagsByObject = parseObjectMaterialTags(sourceTextForMetadata);
+		const hasMetadataMaterialTags = materialTagsByObject.size > 0;
+		const objectDefinitions = new Set(
+			[...sourceTextForMetadata.matchAll(/^\s*o\s+([^\s#]+)/gm)].map((m) => m[1])
+		);
 		const objectNameSet = new Set<string>();
 		group.traverse((o: THREE.Object3D) => {
 			if (o instanceof THREE.Mesh && o.name) objectNameSet.add(o.name);
 		});
-		const hasMultipleNamedObjects = objectNameSet.size > 1;
-		preserveObjMaterials = hasPerObjectMaterials || hasMultipleNamedObjects;
+		const hasMultipleNamedObjects = Math.max(objectNameSet.size, objectDefinitions.size) > 1;
+		preserveObjMaterials = hasPerObjectMaterials || hasMultipleNamedObjects || hasMetadataMaterialTags;
 		const fallbackMat = new THREE.MeshStandardMaterial({
 			color: objectColor,
 			metalness: 0.12,
@@ -101,8 +138,13 @@
 			}
 			const materialToStandard = (material: THREE.Material): THREE.MeshStandardMaterial => {
 				const base = material as THREE.MeshPhongMaterial & { name?: string };
+				const taggedMaterial = o.name ? materialTagsByObject.get(o.name) : null;
 				const colorName = hasPerObjectMaterials ? base.name : o.name;
-				const color = colorName ? materialColorFromName(colorName) : new THREE.Color(objectColor);
+				const color = taggedMaterial
+					? materialColorFromTag(taggedMaterial)
+					: colorName
+						? materialColorFromName(colorName)
+						: new THREE.Color(objectColor);
 				return new THREE.MeshStandardMaterial({
 					color,
 					metalness: 0.12,
@@ -145,7 +187,7 @@
 			executedObjText = payload.executedObj ?? '';
 			sourceTab = 'executed';
 			sceneEpoch += 1;
-			if (payload.executedObj) applyObjString(payload.executedObj);
+			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? updatedLiveObj);
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
 			statusLine = `Metadata regenerate failed: ${m}`;
@@ -194,7 +236,7 @@
 			liveObjText = payload.liveObj ?? '';
 			rawLlmText = payload.rawLlm ?? '';
 			executedObjText = payload.executedObj ?? '';
-			if (payload.executedObj) applyObjString(payload.executedObj);
+			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? payload.executedObj);
 			sourceTab = 'executed';
 			sceneEpoch += 1;
 
