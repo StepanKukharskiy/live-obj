@@ -179,13 +179,45 @@ def parse_scalar(value: str) -> Any:
 
 
 def split_top_level_commas(s: str) -> List[str]:
-    parts, cur, depth = [], [], 0
+    parts: List[str] = []
+    cur: List[str] = []
+    square_depth = 0
+    paren_depth = 0
+    brace_depth = 0
+    quote: Optional[str] = None
+    escape = False
     for ch in s:
+        if quote is not None:
+            cur.append(ch)
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == quote:
+                quote = None
+            continue
+
+        if ch in {"'", '"'}:
+            quote = ch
+            cur.append(ch)
+            continue
+
         if ch == "[":
-            depth += 1
+            square_depth += 1
         elif ch == "]":
-            depth -= 1
-        if ch == "," and depth == 0:
+            square_depth = max(0, square_depth - 1)
+        elif ch == "(":
+            paren_depth += 1
+        elif ch == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif ch == "{":
+            brace_depth += 1
+        elif ch == "}":
+            brace_depth = max(0, brace_depth - 1)
+
+        if ch == "," and square_depth == 0 and paren_depth == 0 and brace_depth == 0:
             parts.append("".join(cur).strip())
             cur = []
         else:
