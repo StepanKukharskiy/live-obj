@@ -52,20 +52,29 @@
 		return new THREE.Color().setHSL(hue / 360, 0.45, 0.56);
 	}
 
-	function materialColorFromTag(tag: string): THREE.Color {
-		const key = tag.trim().toLowerCase();
-		const presets: Record<string, string> = {
-			warm_oak: '#9b6a3f',
-			oak: '#9b6a3f',
-			walnut: '#6f4b32',
-			maple: '#c89f73',
-			pine: '#caa472',
-			ash: '#bda488',
-			steel: '#8f98a1',
-			black_metal: '#2f3238',
-			white_paint: '#e7e7e5'
-		};
-		return new THREE.Color(presets[key] ?? materialColorFromName(key));
+	type MaterialPreset = {
+		color?: string;
+		metalness?: number;
+		roughness?: number;
+	};
+
+	function parseMaterialPresets(sourceText: string): Map<string, MaterialPreset> {
+		const presets = new Map<string, MaterialPreset>();
+		for (const rawLine of sourceText.split(/\r?\n/)) {
+			const lineMatch = rawLine.match(/^\s*#@material_preset:\s*([a-zA-Z0-9_\-.]+)\s*(.*)$/);
+			if (!lineMatch) continue;
+			const name = lineMatch[1].trim();
+			const tail = lineMatch[2] ?? '';
+			const preset: MaterialPreset = {};
+			const colorMatch = tail.match(/color=([#a-zA-Z0-9_\-.]+)/);
+			if (colorMatch) preset.color = colorMatch[1];
+			const metalnessMatch = tail.match(/metalness=([-+]?\d*\.?\d+)/);
+			if (metalnessMatch) preset.metalness = Number(metalnessMatch[1]);
+			const roughnessMatch = tail.match(/roughness=([-+]?\d*\.?\d+)/);
+			if (roughnessMatch) preset.roughness = Number(roughnessMatch[1]);
+			presets.set(name, preset);
+		}
+		return presets;
 	}
 
 	function parseObjectMaterialTags(sourceText: string): Map<string, string> {
@@ -112,6 +121,7 @@
 		const upAxis = getLiveObjUpAxis(objText);
 		const hasPerObjectMaterials = /^\s*usemtl\s+/im.test(objText);
 		const materialTagsByObject = parseObjectMaterialTags(sourceTextForMetadata);
+		const materialPresets = parseMaterialPresets(sourceTextForMetadata);
 		const hasMetadataMaterialTags = materialTagsByObject.size > 0;
 		const objectDefinitions = new Set(
 			[...sourceTextForMetadata.matchAll(/^\s*o\s+([^\s#]+)/gm)].map((m) => m[1])
@@ -140,15 +150,17 @@
 				const base = material as THREE.MeshPhongMaterial & { name?: string };
 				const taggedMaterial = o.name ? materialTagsByObject.get(o.name) : null;
 				const colorName = hasPerObjectMaterials ? base.name : o.name;
-				const color = taggedMaterial
-					? materialColorFromTag(taggedMaterial)
+				const taggedPreset = taggedMaterial ? materialPresets.get(taggedMaterial) : undefined;
+				const colorValue = taggedPreset?.color;
+				const color = colorValue
+					? new THREE.Color(colorValue)
 					: colorName
 						? materialColorFromName(colorName)
 						: new THREE.Color(objectColor);
 				return new THREE.MeshStandardMaterial({
 					color,
-					metalness: 0.12,
-					roughness: 0.48,
+					metalness: taggedPreset?.metalness ?? 0.12,
+					roughness: taggedPreset?.roughness ?? 0.48,
 					side: THREE.DoubleSide,
 					flatShading: false,
 					wireframe
