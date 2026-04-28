@@ -41,6 +41,7 @@
 	let objectPosZ = $state(0);
 	let objectRotYDeg = $state(0);
 	let preserveObjMaterials = $state(false);
+	let canvasRef = $state<Canvas3D | null>(null);
 
 	function materialColorFromName(name: string): THREE.Color {
 		let hash = 0;
@@ -284,11 +285,22 @@
 			sourceApplyBusy = false;
 		}
 	}
+
+	function captureSceneScreenshot() {
+		return (
+			canvasRef?.captureScreenshot({
+				maxWidth: 1280,
+				format: 'image/jpeg',
+				quality: 0.9
+			}) ?? ''
+		);
+	}
 </script>
 
 <div class="app-root">
 	<div class="canvas-layer">
 		<Canvas3D
+			bind:this={canvasRef}
 			className="app-canvas"
 			{backgroundColor}
 			{renderObject}
@@ -342,6 +354,7 @@
 		onLiveObjMetadataChange={(updatedText) => void regenerateFromMetadata(updatedText)}
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
 		onSend={(p) => void sendPrompt(p)}
+		onCaptureSceneScreenshot={captureSceneScreenshot}
 	/>
 </div>
 

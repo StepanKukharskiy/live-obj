@@ -179,13 +179,45 @@ def parse_scalar(value: str) -> Any:
 
 
 def split_top_level_commas(s: str) -> List[str]:
-    parts, cur, depth = [], [], 0
+    parts: List[str] = []
+    cur: List[str] = []
+    square_depth = 0
+    paren_depth = 0
+    brace_depth = 0
+    quote: Optional[str] = None
+    escape = False
     for ch in s:
+        if quote is not None:
+            cur.append(ch)
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == quote:
+                quote = None
+            continue
+
+        if ch in {"'", '"'}:
+            quote = ch
+            cur.append(ch)
+            continue
+
         if ch == "[":
-            depth += 1
+            square_depth += 1
         elif ch == "]":
-            depth -= 1
-        if ch == "," and depth == 0:
+            square_depth = max(0, square_depth - 1)
+        elif ch == "(":
+            paren_depth += 1
+        elif ch == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif ch == "{":
+            brace_depth += 1
+        elif ch == "}":
+            brace_depth = max(0, brace_depth - 1)
+
+        if ch == "," and square_depth == 0 and paren_depth == 0 and brace_depth == 0:
             parts.append("".join(cur).strip())
             cur = []
         else:
@@ -528,11 +560,20 @@ def assembly_params_eval_env(params: Optional[Dict[str, Any]], obn: Dict[str, Li
 
 def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[str, Any]:
     base: Dict[str, Any] = {}
+
+    # Inherit params from all ancestor assemblies (root -> leaf) so nested assemblies
+    # can still resolve references to top-level design variables.
+    lineage: List[LiveObject] = []
     pn = obj.meta.get("parent")
-    if pn and str(pn) in obn:
+    while pn and str(pn) in obn:
         pobj = obn[str(pn)]
-        if str(pobj.meta.get("source", "")) == "assembly":
-            base = dict(assembly_params_eval_env(pobj.meta.get("params") or {}, obn))
+        lineage.append(pobj)
+        pn = pobj.meta.get("parent")
+
+    for anc in reversed(lineage):
+        if str(anc.meta.get("source", "")) == "assembly":
+            base = {**base, **assembly_params_eval_env(anc.meta.get("params") or {}, obn)}
+
     raw = obj.meta.get("params") or {}
     merged: Dict[str, Any] = {}
     for k, v in raw.items():
@@ -593,9 +634,20 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         if body == "sdf:":
             block = "sdf"
             continue
+        if body == "params:":
+            block = "params"
+            meta.setdefault("params", {})
+            continue
         if body == "anchors:":
             block = "anchors"
             meta["anchors"] = {}
+            continue
+
+        if block == "params":
+            params_body = body[1:].strip() if body.startswith("-") else body
+            if params_body:
+                for k, v in parse_key_values(params_body).items():
+                    meta.setdefault("params", {})[k] = v
             continue
 
         if block == "anchors" and body.startswith("-"):
@@ -1291,6 +1343,11 @@ def _resolve_vec3_meta(
     defaults: Tuple[float, float, float],
 ) -> List[float]:
     """Resolve position/rotation/scale lists that may contain param names or expressions (from #@transform)."""
+    if isinstance(val, str):
+        s = val.strip()
+        if s.startswith("[") and s.endswith("]"):
+            parts = [p.strip() for p in split_top_level_commas(parse_list_body(s)) if p.strip()]
+            val = parts if len(parts) >= 3 else val
     if not isinstance(val, (list, tuple)) or len(val) < 3:
         return [defaults[0], defaults[1], defaults[2]]
     out: List[float] = []
@@ -1430,7 +1487,7 @@ def resolve_object_anchor_world(
     anchors = scene_obj.meta.get("anchors", {}) or {}
     local = anchors.get(anchor_name)
     local_is_world = False
-    if isinstance(local, list) and len(local) >= 3:
+    if isinstance(local, (list, tuple)) and len(local) >= 3:
         raw = (float(local[0]), float(local[1]), float(local[2]))
         mesh_bbox = compute_bbox(scene_obj.mesh)
         # Authoring is mixed in the wild: some scenes emit object-local anchor vectors,

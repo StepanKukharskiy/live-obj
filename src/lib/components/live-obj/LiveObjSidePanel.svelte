@@ -3,10 +3,11 @@
 	import LiveObjChatTab from './LiveObjChatTab.svelte';
 	import LiveObjAdjustTab from './LiveObjAdjustTab.svelte';
 	import LiveObjSceneTab from './LiveObjSceneTab.svelte';
+	import LiveObjRenderTab from './LiveObjRenderTab.svelte';
 	import type { SourceTab } from './LiveObjOutputTab.svelte';
 
 	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
-	type PanelTab = 'chat' | 'adjust' | 'scene';
+	type PanelTab = 'chat' | 'adjust' | 'scene' | 'render';
 
 	let {
 		showPanel = $bindable(true),
@@ -40,7 +41,8 @@
 		toneMappingExposure = $bindable(1),
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
-		onSend
+		onSend,
+		onCaptureSceneScreenshot
 	}: {
 		showPanel?: boolean;
 		msgs?: ChatMsg[];
@@ -74,6 +76,7 @@
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
 		onSend?: (payload: { text: string; model: string; imageDataUrl?: string }) => void;
+		onCaptureSceneScreenshot?: () => string;
 	} = $props();
 
 	let activeTab = $state<PanelTab>('chat');
@@ -102,6 +105,7 @@
 				<button type="button" class:active={activeTab === 'chat'} onclick={() => (activeTab = 'chat')}>Chat</button>
 				<button type="button" class:active={activeTab === 'adjust'} onclick={() => (activeTab = 'adjust')}>Adjust</button>
 				<button type="button" class:active={activeTab === 'scene'} onclick={() => (activeTab = 'scene')}>Scene</button>
+				<button type="button" class:active={activeTab === 'render'} onclick={() => (activeTab = 'render')}>Render</button>
 			</div>
 		</div>
 		<div
@@ -128,6 +132,7 @@
 					onApplyEditedSource={onApplyEditedSource}
 				/>
 			{:else}
+				{#if activeTab === 'scene'}
 				<LiveObjSceneTab
 					bind:backgroundColor
 					bind:showGrid
@@ -143,6 +148,12 @@
 					bind:cameraFov
 					bind:toneMappingExposure
 				/>
+				{:else}
+					<LiveObjRenderTab
+						{liveObjText}
+						onCaptureSceneScreenshot={onCaptureSceneScreenshot}
+					/>
+				{/if}
 			{/if}
 		</div>
 	</aside>
