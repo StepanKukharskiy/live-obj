@@ -1441,7 +1441,7 @@ def resolve_object_anchor_world(
     anchors = scene_obj.meta.get("anchors", {}) or {}
     local = anchors.get(anchor_name)
     local_is_world = False
-    if isinstance(local, list) and len(local) >= 3:
+    if isinstance(local, (list, tuple)) and len(local) >= 3:
         raw = (float(local[0]), float(local[1]), float(local[2]))
         mesh_bbox = compute_bbox(scene_obj.mesh)
         # Authoring is mixed in the wild: some scenes emit object-local anchor vectors,
