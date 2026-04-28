@@ -2,7 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
 const DEFAULT_OPENAI_IMAGES_API_URL = 'https://api.openai.com/v1/images/edits';
-const OPENAI_IMAGE_MODEL = 'gpt-image-2';
+const OPENAI_IMAGE_MODEL = 'gpt-image-1.5';
 const OPENAI_IMAGES_TIMEOUT_MS = 90_000;
 
 function pickString(...candidates: Array<string | undefined>): string {
