@@ -1694,6 +1694,87 @@ def op_radial_array(mesh: Mesh, count: int, axis: str = "z", radius: float = 0.0
     return out
 
 
+def op_taper(mesh: Mesh, axis: str = "z", amount: float = 0.0) -> Mesh:
+    out = mesh.copy()
+    if not out.vertices:
+        return out
+    ax = axis.lower()
+    xs, ys, zs = [v[0] for v in out.vertices], [v[1] for v in out.vertices], [v[2] for v in out.vertices]
+    min_a, max_a = (min(zs), max(zs)) if ax == "z" else ((min(ys), max(ys)) if ax == "y" else (min(xs), max(xs)))
+    span = max(1e-9, max_a - min_a)
+    nv: List[Vec3] = []
+    for x, y, z in out.vertices:
+        t = ((z if ax == "z" else (y if ax == "y" else x)) - min_a) / span
+        s = 1.0 + amount * (t - 0.5) * 2.0
+        if ax == "z":
+            nv.append((x * s, y * s, z))
+        elif ax == "y":
+            nv.append((x * s, y, z * s))
+        else:
+            nv.append((x, y * s, z * s))
+    out.vertices = nv
+    return out
+
+
+def op_twist(mesh: Mesh, axis: str = "z", angle_deg: float = 0.0) -> Mesh:
+    out = mesh.copy()
+    if not out.vertices:
+        return out
+    ax = axis.lower()
+    xs, ys, zs = [v[0] for v in out.vertices], [v[1] for v in out.vertices], [v[2] for v in out.vertices]
+    min_a, max_a = (min(zs), max(zs)) if ax == "z" else ((min(ys), max(ys)) if ax == "y" else (min(xs), max(xs)))
+    span = max(1e-9, max_a - min_a)
+    total = math.radians(angle_deg)
+    nv: List[Vec3] = []
+    for x, y, z in out.vertices:
+        acoord = z if ax == "z" else (y if ax == "y" else x)
+        t = (acoord - min_a) / span
+        th = total * t
+        c, s = math.cos(th), math.sin(th)
+        if ax == "z":
+            nv.append((x * c - y * s, x * s + y * c, z))
+        elif ax == "y":
+            nv.append((x * c - z * s, y, x * s + z * c))
+        else:
+            nv.append((x, y * c - z * s, y * s + z * c))
+    out.vertices = nv
+    return out
+
+
+def op_bend(mesh: Mesh, axis: str = "x", angle_deg: float = 0.0) -> Mesh:
+    out = mesh.copy()
+    if not out.vertices or abs(angle_deg) < 1e-8:
+        return out
+    ax = axis.lower()
+    nv: List[Vec3] = []
+    k = math.radians(angle_deg) / max(1e-6, max(abs(v[0]) + abs(v[1]) + abs(v[2]) for v in out.vertices))
+    for x, y, z in out.vertices:
+        if ax == "x":
+            th = x * k
+            c, s = math.cos(th), math.sin(th)
+            nv.append((x, y * c - z * s, y * s + z * c))
+        elif ax == "y":
+            th = y * k
+            c, s = math.cos(th), math.sin(th)
+            nv.append((x * c - z * s, y, x * s + z * c))
+        else:
+            th = z * k
+            c, s = math.cos(th), math.sin(th)
+            nv.append((x * c - y * s, x * s + y * c, z))
+    out.vertices = nv
+    return out
+
+
+def op_simplify(mesh: Mesh, ratio: float = 1.0) -> Mesh:
+    out = mesh.copy()
+    keep = max(0.05, min(1.0, ratio))
+    if keep >= 0.999 or len(out.faces) < 8:
+        return out
+    step = max(1, int(round(1.0 / keep)))
+    out.faces = [f for i, f in enumerate(out.faces) if i % step == 0]
+    return out
+
+
 def rotate_mesh_z(mesh: Mesh, rad: float) -> Mesh:
     """CCW rotation in XY (standard right-handed Z-up)."""
     if abs(rad) < 1e-12:
@@ -1989,10 +2070,25 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         elif name == "tread":
             out = op_tread(out, op)
         elif name == "bevel":
-            # placeholder
-            pass
+            amt = float(op.get("amount", 0.05))
+            seg = max(1, int(op.get("segments", 1)))
+            out = op_subdivide(out, min(2, seg))
+            out = op_smooth(out, max(1, seg), min(0.8, 0.2 + amt))
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
+        elif name == "taper":
+            out = op_taper(out, str(op.get("axis", "z")), float(op.get("amount", 0.0)))
+        elif name == "twist":
+            out = op_twist(out, str(op.get("axis", "z")), float(op.get("angle", 0.0)))
+        elif name == "bend":
+            out = op_bend(out, str(op.get("axis", "x")), float(op.get("angle", 0.0)))
+        elif name == "simplify":
+            out = op_simplify(out, float(op.get("ratio", 1.0)))
+        elif name == "remesh":
+            res = float(op.get("resolution", 0.25))
+            lvl = 2 if res <= 0.08 else (1 if res <= 0.2 else 0)
+            if lvl > 0:
+                out = op_subdivide(out, lvl)
     return out
 
 
