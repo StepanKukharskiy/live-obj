@@ -2,7 +2,7 @@
 	type MetaObject = {
 		id: string;
 		params: Record<string, string>;
-		paramSource: 'params' | 'sdf_mesh_from_sdf';
+		paramSources: Record<string, 'params' | 'sdf_mesh_from_sdf'>;
 	};
 
 	let {
@@ -53,14 +53,22 @@
 		const lines = text.split(/\r?\n/);
 		const objects: MetaObject[] = [];
 		let activeObject: string | null = null;
-		let activeSource: string | null = null;
 		let activeParams: Record<string, string> | null = null;
+		let activeSdfMeshParams: Record<string, string> | null = null;
 		const flushActive = () => {
-			if (!activeObject || !activeParams || Object.keys(activeParams).length === 0) return;
+			if (!activeObject) return;
+			const merged: Record<string, string> = {
+				...(activeSdfMeshParams ?? {}),
+				...(activeParams ?? {})
+			};
+			if (Object.keys(merged).length === 0) return;
+			const sources: Record<string, 'params' | 'sdf_mesh_from_sdf'> = {};
+			for (const key of Object.keys(activeSdfMeshParams ?? {})) sources[key] = 'sdf_mesh_from_sdf';
+			for (const key of Object.keys(activeParams ?? {})) sources[key] = 'params';
 			objects.push({
 				id: activeObject,
-				params: activeParams,
-				paramSource: activeSource === 'sdf_mesh_from_sdf' ? 'sdf_mesh_from_sdf' : 'params'
+				params: merged,
+				paramSources: sources
 			});
 		};
 		for (let i = 0; i < lines.length; i += 1) {
@@ -69,23 +77,19 @@
 			if (objectMatch) {
 				flushActive();
 				activeObject = objectMatch[1].trim();
-				activeSource = null;
 				activeParams = null;
+				activeSdfMeshParams = null;
 				continue;
 			}
 			if (!activeObject) continue;
 			const paramsMatch = line.match(/^#@params:\s*(.+)$/);
 			if (paramsMatch) {
-				activeSource = 'params';
 				activeParams = parseParams(paramsMatch[1]);
 				continue;
 			}
-			if (!activeParams) {
-				const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
-				if (sdfMeshMatch) {
-					activeSource = 'sdf_mesh_from_sdf';
-					activeParams = parseParams(sdfMeshMatch[1]);
-				}
+			const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
+			if (sdfMeshMatch) {
+				activeSdfMeshParams = parseParams(sdfMeshMatch[1]);
 			}
 		}
 		flushActive();
@@ -97,7 +101,7 @@
 		objectId: string,
 		key: string,
 		value: string,
-		source: MetaObject['paramSource']
+		source: 'params' | 'sdf_mesh_from_sdf'
 	) => {
 		const lines = text.split(/\r?\n/);
 		let activeObject: string | null = null;
@@ -165,7 +169,7 @@
 			selectedMetaObject.id,
 			key,
 			nextValue,
-			selectedMetaObject.paramSource
+			selectedMetaObject.paramSources[key] ?? 'params'
 		);
 		onLiveObjMetadataChange?.(updated);
 	}
