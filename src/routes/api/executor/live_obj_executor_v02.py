@@ -959,6 +959,17 @@ class SDFIntersect(SDFExpr):
     def dist(self, p: Vec3) -> float: return max(self.a.dist(p), self.b.dist(p))
 
 
+class SDFSmoothUnion(SDFExpr):
+    def __init__(self, a: SDFExpr, b: SDFExpr, radius: float):
+        self.a, self.b, self.r = a, b, max(1e-6, radius)
+
+    def dist(self, p: Vec3) -> float:
+        da = self.a.dist(p)
+        db = self.b.dist(p)
+        h = max(0.0, min(1.0, 0.5 + 0.5 * (db - da) / self.r))
+        return (db * (1 - h) + da * h) - self.r * h * (1 - h)
+
+
 class SDFNoiseDisplace(SDFExpr):
     def __init__(self, base: SDFExpr, strength: float, frequency: float, seed: int):
         self.base, self.strength, self.frequency, self.seed = base, strength, frequency, seed
@@ -1016,13 +1027,23 @@ def build_sdf(sdf_ops: List[Dict[str, Any]]) -> Optional[SDFExpr]:
             height = float(cmd.get("height", 1))
             registry[sid] = SDFCylinderZ(tuple(map(float, center)), radius, height)
             current = registry[sid]
-        elif c in {"union", "subtract", "intersect"}:
+        elif c in {"union", "subtract", "intersect", "smooth_union"}:
             args = cmd.get("args", [])
-            if len(args) >= 2 and str(args[0]) in registry and str(args[1]) in registry:
-                a, b = registry[str(args[0])], registry[str(args[1])]
-                if c == "union": current = SDFUnion(a, b)
-                elif c == "subtract": current = SDFSubtract(a, b)
-                else: current = SDFIntersect(a, b)
+            a_id = b_id = None
+            if len(args) >= 2:
+                a_id, b_id = str(args[0]), str(args[1])
+            elif cmd.get("id_a") is not None and cmd.get("id_b") is not None:
+                a_id, b_id = str(cmd.get("id_a")), str(cmd.get("id_b"))
+            if a_id and b_id and a_id in registry and b_id in registry:
+                a, b = registry[a_id], registry[b_id]
+                if c == "union":
+                    current = SDFUnion(a, b)
+                elif c == "subtract":
+                    current = SDFSubtract(a, b)
+                elif c == "intersect":
+                    current = SDFIntersect(a, b)
+                else:
+                    current = SDFSmoothUnion(a, b, float(cmd.get("radius", 0.1)))
                 registry["result"] = current
         elif c == "noise_displace" and current is not None:
             current = SDFNoiseDisplace(
