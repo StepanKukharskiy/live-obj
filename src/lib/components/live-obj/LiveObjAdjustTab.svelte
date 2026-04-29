@@ -49,37 +49,37 @@
 			onApplySource={onApplyEditedSource}
 		/>
 	</div>
-	<div class="planner-object-section">
-		<div class="planner-object-header">
-			<div class="planner-object-title-stack"><strong>Object</strong></div>
+		<div class="planner-object-section">
+			<div class="planner-object-header">
+				<div class="planner-object-title-stack"><strong>Global Scene Transform</strong></div>
+			</div>
+			<div class="planner-chain">
+				<label class="planner-context-field"
+					><span class="planner-label-inline">Global mesh color</span>
+					<input class="planner-text-input" type="color" bind:value={objectColor} />
+				</label>
+				<label class="planner-context-field"
+					><span class="planner-label-inline">Global scale</span>
+					<input class="planner-text-input" type="number" step="0.05" bind:value={objectScale} />
+				</label>
+				<label class="planner-context-field"
+					><span class="planner-label-inline">Global Pos X</span>
+					<input class="planner-text-input" type="number" step="0.05" bind:value={objectPosX} />
+				</label>
+				<label class="planner-context-field"
+					><span class="planner-label-inline">Global Pos Y</span>
+					<input class="planner-text-input" type="number" step="0.05" bind:value={objectPosY} />
+				</label>
+				<label class="planner-context-field"
+					><span class="planner-label-inline">Global Pos Z</span>
+					<input class="planner-text-input" type="number" step="0.05" bind:value={objectPosZ} />
+				</label>
+				<label class="planner-context-field"
+					><span class="planner-label-inline">Global Rotate Y</span>
+					<input class="planner-text-input" type="number" step="1" bind:value={objectRotYDeg} />
+				</label>
+			</div>
 		</div>
-		<div class="planner-chain">
-			<label class="planner-context-field"
-				><span class="planner-label-inline">Mesh color</span>
-				<input class="planner-text-input" type="color" bind:value={objectColor} />
-			</label>
-			<label class="planner-context-field"
-				><span class="planner-label-inline">Scale</span>
-				<input class="planner-text-input" type="number" step="0.05" bind:value={objectScale} />
-			</label>
-			<label class="planner-context-field"
-				><span class="planner-label-inline">Pos X</span>
-				<input class="planner-text-input" type="number" step="0.05" bind:value={objectPosX} />
-			</label>
-			<label class="planner-context-field"
-				><span class="planner-label-inline">Pos Y</span>
-				<input class="planner-text-input" type="number" step="0.05" bind:value={objectPosY} />
-			</label>
-			<label class="planner-context-field"
-				><span class="planner-label-inline">Pos Z</span>
-				<input class="planner-text-input" type="number" step="0.05" bind:value={objectPosZ} />
-			</label>
-			<label class="planner-context-field"
-				><span class="planner-label-inline">Rotate Y</span>
-				<input class="planner-text-input" type="number" step="1" bind:value={objectRotYDeg} />
-			</label>
-		</div>
-	</div>
 	<LiveObjMetadataParams {liveObjText} {onLiveObjMetadataChange} />
 </div>
 
