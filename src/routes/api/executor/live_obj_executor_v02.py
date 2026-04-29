@@ -473,7 +473,14 @@ def _eval_string_or_scalar(s: str, env: Dict[str, Any], obn: Dict[str, LiveObjec
     t = s.strip()
     if not t:
         return 0.0
-    r = eval_mixed_value(t, env, obn)
+    try:
+        r = eval_mixed_value(t, env, obn)
+    except (SyntaxError, ValueError, TypeError, KeyError):
+        # Be permissive for malformed model output: keep scene running instead of
+        # hard-failing anchor resolution on one bad token.
+        if re.match(r"^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$", t):
+            return float(t)
+        return 0.0
     if isinstance(r, (list, tuple)) and len(r) == 3 and not t.startswith("["):
         # single anchor() call returns 3-tuple; fine
         return r
@@ -600,7 +607,26 @@ def parse_tokens(s: str) -> Dict[str, Any]:
     s = s.strip()
     if s.startswith("-"):
         s = s[1:].strip()
-    tokens = s.split()
+    tokens: List[str] = []
+    cur: List[str] = []
+    depth = 0
+    for ch in s:
+        if ch == "[":
+            depth += 1
+            cur.append(ch)
+            continue
+        if ch == "]":
+            depth = max(0, depth - 1)
+            cur.append(ch)
+            continue
+        if ch.isspace() and depth == 0:
+            if cur:
+                tokens.append("".join(cur))
+                cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        tokens.append("".join(cur))
     if not tokens:
         return {}
     d: Dict[str, Any] = {"cmd": tokens[0], "op": tokens[0]}
@@ -660,7 +686,18 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         if block in {"ops", "sdf"} and body.startswith("-"):
             parsed = parse_tokens(body)
             if parsed:
-                (ops if block == "ops" else sdf_ops).append(parsed)
+                if block == "sdf":
+                    sdf_ops.append(parsed)
+                    if parsed.get("cmd") == "mesh_from_sdf":
+                        p = dict(meta.get("params", {}) or {})
+                        if parsed.get("resolution") is not None and p.get("resolution") is None:
+                            p["resolution"] = parsed.get("resolution")
+                        if parsed.get("method") is not None and p.get("method") is None:
+                            p["method"] = parsed.get("method")
+                        if p:
+                            meta["params"] = p
+                else:
+                    ops.append(parsed)
             continue
 
         block = None
@@ -821,6 +858,42 @@ def cylinder_mesh(
     return Mesh(verts, faces)
 
 
+def cone_mesh(axis: str, center: Vec3, radius: float, height: float, segments: int = 16) -> Mesh:
+    cx, cy, cz = center
+    axis = axis.lower()
+    h0, h1 = -height / 2, height / 2
+    verts: List[Vec3] = []
+    faces: List[List[int]] = []
+
+    def ring_pt(a: float) -> Vec3:
+        ca, sa = math.cos(a), math.sin(a)
+        if axis == "x":
+            return (cx + h0, cy + ca * radius, cz + sa * radius)
+        if axis == "y":
+            return (cx + ca * radius, cy + h0, cz + sa * radius)
+        return (cx + ca * radius, cy + sa * radius, cz + h0)
+
+    if axis == "x":
+        apex = (cx + h1, cy, cz)
+    elif axis == "y":
+        apex = (cx, cy + h1, cz)
+    else:
+        apex = (cx, cy, cz + h1)
+
+    ring: List[int] = []
+    for i in range(max(3, int(segments))):
+        verts.append(ring_pt(2 * math.pi * i / max(3, int(segments))))
+        ring.append(len(verts))
+    verts.append(apex)
+    apex_idx = len(verts)
+
+    faces.append(list(reversed(ring)))  # base cap
+    n = len(ring)
+    for i in range(n):
+        faces.append([ring[i], ring[(i + 1) % n], apex_idx])
+    return Mesh(verts, faces)
+
+
 def surface_grid(width: float, depth: float, resolution: int, center: Vec3 = (0,0,0)) -> Mesh:
     cx, cy, cz = center
     n = max(2, int(resolution))
@@ -834,6 +907,44 @@ def surface_grid(width: float, depth: float, resolution: int, center: Vec3 = (0,
         for ix in range(n-1):
             a = iy*n + ix + 1
             faces.append([a, a+1, a+1+n, a+n])
+    return Mesh(verts, faces)
+
+
+def sphere_mesh(center: Vec3, radius: float, segments: int = 16) -> Mesh:
+    cx, cy, cz = center
+    lon = max(8, int(segments))
+    lat = max(6, lon // 2)
+    verts: List[Vec3] = []
+    faces: List[List[int]] = []
+
+    # north pole
+    verts.append((cx, cy, cz + radius))
+    rings: List[List[int]] = []
+    for iy in range(1, lat):
+        phi = math.pi * iy / lat
+        z = cz + radius * math.cos(phi)
+        rr = radius * math.sin(phi)
+        ring: List[int] = []
+        for ix in range(lon):
+            th = 2 * math.pi * ix / lon
+            verts.append((cx + rr * math.cos(th), cy + rr * math.sin(th), z))
+            ring.append(len(verts))
+        rings.append(ring)
+    # south pole
+    verts.append((cx, cy, cz - radius))
+    south = len(verts)
+
+    if rings:
+        first = rings[0]
+        for i in range(lon):
+            faces.append([1, first[i], first[(i + 1) % lon]])
+        for r in range(len(rings) - 1):
+            a, b = rings[r], rings[r + 1]
+            for i in range(lon):
+                faces.append([a[i], a[(i + 1) % lon], b[(i + 1) % lon], b[i]])
+        last = rings[-1]
+        for i in range(lon):
+            faces.append([last[(i + 1) % lon], last[i], south])
     return Mesh(verts, faces)
 
 
@@ -902,6 +1013,17 @@ class SDFIntersect(SDFExpr):
     def dist(self, p: Vec3) -> float: return max(self.a.dist(p), self.b.dist(p))
 
 
+class SDFSmoothUnion(SDFExpr):
+    def __init__(self, a: SDFExpr, b: SDFExpr, radius: float):
+        self.a, self.b, self.r = a, b, max(1e-6, radius)
+
+    def dist(self, p: Vec3) -> float:
+        da = self.a.dist(p)
+        db = self.b.dist(p)
+        h = max(0.0, min(1.0, 0.5 + 0.5 * (db - da) / self.r))
+        return (db * (1 - h) + da * h) - self.r * h * (1 - h)
+
+
 class SDFNoiseDisplace(SDFExpr):
     def __init__(self, base: SDFExpr, strength: float, frequency: float, seed: int):
         self.base, self.strength, self.frequency, self.seed = base, strength, frequency, seed
@@ -959,13 +1081,28 @@ def build_sdf(sdf_ops: List[Dict[str, Any]]) -> Optional[SDFExpr]:
             height = float(cmd.get("height", 1))
             registry[sid] = SDFCylinderZ(tuple(map(float, center)), radius, height)
             current = registry[sid]
-        elif c in {"union", "subtract", "intersect"}:
+        elif c in {"union", "subtract", "intersect", "smooth_union"}:
             args = cmd.get("args", [])
-            if len(args) >= 2 and str(args[0]) in registry and str(args[1]) in registry:
-                a, b = registry[str(args[0])], registry[str(args[1])]
-                if c == "union": current = SDFUnion(a, b)
-                elif c == "subtract": current = SDFSubtract(a, b)
-                else: current = SDFIntersect(a, b)
+            a_id = b_id = None
+            if len(args) >= 2:
+                a_id, b_id = str(args[0]), str(args[1])
+            elif cmd.get("id_a") is not None and cmd.get("id_b") is not None:
+                a_id, b_id = str(cmd.get("id_a")), str(cmd.get("id_b"))
+            if a_id and b_id and a_id in registry and b_id in registry:
+                if c == "smooth_union" and a_id == b_id:
+                    # Smooth-unioning an SDF with itself is a no-op.
+                    current = registry[a_id]
+                    registry["result"] = current
+                    continue
+                a, b = registry[a_id], registry[b_id]
+                if c == "union":
+                    current = SDFUnion(a, b)
+                elif c == "subtract":
+                    current = SDFSubtract(a, b)
+                elif c == "intersect":
+                    current = SDFIntersect(a, b)
+                else:
+                    current = SDFSmoothUnion(a, b, float(cmd.get("radius", 0.1)))
                 registry["result"] = current
         elif c == "noise_displace" and current is not None:
             current = SDFNoiseDisplace(
@@ -1571,6 +1708,11 @@ def op_displace(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
 
 def op_smooth(mesh: Mesh, iterations: int = 1, strength: float = 0.5) -> Mesh:
     out = mesh.copy()
+    # Pure Laplacian smoothing on very coarse primitives (e.g., an 8-vertex box)
+    # mostly shrinks corners toward center but keeps the same faceted topology.
+    # Add one adaptive subdivision pass so smoothing can actually round the shape.
+    if len(out.vertices) <= 16 and len(out.faces) <= 12 and iterations > 0:
+        out = op_subdivide(out, 1)
     for _ in range(iterations):
         nbr = {i: set() for i in range(1, len(out.vertices)+1)}
         for face in out.faces:
@@ -1610,6 +1752,168 @@ def op_array(mesh: Mesh, count: int, offset: Vec3) -> Mesh:
         m = mesh.copy()
         m.vertices = [(x+ox*i, y+oy*i, z+oz*i) for x,y,z in m.vertices]
         out.extend(m)
+    return out
+
+
+def op_radial_array(mesh: Mesh, count: int, axis: str = "z", radius: float = 0.0) -> Mesh:
+    out = Mesh()
+    n = max(1, int(count))
+    ax = str(axis).lower()
+    r = float(radius)
+    for i in range(n):
+        th = 2 * math.pi * i / n
+        if ax == "z":
+            dx, dy, dz = r * math.cos(th), r * math.sin(th), 0.0
+        elif ax == "y":
+            dx, dy, dz = r * math.cos(th), 0.0, r * math.sin(th)
+        else:
+            dx, dy, dz = 0.0, r * math.cos(th), r * math.sin(th)
+        m = mesh.copy()
+        m.vertices = [(x + dx, y + dy, z + dz) for x, y, z in m.vertices]
+        out.extend(m)
+    return out
+
+
+def op_taper(mesh: Mesh, axis: str = "z", amount: float = 0.0) -> Mesh:
+    out = mesh.copy()
+    if not out.vertices:
+        return out
+    ax = axis.lower()
+    xs, ys, zs = [v[0] for v in out.vertices], [v[1] for v in out.vertices], [v[2] for v in out.vertices]
+    min_a, max_a = (min(zs), max(zs)) if ax == "z" else ((min(ys), max(ys)) if ax == "y" else (min(xs), max(xs)))
+    span = max(1e-9, max_a - min_a)
+    nv: List[Vec3] = []
+    for x, y, z in out.vertices:
+        t = ((z if ax == "z" else (y if ax == "y" else x)) - min_a) / span
+        s = 1.0 + amount * (t - 0.5) * 2.0
+        if ax == "z":
+            nv.append((x * s, y * s, z))
+        elif ax == "y":
+            nv.append((x * s, y, z * s))
+        else:
+            nv.append((x, y * s, z * s))
+    out.vertices = nv
+    return out
+
+
+def op_twist(mesh: Mesh, axis: str = "z", angle_deg: float = 0.0) -> Mesh:
+    out = mesh.copy()
+    if not out.vertices:
+        return out
+    ax = axis.lower()
+    xs, ys, zs = [v[0] for v in out.vertices], [v[1] for v in out.vertices], [v[2] for v in out.vertices]
+    min_a, max_a = (min(zs), max(zs)) if ax == "z" else ((min(ys), max(ys)) if ax == "y" else (min(xs), max(xs)))
+    span = max(1e-9, max_a - min_a)
+    total = math.radians(angle_deg)
+    nv: List[Vec3] = []
+    for x, y, z in out.vertices:
+        acoord = z if ax == "z" else (y if ax == "y" else x)
+        t = (acoord - min_a) / span
+        th = total * t
+        c, s = math.cos(th), math.sin(th)
+        if ax == "z":
+            nv.append((x * c - y * s, x * s + y * c, z))
+        elif ax == "y":
+            nv.append((x * c - z * s, y, x * s + z * c))
+        else:
+            nv.append((x, y * c - z * s, y * s + z * c))
+    out.vertices = nv
+    return out
+
+
+def op_bend(mesh: Mesh, axis: str = "x", angle_deg: float = 0.0) -> Mesh:
+    out = mesh.copy()
+    if not out.vertices or abs(angle_deg) < 1e-8:
+        return out
+    ax = axis.lower()
+    nv: List[Vec3] = []
+    k = math.radians(angle_deg) / max(1e-6, max(abs(v[0]) + abs(v[1]) + abs(v[2]) for v in out.vertices))
+    for x, y, z in out.vertices:
+        if ax == "x":
+            th = x * k
+            c, s = math.cos(th), math.sin(th)
+            nv.append((x, y * c - z * s, y * s + z * c))
+        elif ax == "y":
+            th = y * k
+            c, s = math.cos(th), math.sin(th)
+            nv.append((x * c - z * s, y, x * s + z * c))
+        else:
+            th = z * k
+            c, s = math.cos(th), math.sin(th)
+            nv.append((x * c - y * s, x * s + y * c, z))
+    out.vertices = nv
+    return out
+
+
+def op_simplify(mesh: Mesh, ratio: float = 1.0) -> Mesh:
+    out = mesh.copy()
+    keep = max(0.05, min(1.0, ratio))
+    if keep >= 0.999 or len(out.faces) < 8:
+        return out
+    step = max(1, int(round(1.0 / keep)))
+    out.faces = [f for i, f in enumerate(out.faces) if i % step == 0]
+    return out
+
+
+def op_voxelize(mesh: Mesh, resolution: float = 0.1) -> Mesh:
+    out = mesh.copy()
+    cell = max(1e-4, float(resolution))
+    out.vertices = [
+        (round(x / cell) * cell, round(y / cell) * cell, round(z / cell) * cell)
+        for x, y, z in out.vertices
+    ]
+    return out
+
+
+def _sample_mesh_path_points(mesh: Mesh, sample_every: int = 1) -> List[Vec3]:
+    if not mesh.vertices:
+        return []
+    step = max(1, int(sample_every))
+    return [mesh.vertices[i] for i in range(0, len(mesh.vertices), step)]
+
+
+def op_trace_paths(mesh: Mesh, sample_every: int = 1) -> Mesh:
+    pts = _sample_mesh_path_points(mesh, sample_every)
+    if len(pts) < 2:
+        return mesh.copy()
+    out = Mesh()
+    for i in range(len(pts) - 1):
+        out.extend(tube_between(pts[i], pts[i + 1], 0.01, 6))
+    return out
+
+
+def op_sdf_tubes(mesh: Mesh, radius: float = 0.03, sample_every: int = 1) -> Mesh:
+    pts = _sample_mesh_path_points(mesh, sample_every)
+    if len(pts) < 2:
+        return mesh.copy()
+    out = Mesh()
+    seg = 8 if radius <= 0.05 else 10
+    for i in range(len(pts) - 1):
+        out.extend(tube_between(pts[i], pts[i + 1], float(radius), seg))
+    return out
+
+
+def weld_vertices(mesh: Mesh, epsilon: float = 1e-6) -> Mesh:
+    if not mesh.vertices:
+        return mesh.copy()
+    out = Mesh()
+    key_to_new: Dict[Tuple[int, int, int], int] = {}
+    old_to_new: Dict[int, int] = {}
+    inv = 1.0 / max(1e-9, epsilon)
+    for i, (x, y, z) in enumerate(mesh.vertices, start=1):
+        key = (int(round(x * inv)), int(round(y * inv)), int(round(z * inv)))
+        idx = key_to_new.get(key)
+        if idx is None:
+            out.vertices.append((x, y, z))
+            idx = len(out.vertices)
+            key_to_new[key] = idx
+        old_to_new[i] = idx
+
+    for f in mesh.faces:
+        nf = [old_to_new.get(v, v) for v in f]
+        # drop collapsed/degenerate faces after weld
+        if len(set(nf)) >= 3:
+            out.faces.append(nf)
     return out
 
 
@@ -1845,10 +2149,57 @@ def op_tread(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
     return out
 
 
-def apply_ops(mesh: Mesh, obj: LiveObject) -> Mesh:
+def op_subdivide(mesh: Mesh, level: int = 1) -> Mesh:
+    out = mesh.copy()
+    for _ in range(max(0, int(level))):
+        edge_mid: Dict[Tuple[int, int], int] = {}
+        new_vertices = list(out.vertices)
+        new_faces: List[List[int]] = []
+
+        def midpoint_index(a: int, b: int) -> int:
+            key = (a, b) if a < b else (b, a)
+            if key in edge_mid:
+                return edge_mid[key]
+            ax, ay, az = new_vertices[a - 1]
+            bx, by, bz = new_vertices[b - 1]
+            new_vertices.append(((ax + bx) * 0.5, (ay + by) * 0.5, (az + bz) * 0.5))
+            idx = len(new_vertices)
+            edge_mid[key] = idx
+            return idx
+
+        for face in out.faces:
+            if len(face) < 3:
+                continue
+            # fan triangulate for stability
+            tris = [[face[0], face[i], face[i + 1]] for i in range(1, len(face) - 1)]
+            for a, b, c in tris:
+                ab = midpoint_index(a, b)
+                bc = midpoint_index(b, c)
+                ca = midpoint_index(c, a)
+                new_faces.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]])
+
+        out.vertices = new_vertices
+        out.faces = new_faces
+    return out
+
+
+def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     out = mesh
+    env = get_effective_params(obj, obn)
     if isinstance(obj.meta.get("transform"), dict):
         out = apply_transform(out, obj.meta["transform"])
+    # Child object transforms are local to their parent assembly/object.
+    # Promote mesh into world space by applying ancestor transforms (root -> leaf).
+    parent_chain: List[Dict[str, Any]] = []
+    pn = obj.meta.get("parent")
+    while pn and str(pn) in obn:
+        pobj = obn[str(pn)]
+        tr = pobj.meta.get("transform")
+        if isinstance(tr, dict):
+            parent_chain.append(tr)
+        pn = pobj.meta.get("parent")
+    for tr in reversed(parent_chain):
+        out = apply_transform(out, tr)
 
     for op in obj.ops:
         name = op.get("op")
@@ -1860,11 +2211,51 @@ def apply_ops(mesh: Mesh, obj: LiveObject) -> Mesh:
             out = op_mirror(out, str(op.get("axis","x")))
         elif name == "array":
             offset = op.get("offset", [1,0,0])
+            if isinstance(offset, str):
+                offset = eval_mixed_value(offset, env, obn)
             out = op_array(out, int(op.get("count",2)), tuple(map(float, offset)))
+        elif name == "radial_array":
+            out = op_radial_array(
+                out,
+                int(op.get("count", 6)),
+                str(op.get("axis", "z")),
+                float(op.get("radius", 1.0))
+            )
         elif name == "tread":
             out = op_tread(out, op)
         elif name == "bevel":
-            # placeholder
+            amt = float(op.get("amount", 0.05))
+            seg = max(1, int(op.get("segments", 1)))
+            out = op_subdivide(out, min(2, seg))
+            out = op_smooth(out, max(1, seg), min(0.8, 0.2 + amt))
+        elif name == "subdivide":
+            out = op_subdivide(out, int(op.get("level", 1)))
+        elif name == "taper":
+            out = op_taper(out, str(op.get("axis", "z")), float(op.get("amount", 0.0)))
+        elif name == "twist":
+            out = op_twist(out, str(op.get("axis", "z")), float(op.get("angle", 0.0)))
+        elif name == "bend":
+            out = op_bend(out, str(op.get("axis", "x")), float(op.get("angle", 0.0)))
+        elif name == "simplify":
+            out = op_simplify(out, float(op.get("ratio", 1.0)))
+        elif name == "remesh":
+            res = float(op.get("resolution", 0.25))
+            lvl = 2 if res <= 0.08 else (1 if res <= 0.2 else 0)
+            if lvl > 0:
+                out = op_subdivide(out, lvl)
+        elif name == "trace_paths":
+            out = op_trace_paths(out, int(op.get("sample_every", 1)))
+        elif name == "sdf_tubes":
+            out = op_sdf_tubes(
+                out,
+                float(op.get("radius", 0.03)),
+                int(op.get("sample_every", 1)),
+            )
+        elif name == "voxelize":
+            out = op_voxelize(out, float(op.get("resolution", 0.1)))
+        elif name == "mesh_from_volume":
+            # In this stdlib executor, volume conversion is approximated by keeping
+            # current mesh output from previous ops (e.g., voxelize/sdf_tubes).
             pass
     return out
 
@@ -1986,6 +2377,22 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
             int(params.get("segments", 16)),
             base_aligned=base_aligned,
         )
+    if typ == "cone":
+        axis = str(params.get("axis", "z")).lower()
+        height = float(params.get("height", params.get("depth", 1.0)))
+        return cone_mesh(
+            axis,
+            center,
+            float(params.get("radius", 0.5)),
+            height,
+            int(params.get("segments", 16)),
+        )
+    if typ == "sphere":
+        return sphere_mesh(
+            center,
+            float(params.get("radius", 0.5)),
+            int(params.get("segments", 20)),
+        )
     if typ in {"surface_grid", "heightfield"}:
         return surface_grid(float(params.get("width",10)), float(params.get("depth",10)), int(params.get("resolution",20)), center)
 
@@ -2004,7 +2411,60 @@ def generate_sdf(obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         return obj.mesh.copy()
     bounds = params.get("bounds", [[-2,-2,-2],[2,2,2]])
     resolution = float(params.get("resolution", 0.15))
-    return sdf_to_voxel_mesh(expr, bounds, resolution)
+    method = "voxel"
+    for cmd in resolved_ops:
+        if str(cmd.get("cmd", "")).lower() == "mesh_from_sdf":
+            method = str(cmd.get("method", method)).lower()
+            if cmd.get("resolution") is not None:
+                resolution = float(cmd["resolution"])
+    base = sdf_to_voxel_mesh(expr, bounds, resolution)
+    if method in {"marching_cubes", "marching", "mc"}:
+        # Lightweight marching-cubes approximation for stdlib executor:
+        # densify + smooth voxel shell to remove blockiness.
+        base = weld_vertices(base, epsilon=resolution * 0.2)
+        base = op_subdivide(base, 1)
+        base = weld_vertices(base, epsilon=resolution * 0.1)
+        base = op_smooth(base, iterations=2, strength=0.45)
+        base = weld_vertices(base, epsilon=resolution * 0.08)
+    return base
+
+
+def normalize_misplaced_assembly_anchors(scene: Scene) -> None:
+    """Heuristic repair for malformed scenes where an assembly's anchors block is emitted on a child."""
+    by_name = {o.name: o for o in scene.objects}
+    children_by_parent: Dict[str, List[LiveObject]] = {}
+    for o in scene.objects:
+        p = o.meta.get("parent")
+        if p:
+            children_by_parent.setdefault(str(p), []).append(o)
+
+    for asm in scene.objects:
+        if str(asm.meta.get("source", "")) != "assembly":
+            continue
+        asm_name = asm.name
+        asm_anchors = dict(asm.meta.get("anchors") or {})
+        required: set[str] = set()
+        for ch in children_by_parent.get(asm_name, []):
+            spec = parse_attach_spec(ch.meta.get("attach"))
+            if spec and spec[1] == asm_name:
+                required.add(spec[2])
+        missing = [a for a in required if a not in asm_anchors]
+        if not missing:
+            continue
+        for ch in children_by_parent.get(asm_name, []):
+            ch_anchors = ch.meta.get("anchors") or {}
+            if not isinstance(ch_anchors, dict):
+                continue
+            moved_any = False
+            for key in list(ch_anchors.keys()):
+                if key in missing and key not in asm_anchors:
+                    asm_anchors[key] = ch_anchors[key]
+                    ch_anchors.pop(key, None)
+                    moved_any = True
+            if moved_any:
+                ch.meta["anchors"] = ch_anchors
+        if asm_anchors:
+            asm.meta["anchors"] = asm_anchors
 
 
 def generate_simulation(obj: LiveObject) -> Mesh:
@@ -2023,6 +2483,7 @@ def generate_simulation(obj: LiveObject) -> Mesh:
 
 def execute_scene(scene: Scene) -> Scene:
     obn: Dict[str, LiveObject] = {o.name: o for o in scene.objects}
+    normalize_misplaced_assembly_anchors(scene)
     order = topological_objects(scene.objects, obn)
     for obj in order:
         if str(obj.meta.get("source", "")) == "assembly":
@@ -2051,7 +2512,7 @@ def execute_scene(scene: Scene) -> Scene:
         else:
             base = obj.mesh.copy()
 
-        obj.mesh = apply_ops(base, obj)
+        obj.mesh = apply_ops(base, obj, obn)
 
     apply_attach_constraints(scene)
 
