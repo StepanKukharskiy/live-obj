@@ -1,8 +1,8 @@
 FROM node:18-slim
 
-# Install Python 3.12
+# Install Python 3.11
 RUN apt-get update \
-    && apt-get install -y python3.12 \
+    && apt-get install -y python3.11 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
