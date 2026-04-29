@@ -2,6 +2,7 @@
 	type MetaObject = {
 		id: string;
 		params: Record<string, string>;
+		paramSource: 'params' | 'sdf_mesh_from_sdf';
 	};
 
 	let {
@@ -52,25 +53,52 @@
 		const lines = text.split(/\r?\n/);
 		const objects: MetaObject[] = [];
 		let activeObject: string | null = null;
+		let activeSource: string | null = null;
+		let activeParams: Record<string, string> | null = null;
+		const flushActive = () => {
+			if (!activeObject || !activeParams || Object.keys(activeParams).length === 0) return;
+			objects.push({
+				id: activeObject,
+				params: activeParams,
+				paramSource: activeSource === 'sdf_mesh_from_sdf' ? 'sdf_mesh_from_sdf' : 'params'
+			});
+		};
 		for (let i = 0; i < lines.length; i += 1) {
 			const line = lines[i].trim();
 			const objectMatch = line.match(/^o\s+(.+)$/);
 			if (objectMatch) {
+				flushActive();
 				activeObject = objectMatch[1].trim();
+				activeSource = null;
+				activeParams = null;
 				continue;
 			}
 			if (!activeObject) continue;
 			const paramsMatch = line.match(/^#@params:\s*(.+)$/);
-			if (!paramsMatch) continue;
-			objects.push({
-				id: activeObject,
-				params: parseParams(paramsMatch[1])
-			});
+			if (paramsMatch) {
+				activeSource = 'params';
+				activeParams = parseParams(paramsMatch[1]);
+				continue;
+			}
+			if (!activeParams) {
+				const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
+				if (sdfMeshMatch) {
+					activeSource = 'sdf_mesh_from_sdf';
+					activeParams = parseParams(sdfMeshMatch[1]);
+				}
+			}
 		}
+		flushActive();
 		return objects;
 	};
 
-	const rewriteParamInLiveObj = (text: string, objectId: string, key: string, value: string) => {
+	const rewriteParamInLiveObj = (
+		text: string,
+		objectId: string,
+		key: string,
+		value: string,
+		source: MetaObject['paramSource']
+	) => {
 		const lines = text.split(/\r?\n/);
 		let activeObject: string | null = null;
 		for (let i = 0; i < lines.length; i += 1) {
@@ -82,11 +110,19 @@
 				continue;
 			}
 			if (activeObject !== objectId) continue;
-			const paramsMatch = trimmed.match(/^#@params:\s*(.+)$/);
-			if (!paramsMatch) continue;
-			const parsed = parseParams(paramsMatch[1]);
+			if (source === 'params') {
+				const paramsMatch = trimmed.match(/^#@params:\s*(.+)$/);
+				if (!paramsMatch) continue;
+				const parsed = parseParams(paramsMatch[1]);
+				parsed[key] = value.trim();
+				lines[i] = `#@params: ${serializeParams(parsed)}`;
+				break;
+			}
+			const sdfMeshMatch = trimmed.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
+			if (!sdfMeshMatch) continue;
+			const parsed = parseParams(sdfMeshMatch[1]);
 			parsed[key] = value.trim();
-			lines[i] = `#@params: ${serializeParams(parsed)}`;
+			lines[i] = `#@ - mesh_from_sdf ${serializeParams(parsed)}`;
 			break;
 		}
 		return lines.join('\n');
@@ -124,7 +160,13 @@
 	function commitValue(key: string, fallback: string) {
 		if (!selectedMetaObject) return;
 		const nextValue = fieldValue(key, fallback);
-		const updated = rewriteParamInLiveObj(liveObjText, selectedMetaObject.id, key, nextValue);
+		const updated = rewriteParamInLiveObj(
+			liveObjText,
+			selectedMetaObject.id,
+			key,
+			nextValue,
+			selectedMetaObject.paramSource
+		);
 		onLiveObjMetadataChange?.(updated);
 	}
 </script>
