@@ -856,6 +856,44 @@ def surface_grid(width: float, depth: float, resolution: int, center: Vec3 = (0,
     return Mesh(verts, faces)
 
 
+def sphere_mesh(center: Vec3, radius: float, segments: int = 16) -> Mesh:
+    cx, cy, cz = center
+    lon = max(8, int(segments))
+    lat = max(6, lon // 2)
+    verts: List[Vec3] = []
+    faces: List[List[int]] = []
+
+    # north pole
+    verts.append((cx, cy, cz + radius))
+    rings: List[List[int]] = []
+    for iy in range(1, lat):
+        phi = math.pi * iy / lat
+        z = cz + radius * math.cos(phi)
+        rr = radius * math.sin(phi)
+        ring: List[int] = []
+        for ix in range(lon):
+            th = 2 * math.pi * ix / lon
+            verts.append((cx + rr * math.cos(th), cy + rr * math.sin(th), z))
+            ring.append(len(verts))
+        rings.append(ring)
+    # south pole
+    verts.append((cx, cy, cz - radius))
+    south = len(verts)
+
+    if rings:
+        first = rings[0]
+        for i in range(lon):
+            faces.append([1, first[i], first[(i + 1) % lon]])
+        for r in range(len(rings) - 1):
+            a, b = rings[r], rings[r + 1]
+            for i in range(lon):
+                faces.append([a[i], a[(i + 1) % lon], b[(i + 1) % lon], b[i]])
+        last = rings[-1]
+        for i in range(lon):
+            faces.append([last[(i + 1) % lon], last[i], south])
+    return Mesh(verts, faces)
+
+
 # ----------------------------
 # SDF
 # ----------------------------
@@ -2074,6 +2112,12 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
             depth,
             int(params.get("segments", 16)),
             base_aligned=base_aligned,
+        )
+    if typ == "sphere":
+        return sphere_mesh(
+            center,
+            float(params.get("radius", 0.5)),
+            int(params.get("segments", 20)),
         )
     if typ in {"surface_grid", "heightfield"}:
         return surface_grid(float(params.get("width",10)), float(params.get("depth",10)), int(params.get("resolution",20)), center)
