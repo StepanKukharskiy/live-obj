@@ -239,6 +239,13 @@
 			content: m.historyContent ?? m.content,
 			...(m.imageDataUrl ? { imageUrl: m.imageDataUrl } : {})
 		}));
+		const latestHistoryContent = [...priorMsgs]
+			.reverse()
+			.find((m) => m.role === 'assistant' && (m.historyContent ?? '').trim())?.historyContent;
+		const currentLiveObj = liveObjText.trim();
+		if (currentLiveObj && currentLiveObj !== (latestHistoryContent ?? '').trim()) {
+			history.push({ role: 'assistant', content: currentLiveObj });
+		}
 
 		try {
 			const res = await fetch('/api/live-obj', {
