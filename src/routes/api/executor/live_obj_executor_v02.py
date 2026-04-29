@@ -679,7 +679,18 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         if block in {"ops", "sdf"} and body.startswith("-"):
             parsed = parse_tokens(body)
             if parsed:
-                (ops if block == "ops" else sdf_ops).append(parsed)
+                if block == "sdf":
+                    sdf_ops.append(parsed)
+                    if parsed.get("cmd") == "mesh_from_sdf":
+                        p = dict(meta.get("params", {}) or {})
+                        if parsed.get("resolution") is not None and p.get("resolution") is None:
+                            p["resolution"] = parsed.get("resolution")
+                        if parsed.get("method") is not None and p.get("method") is None:
+                            p["method"] = parsed.get("method")
+                        if p:
+                            meta["params"] = p
+                else:
+                    ops.append(parsed)
             continue
 
         block = None
@@ -1035,6 +1046,11 @@ def build_sdf(sdf_ops: List[Dict[str, Any]]) -> Optional[SDFExpr]:
             elif cmd.get("id_a") is not None and cmd.get("id_b") is not None:
                 a_id, b_id = str(cmd.get("id_a")), str(cmd.get("id_b"))
             if a_id and b_id and a_id in registry and b_id in registry:
+                if c == "smooth_union" and a_id == b_id:
+                    # Smooth-unioning an SDF with itself is a no-op.
+                    current = registry[a_id]
+                    registry["result"] = current
+                    continue
                 a, b = registry[a_id], registry[b_id]
                 if c == "union":
                     current = SDFUnion(a, b)
