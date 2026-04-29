@@ -2285,7 +2285,57 @@ def generate_sdf(obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         return obj.mesh.copy()
     bounds = params.get("bounds", [[-2,-2,-2],[2,2,2]])
     resolution = float(params.get("resolution", 0.15))
-    return sdf_to_voxel_mesh(expr, bounds, resolution)
+    method = "voxel"
+    for cmd in resolved_ops:
+        if str(cmd.get("cmd", "")).lower() == "mesh_from_sdf":
+            method = str(cmd.get("method", method)).lower()
+            if cmd.get("resolution") is not None:
+                resolution = float(cmd["resolution"])
+    base = sdf_to_voxel_mesh(expr, bounds, resolution)
+    if method in {"marching_cubes", "marching", "mc"}:
+        # Lightweight marching-cubes approximation for stdlib executor:
+        # densify + smooth voxel shell to remove blockiness.
+        base = op_subdivide(base, 1)
+        base = op_smooth(base, iterations=2, strength=0.45)
+    return base
+
+
+def normalize_misplaced_assembly_anchors(scene: Scene) -> None:
+    """Heuristic repair for malformed scenes where an assembly's anchors block is emitted on a child."""
+    by_name = {o.name: o for o in scene.objects}
+    children_by_parent: Dict[str, List[LiveObject]] = {}
+    for o in scene.objects:
+        p = o.meta.get("parent")
+        if p:
+            children_by_parent.setdefault(str(p), []).append(o)
+
+    for asm in scene.objects:
+        if str(asm.meta.get("source", "")) != "assembly":
+            continue
+        asm_name = asm.name
+        asm_anchors = dict(asm.meta.get("anchors") or {})
+        required: set[str] = set()
+        for ch in children_by_parent.get(asm_name, []):
+            spec = parse_attach_spec(ch.meta.get("attach"))
+            if spec and spec[1] == asm_name:
+                required.add(spec[2])
+        missing = [a for a in required if a not in asm_anchors]
+        if not missing:
+            continue
+        for ch in children_by_parent.get(asm_name, []):
+            ch_anchors = ch.meta.get("anchors") or {}
+            if not isinstance(ch_anchors, dict):
+                continue
+            moved_any = False
+            for key in list(ch_anchors.keys()):
+                if key in missing and key not in asm_anchors:
+                    asm_anchors[key] = ch_anchors[key]
+                    ch_anchors.pop(key, None)
+                    moved_any = True
+            if moved_any:
+                ch.meta["anchors"] = ch_anchors
+        if asm_anchors:
+            asm.meta["anchors"] = asm_anchors
 
 
 def generate_simulation(obj: LiveObject) -> Mesh:
@@ -2304,6 +2354,7 @@ def generate_simulation(obj: LiveObject) -> Mesh:
 
 def execute_scene(scene: Scene) -> Scene:
     obn: Dict[str, LiveObject] = {o.name: o for o in scene.objects}
+    normalize_misplaced_assembly_anchors(scene)
     order = topological_objects(scene.objects, obn)
     for obj in order:
         if str(obj.meta.get("source", "")) == "assembly":
