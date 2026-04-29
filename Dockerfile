@@ -10,14 +10,15 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install Node dependencies
-RUN npm install
+# Install dependencies and prepare
+RUN npm ci
+RUN npm run prepare
 
 # Copy application code
 COPY . .
 
-# Build (if needed)
-RUN npm run build || true
+# Build the application
+RUN npm run build
 
 # Set the start command
 CMD ["node", "build/index.js"]
