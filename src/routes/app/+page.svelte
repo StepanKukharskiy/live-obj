@@ -88,8 +88,17 @@
 				continue;
 			}
 			if (!currentObject) continue;
-			const materialMatch = line.match(/^\s*#@\s*-\s*material\s+name=([a-zA-Z0-9_\-.]+)/);
-			if (materialMatch) byObject.set(currentObject, materialMatch[1]);
+			const opListMaterialMatch = line.match(
+				/^\s*#@\s*-\s*material\s+name=([a-zA-Z0-9_\-.]+)\s*$/
+			);
+			if (opListMaterialMatch) {
+				byObject.set(currentObject, opListMaterialMatch[1]);
+				continue;
+			}
+			const inlineMaterialMatch = line.match(
+				/^\s*#@material:\s*(?:name=)?([a-zA-Z0-9_\-.]+)\s*$/
+			);
+			if (inlineMaterialMatch) byObject.set(currentObject, inlineMaterialMatch[1]);
 		}
 		return byObject;
 	}
