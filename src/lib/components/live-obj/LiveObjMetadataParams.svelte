@@ -95,7 +95,10 @@
 			}
 				const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
 				if (sdfMeshMatch) {
-					activeSdfMeshParams = parseParams(sdfMeshMatch[1]);
+					activeSdfMeshParams = {
+						...(activeSdfMeshParams ?? {}),
+						...parseParams(sdfMeshMatch[1])
+					};
 					continue;
 				}
 				const sdfGenericMatch = line.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
