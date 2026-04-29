@@ -1775,6 +1775,44 @@ def op_simplify(mesh: Mesh, ratio: float = 1.0) -> Mesh:
     return out
 
 
+def op_voxelize(mesh: Mesh, resolution: float = 0.1) -> Mesh:
+    out = mesh.copy()
+    cell = max(1e-4, float(resolution))
+    out.vertices = [
+        (round(x / cell) * cell, round(y / cell) * cell, round(z / cell) * cell)
+        for x, y, z in out.vertices
+    ]
+    return out
+
+
+def _sample_mesh_path_points(mesh: Mesh, sample_every: int = 1) -> List[Vec3]:
+    if not mesh.vertices:
+        return []
+    step = max(1, int(sample_every))
+    return [mesh.vertices[i] for i in range(0, len(mesh.vertices), step)]
+
+
+def op_trace_paths(mesh: Mesh, sample_every: int = 1) -> Mesh:
+    pts = _sample_mesh_path_points(mesh, sample_every)
+    if len(pts) < 2:
+        return mesh.copy()
+    out = Mesh()
+    for i in range(len(pts) - 1):
+        out.extend(tube_between(pts[i], pts[i + 1], 0.01, 6))
+    return out
+
+
+def op_sdf_tubes(mesh: Mesh, radius: float = 0.03, sample_every: int = 1) -> Mesh:
+    pts = _sample_mesh_path_points(mesh, sample_every)
+    if len(pts) < 2:
+        return mesh.copy()
+    out = Mesh()
+    seg = 8 if radius <= 0.05 else 10
+    for i in range(len(pts) - 1):
+        out.extend(tube_between(pts[i], pts[i + 1], float(radius), seg))
+    return out
+
+
 def rotate_mesh_z(mesh: Mesh, rad: float) -> Mesh:
     """CCW rotation in XY (standard right-handed Z-up)."""
     if abs(rad) < 1e-12:
@@ -2089,6 +2127,20 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             lvl = 2 if res <= 0.08 else (1 if res <= 0.2 else 0)
             if lvl > 0:
                 out = op_subdivide(out, lvl)
+        elif name == "trace_paths":
+            out = op_trace_paths(out, int(op.get("sample_every", 1)))
+        elif name == "sdf_tubes":
+            out = op_sdf_tubes(
+                out,
+                float(op.get("radius", 0.03)),
+                int(op.get("sample_every", 1)),
+            )
+        elif name == "voxelize":
+            out = op_voxelize(out, float(op.get("resolution", 0.1)))
+        elif name == "mesh_from_volume":
+            # In this stdlib executor, volume conversion is approximated by keeping
+            # current mesh output from previous ops (e.g., voxelize/sdf_tubes).
+            pass
     return out
 
 
