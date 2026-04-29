@@ -851,6 +851,42 @@ def cylinder_mesh(
     return Mesh(verts, faces)
 
 
+def cone_mesh(axis: str, center: Vec3, radius: float, height: float, segments: int = 16) -> Mesh:
+    cx, cy, cz = center
+    axis = axis.lower()
+    h0, h1 = -height / 2, height / 2
+    verts: List[Vec3] = []
+    faces: List[List[int]] = []
+
+    def ring_pt(a: float) -> Vec3:
+        ca, sa = math.cos(a), math.sin(a)
+        if axis == "x":
+            return (cx + h0, cy + ca * radius, cz + sa * radius)
+        if axis == "y":
+            return (cx + ca * radius, cy + h0, cz + sa * radius)
+        return (cx + ca * radius, cy + sa * radius, cz + h0)
+
+    if axis == "x":
+        apex = (cx + h1, cy, cz)
+    elif axis == "y":
+        apex = (cx, cy + h1, cz)
+    else:
+        apex = (cx, cy, cz + h1)
+
+    ring: List[int] = []
+    for i in range(max(3, int(segments))):
+        verts.append(ring_pt(2 * math.pi * i / max(3, int(segments))))
+        ring.append(len(verts))
+    verts.append(apex)
+    apex_idx = len(verts)
+
+    faces.append(list(reversed(ring)))  # base cap
+    n = len(ring)
+    for i in range(n):
+        faces.append([ring[i], ring[(i + 1) % n], apex_idx])
+    return Mesh(verts, faces)
+
+
 def surface_grid(width: float, depth: float, resolution: int, center: Vec3 = (0,0,0)) -> Mesh:
     cx, cy, cz = center
     n = max(2, int(resolution))
@@ -2333,6 +2369,16 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
             depth,
             int(params.get("segments", 16)),
             base_aligned=base_aligned,
+        )
+    if typ == "cone":
+        axis = str(params.get("axis", "z")).lower()
+        height = float(params.get("height", params.get("depth", 1.0)))
+        return cone_mesh(
+            axis,
+            center,
+            float(params.get("radius", 0.5)),
+            height,
+            int(params.get("segments", 16)),
         )
     if typ == "sphere":
         return sphere_mesh(
