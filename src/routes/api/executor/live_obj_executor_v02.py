@@ -1850,6 +1850,30 @@ def op_sdf_tubes(mesh: Mesh, radius: float = 0.03, sample_every: int = 1) -> Mes
     return out
 
 
+def weld_vertices(mesh: Mesh, epsilon: float = 1e-6) -> Mesh:
+    if not mesh.vertices:
+        return mesh.copy()
+    out = Mesh()
+    key_to_new: Dict[Tuple[int, int, int], int] = {}
+    old_to_new: Dict[int, int] = {}
+    inv = 1.0 / max(1e-9, epsilon)
+    for i, (x, y, z) in enumerate(mesh.vertices, start=1):
+        key = (int(round(x * inv)), int(round(y * inv)), int(round(z * inv)))
+        idx = key_to_new.get(key)
+        if idx is None:
+            out.vertices.append((x, y, z))
+            idx = len(out.vertices)
+            key_to_new[key] = idx
+        old_to_new[i] = idx
+
+    for f in mesh.faces:
+        nf = [old_to_new.get(v, v) for v in f]
+        # drop collapsed/degenerate faces after weld
+        if len(set(nf)) >= 3:
+            out.faces.append(nf)
+    return out
+
+
 def rotate_mesh_z(mesh: Mesh, rad: float) -> Mesh:
     """CCW rotation in XY (standard right-handed Z-up)."""
     if abs(rad) < 1e-12:
@@ -2344,8 +2368,11 @@ def generate_sdf(obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     if method in {"marching_cubes", "marching", "mc"}:
         # Lightweight marching-cubes approximation for stdlib executor:
         # densify + smooth voxel shell to remove blockiness.
+        base = weld_vertices(base, epsilon=resolution * 0.2)
         base = op_subdivide(base, 1)
+        base = weld_vertices(base, epsilon=resolution * 0.1)
         base = op_smooth(base, iterations=2, strength=0.45)
+        base = weld_vertices(base, epsilon=resolution * 0.08)
     return base
 
 
