@@ -600,7 +600,26 @@ def parse_tokens(s: str) -> Dict[str, Any]:
     s = s.strip()
     if s.startswith("-"):
         s = s[1:].strip()
-    tokens = s.split()
+    tokens: List[str] = []
+    cur: List[str] = []
+    depth = 0
+    for ch in s:
+        if ch == "[":
+            depth += 1
+            cur.append(ch)
+            continue
+        if ch == "]":
+            depth = max(0, depth - 1)
+            cur.append(ch)
+            continue
+        if ch.isspace() and depth == 0:
+            if cur:
+                tokens.append("".join(cur))
+                cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        tokens.append("".join(cur))
     if not tokens:
         return {}
     d: Dict[str, Any] = {"cmd": tokens[0], "op": tokens[0]}
@@ -1613,6 +1632,25 @@ def op_array(mesh: Mesh, count: int, offset: Vec3) -> Mesh:
     return out
 
 
+def op_radial_array(mesh: Mesh, count: int, axis: str = "z", radius: float = 0.0) -> Mesh:
+    out = Mesh()
+    n = max(1, int(count))
+    ax = str(axis).lower()
+    r = float(radius)
+    for i in range(n):
+        th = 2 * math.pi * i / n
+        if ax == "z":
+            dx, dy, dz = r * math.cos(th), r * math.sin(th), 0.0
+        elif ax == "y":
+            dx, dy, dz = r * math.cos(th), 0.0, r * math.sin(th)
+        else:
+            dx, dy, dz = 0.0, r * math.cos(th), r * math.sin(th)
+        m = mesh.copy()
+        m.vertices = [(x + dx, y + dy, z + dz) for x, y, z in m.vertices]
+        out.extend(m)
+    return out
+
+
 def rotate_mesh_z(mesh: Mesh, rad: float) -> Mesh:
     """CCW rotation in XY (standard right-handed Z-up)."""
     if abs(rad) < 1e-12:
@@ -1845,8 +1883,43 @@ def op_tread(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
     return out
 
 
-def apply_ops(mesh: Mesh, obj: LiveObject) -> Mesh:
+def op_subdivide(mesh: Mesh, level: int = 1) -> Mesh:
+    out = mesh.copy()
+    for _ in range(max(0, int(level))):
+        edge_mid: Dict[Tuple[int, int], int] = {}
+        new_vertices = list(out.vertices)
+        new_faces: List[List[int]] = []
+
+        def midpoint_index(a: int, b: int) -> int:
+            key = (a, b) if a < b else (b, a)
+            if key in edge_mid:
+                return edge_mid[key]
+            ax, ay, az = new_vertices[a - 1]
+            bx, by, bz = new_vertices[b - 1]
+            new_vertices.append(((ax + bx) * 0.5, (ay + by) * 0.5, (az + bz) * 0.5))
+            idx = len(new_vertices)
+            edge_mid[key] = idx
+            return idx
+
+        for face in out.faces:
+            if len(face) < 3:
+                continue
+            # fan triangulate for stability
+            tris = [[face[0], face[i], face[i + 1]] for i in range(1, len(face) - 1)]
+            for a, b, c in tris:
+                ab = midpoint_index(a, b)
+                bc = midpoint_index(b, c)
+                ca = midpoint_index(c, a)
+                new_faces.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]])
+
+        out.vertices = new_vertices
+        out.faces = new_faces
+    return out
+
+
+def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     out = mesh
+    env = get_effective_params(obj, obn)
     if isinstance(obj.meta.get("transform"), dict):
         out = apply_transform(out, obj.meta["transform"])
 
@@ -1860,12 +1933,23 @@ def apply_ops(mesh: Mesh, obj: LiveObject) -> Mesh:
             out = op_mirror(out, str(op.get("axis","x")))
         elif name == "array":
             offset = op.get("offset", [1,0,0])
+            if isinstance(offset, str):
+                offset = eval_mixed_value(offset, env, obn)
             out = op_array(out, int(op.get("count",2)), tuple(map(float, offset)))
+        elif name == "radial_array":
+            out = op_radial_array(
+                out,
+                int(op.get("count", 6)),
+                str(op.get("axis", "z")),
+                float(op.get("radius", 1.0))
+            )
         elif name == "tread":
             out = op_tread(out, op)
         elif name == "bevel":
             # placeholder
             pass
+        elif name == "subdivide":
+            out = op_subdivide(out, int(op.get("level", 1)))
     return out
 
 
@@ -2051,7 +2135,7 @@ def execute_scene(scene: Scene) -> Scene:
         else:
             base = obj.mesh.copy()
 
-        obj.mesh = apply_ops(base, obj)
+        obj.mesh = apply_ops(base, obj, obn)
 
     apply_attach_constraints(scene)
 
