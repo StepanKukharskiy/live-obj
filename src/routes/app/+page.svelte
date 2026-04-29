@@ -5,7 +5,12 @@
 	import LiveObjSidePanel from '$lib/components/live-obj/LiveObjSidePanel.svelte';
 	import type { SourceTab } from '$lib/components/live-obj/LiveObjOutputTab.svelte';
 
-	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
+	type ChatMsg = {
+		role: 'user' | 'assistant';
+		content: string;
+		imageDataUrl?: string;
+		historyContent?: string;
+	};
 
 	let showPanel = $state(true);
 	let msgs = $state<ChatMsg[]>([]);
@@ -231,7 +236,7 @@
 		msgs = [...priorMsgs, userLine];
 		const history = priorMsgs.map((m) => ({
 			role: m.role,
-			content: m.content,
+			content: m.historyContent ?? m.content,
 			...(m.imageDataUrl ? { imageUrl: m.imageDataUrl } : {})
 		}));
 
@@ -272,7 +277,8 @@
 					role: 'assistant',
 					content: payload.executorWarning
 						? 'Received model output. Executor had issues; check status and the Adjust tab.'
-						: 'Updated scene applied. You can keep chatting to add/remove/modify objects.'
+						: 'Updated scene applied. You can keep chatting to add/remove/modify objects.',
+					historyContent: payload.liveObj ?? payload.executedObj ?? ''
 				}
 			];
 		} catch (e) {
