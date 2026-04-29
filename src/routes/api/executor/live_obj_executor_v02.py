@@ -2084,6 +2084,18 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     env = get_effective_params(obj, obn)
     if isinstance(obj.meta.get("transform"), dict):
         out = apply_transform(out, obj.meta["transform"])
+    # Child object transforms are local to their parent assembly/object.
+    # Promote mesh into world space by applying ancestor transforms (root -> leaf).
+    parent_chain: List[Dict[str, Any]] = []
+    pn = obj.meta.get("parent")
+    while pn and str(pn) in obn:
+        pobj = obn[str(pn)]
+        tr = pobj.meta.get("transform")
+        if isinstance(tr, dict):
+            parent_chain.append(tr)
+        pn = pobj.meta.get("parent")
+    for tr in reversed(parent_chain):
+        out = apply_transform(out, tr)
 
     for op in obj.ops:
         name = op.get("op")
