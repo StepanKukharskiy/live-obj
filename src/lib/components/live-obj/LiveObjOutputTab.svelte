@@ -29,6 +29,7 @@
 		'# Send a prompt in Chat.\n# Live OBJ (model output), raw LLM text, expanded v/f output, or metadata-only view will appear here.';
 
 	const meshBasis = $derived(executedObjText || liveObjText);
+	let showMeshLines = $state(true);
 
 	let editorValue = $state('');
 
@@ -36,10 +37,17 @@
 		const metaBody = meshBasis.trim()
 			? stripLiveObjMeshLines(meshBasis)
 			: '';
-		if (sourceTab === 'live') return liveObjText.trim() ? liveObjText : emptySourceHint;
-		if (sourceTab === 'raw') return rawLlmText.trim() ? rawLlmText : emptySourceHint;
+		if (sourceTab === 'live') {
+			const liveBody = liveObjText.trim() ? liveObjText : emptySourceHint;
+			return showMeshLines ? liveBody : stripLiveObjMeshLines(liveBody) || emptySourceHint;
+		}
+		if (sourceTab === 'raw') {
+			const rawBody = rawLlmText.trim() ? rawLlmText : emptySourceHint;
+			return showMeshLines ? rawBody : stripLiveObjMeshLines(rawBody) || emptySourceHint;
+		}
 		if (sourceTab === 'meta') return metaBody.trim() ? metaBody : emptySourceHint;
-		return executedObjText.trim() ? executedObjText : emptySourceHint;
+		const expanded = executedObjText.trim() ? executedObjText : emptySourceHint;
+		return showMeshLines ? expanded : stripLiveObjMeshLines(expanded) || emptySourceHint;
 	}
 
 	/** Pre-DOM so `bind:value` sees seeded text on Monaco’s first bind (avoids empty model + missed sync). */
@@ -49,6 +57,7 @@
 		void liveObjText;
 		void rawLlmText;
 		void executedObjText;
+		void showMeshLines;
 		editorValue = seedEditor();
 	});
 
@@ -141,6 +150,17 @@
 				onApply={() => void handleApply()}
 			>
 				{#snippet toolbarExtra()}
+					<button
+						type="button"
+						class="planner-monaco-action-btn"
+						disabled={sourceTab === 'meta'}
+						title={showMeshLines ? 'Hide v/f mesh lines in editor' : 'Show v/f mesh lines in editor'}
+						onclick={() => {
+							showMeshLines = !showMeshLines;
+						}}
+					>
+						{showMeshLines ? 'Hide v/f' : 'Show v/f'}
+					</button>
 					<button
 						type="button"
 						class="planner-monaco-action-btn"
