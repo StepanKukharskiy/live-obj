@@ -23,8 +23,7 @@
 		onApplySource?: (liveObjOrSceneText: string) => void | Promise<void>;
 	} = $props();
 
-	const emptySourceHint =
-		'# Send a prompt in Chat.\n# Live OBJ (model output), raw LLM text, expanded v/f output, or metadata-only view will appear here.';
+	const emptySourceHint = '';
 
 	const meshBasis = $derived(executedObjText || liveObjText);
 	let showMeshLines = $state(true);
@@ -68,8 +67,6 @@
 	function buildPayloadForExecute(): string | null {
 		let t = editorValue;
 		if (!t.trim()) return null;
-		if (t.trim() === emptySourceHint.trim()) return null;
-
 		if (sourceTab === 'meta') return null;
 
 		if (sourceTab === 'raw' || sourceTab === 'live') {
@@ -94,7 +91,7 @@
 	<div class="live-obj-source-editor planner-output-meta">
 		{#key `${sceneEpoch}-${sourceTab}`}
 			<MonacoEditor
-				language="plaintext"
+					language="obj"
 				theme="vs"
 				readOnly={!editable}
 				viewOnly={true}
