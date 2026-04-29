@@ -2159,14 +2159,11 @@ def serialize_scene(scene: Scene) -> str:
         for l in obj.raw_nonlive_lines:
             if l.strip():
                 lines.append(l)
-        source = str(obj.meta.get("source", "llm_mesh")).strip().lower()
-        emit_mesh = source in {"", "llm_mesh"}
-        if emit_mesh:
-            for x,y,z in obj.mesh.vertices:
-                lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")
-            for face in obj.mesh.faces:
-                lines.append("f " + " ".join(str(global_index+i-1) for i in face))
-            global_index += len(obj.mesh.vertices)
+        for x,y,z in obj.mesh.vertices:
+            lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")
+        for face in obj.mesh.faces:
+            lines.append("f " + " ".join(str(global_index+i-1) for i in face))
+        global_index += len(obj.mesh.vertices)
 
     return "\n".join(lines) + "\n"
 
