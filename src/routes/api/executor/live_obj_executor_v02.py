@@ -1590,6 +1590,11 @@ def op_displace(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
 
 def op_smooth(mesh: Mesh, iterations: int = 1, strength: float = 0.5) -> Mesh:
     out = mesh.copy()
+    # Pure Laplacian smoothing on very coarse primitives (e.g., an 8-vertex box)
+    # mostly shrinks corners toward center but keeps the same faceted topology.
+    # Add one adaptive subdivision pass so smoothing can actually round the shape.
+    if len(out.vertices) <= 16 and len(out.faces) <= 12 and iterations > 0:
+        out = op_subdivide(out, 1)
     for _ in range(iterations):
         nbr = {i: set() for i in range(1, len(out.vertices)+1)}
         for face in out.faces:
