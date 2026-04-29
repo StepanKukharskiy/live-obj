@@ -2,7 +2,7 @@
 	type MetaObject = {
 		id: string;
 		params: Record<string, string>;
-		paramSources: Record<string, 'params' | 'sdf_mesh_from_sdf'>;
+		paramSources: Record<string, string>;
 	};
 
 	let {
@@ -62,8 +62,14 @@
 				...(activeParams ?? {})
 			};
 			if (Object.keys(merged).length === 0) return;
-			const sources: Record<string, 'params' | 'sdf_mesh_from_sdf'> = {};
-			for (const key of Object.keys(activeSdfMeshParams ?? {})) sources[key] = 'sdf_mesh_from_sdf';
+			const sources: Record<string, string> = {};
+			for (const key of Object.keys(activeSdfMeshParams ?? {})) {
+				if (key.includes('.')) {
+					sources[key] = `sdf_op:${key.split('.', 1)[0]}`;
+				} else {
+					sources[key] = 'sdf_mesh_from_sdf';
+				}
+			}
 			for (const key of Object.keys(activeParams ?? {})) sources[key] = 'params';
 			objects.push({
 				id: activeObject,
@@ -87,11 +93,23 @@
 				activeParams = parseParams(paramsMatch[1]);
 				continue;
 			}
-			const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
-			if (sdfMeshMatch) {
-				activeSdfMeshParams = parseParams(sdfMeshMatch[1]);
+				const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
+				if (sdfMeshMatch) {
+					activeSdfMeshParams = parseParams(sdfMeshMatch[1]);
+					continue;
+				}
+				const sdfGenericMatch = line.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
+				if (sdfGenericMatch) {
+					const cmd = sdfGenericMatch[1];
+					const parsed = parseParams(sdfGenericMatch[2]);
+					if (Object.keys(parsed).length > 0) {
+						activeSdfMeshParams = { ...(activeSdfMeshParams ?? {}) };
+						for (const [k, v] of Object.entries(parsed)) {
+							activeSdfMeshParams[`${cmd}.${k}`] = v;
+						}
+					}
+				}
 			}
-		}
 		flushActive();
 		return objects;
 	};
@@ -101,7 +119,7 @@
 		objectId: string,
 		key: string,
 		value: string,
-		source: 'params' | 'sdf_mesh_from_sdf'
+		source: string
 	) => {
 		const lines = text.split(/\r?\n/);
 		let activeObject: string | null = null;
@@ -122,12 +140,25 @@
 				lines[i] = `#@params: ${serializeParams(parsed)}`;
 				break;
 			}
-			const sdfMeshMatch = trimmed.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
-			if (!sdfMeshMatch) continue;
-			const parsed = parseParams(sdfMeshMatch[1]);
-			parsed[key] = value.trim();
-			lines[i] = `#@ - mesh_from_sdf ${serializeParams(parsed)}`;
-			break;
+			if (source === 'sdf_mesh_from_sdf') {
+				const sdfMeshMatch = trimmed.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
+				if (!sdfMeshMatch) continue;
+				const parsed = parseParams(sdfMeshMatch[1]);
+				parsed[key] = value.trim();
+				lines[i] = `#@ - mesh_from_sdf ${serializeParams(parsed)}`;
+				break;
+			}
+			if (source.startsWith('sdf_op:')) {
+				const cmd = source.slice('sdf_op:'.length);
+				const dot = key.indexOf('.');
+				const rawKey = dot > 0 ? key.slice(dot + 1) : key;
+				const sdfCmdMatch = trimmed.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
+				if (!sdfCmdMatch || sdfCmdMatch[1] !== cmd) continue;
+				const parsed = parseParams(sdfCmdMatch[2]);
+				parsed[rawKey] = value.trim();
+				lines[i] = `#@ - ${cmd} ${serializeParams(parsed)}`;
+				break;
+			}
 		}
 		return lines.join('\n');
 	};
@@ -169,7 +200,8 @@
 			selectedMetaObject.id,
 			key,
 			nextValue,
-			selectedMetaObject.paramSources[key] ?? 'params'
+			selectedMetaObject.paramSources[key] ??
+				(key.includes('.') ? `sdf_op:${key.split('.', 1)[0]}` : 'params')
 		);
 		onLiveObjMetadataChange?.(updated);
 	}
