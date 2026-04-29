@@ -473,7 +473,14 @@ def _eval_string_or_scalar(s: str, env: Dict[str, Any], obn: Dict[str, LiveObjec
     t = s.strip()
     if not t:
         return 0.0
-    r = eval_mixed_value(t, env, obn)
+    try:
+        r = eval_mixed_value(t, env, obn)
+    except (SyntaxError, ValueError, TypeError, KeyError):
+        # Be permissive for malformed model output: keep scene running instead of
+        # hard-failing anchor resolution on one bad token.
+        if re.match(r"^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$", t):
+            return float(t)
+        return 0.0
     if isinstance(r, (list, tuple)) and len(r) == 3 and not t.startswith("["):
         # single anchor() call returns 3-tuple; fine
         return r
