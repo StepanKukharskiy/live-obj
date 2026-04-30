@@ -107,7 +107,11 @@ def _parse_params(raw):
         if "=" not in part:
             continue
         k, v = part.split("=", 1)
-        params[k.strip()] = _parse_scalar(v)
+        key = k.strip()
+        val = _parse_scalar(v)
+        if key in params and (val == "" or val is None):
+            continue
+        params[key] = val
     return params
 
 
