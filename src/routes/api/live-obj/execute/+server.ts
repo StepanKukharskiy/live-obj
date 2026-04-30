@@ -18,8 +18,12 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!liveObj) throw error(400, 'liveObj is required');
 
 	try {
-		const executedObj = await expandLiveObjWithExecutor(liveObj);
-		return json({ liveObj, executedObj });
+		const { executedObj, warnings } = await expandLiveObjWithExecutor(liveObj);
+		return json({
+			liveObj,
+			executedObj,
+			...(warnings.length > 0 ? { executorWarnings: warnings } : {})
+		});
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		const stack = e instanceof Error ? e.stack : undefined;

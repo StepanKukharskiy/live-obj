@@ -112,6 +112,7 @@ import ast
 import math
 import random
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -600,11 +601,20 @@ def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[st
                 env: Dict[str, Any] = {**base, **merged}
                 try:
                     merged[k] = eval_mixed_value(vs, env, obn)
-                except KeyError:
+                except KeyError as ex:
                     if _SINGLE_IDENTIFIER_TOKEN.match(vs):
                         merged[k] = vs
                     else:
-                        raise
+                        # Unresolvable reference (e.g. anchor() on an object
+                        # without #@anchors). Don't kill the whole executor
+                        # for one object's bad param -- warn and keep the raw
+                        # expression so any op that actually needs it fails
+                        # locally with context, while others still run.
+                        print(
+                            "[live-obj] param %r on '%s' skipped: %s" % (k, obj.name, ex),
+                            file=sys.stderr,
+                        )
+                        merged[k] = vs
     out = {**base, **merged}
     return out
 
@@ -2533,6 +2543,23 @@ def op_bevel(mesh: Mesh, amount: float = 0.05, segments: int = 1) -> Mesh:
     return rounded_box_mesh(((min_x + max_x) * 0.5, (min_y + max_y) * 0.5, (min_z + max_z) * 0.5), (sx, sy, sz), r, seg)
 
 
+def _resolve_kernel_center(obj: LiveObject, params: Dict[str, Any], env: Dict[str, Any]) -> Vec3:
+    """Resolve a kernel op's `center`/`position`, degrading to origin on unresolvable refs."""
+    center_raw = params.get("center", params.get("position", [0, 0, 0]))
+    if isinstance(center_raw, str):
+        try:
+            center_raw = eval_mixed_value(center_raw, env, {})
+        except KeyError as ex:
+            # Unresolvable reference (e.g. anchor() without #@anchors) must not
+            # kill the whole scene: warn and fall back to origin.
+            print(
+                "[live-obj] kernel center on '%s' unresolved (%s); using [0,0,0]" % (obj.name, ex),
+                file=sys.stderr,
+            )
+            center_raw = [0.0, 0.0, 0.0]
+    return _as_float3(center_raw, (0.0, 0.0, 0.0))
+
+
 def kernel_op_bevel(obj: LiveObject, env: Dict[str, Any], amount: float, segments: int) -> Optional[Mesh]:
     params = dict(obj.meta.get("params", {}) or {})
     params["bevel_radius"] = amount
@@ -2540,8 +2567,7 @@ def kernel_op_bevel(obj: LiveObject, env: Dict[str, Any], amount: float, segment
     kernel = str(params.get("kernel", "")).lower()
     if not kernel:
         return None
-    center_raw = params.get("center", params.get("position", [0, 0, 0]))
-    center = _as_float3(eval_mixed_value(center_raw, env, {}) if isinstance(center_raw, str) else center_raw, (0.0, 0.0, 0.0))
+    center = _resolve_kernel_center(obj, params, env)
     typ = str(obj.meta.get("type", "")).lower()
     if typ not in {"box", "cylinder"}:
         return None
@@ -2553,8 +2579,7 @@ def kernel_op_cadquery_solid(obj: LiveObject, env: Dict[str, Any]) -> Optional[T
     kernel = str(params.get("kernel", "")).lower()
     if kernel != "cadquery":
         return None
-    center_raw = params.get("center", params.get("position", [0, 0, 0]))
-    center = _as_float3(eval_mixed_value(center_raw, env, {}) if isinstance(center_raw, str) else center_raw, (0.0, 0.0, 0.0))
+    center = _resolve_kernel_center(obj, params, env)
     typ = str(obj.meta.get("type", "")).lower()
     solid = cadquery_solid_from_params(typ, params)
     if solid is None:

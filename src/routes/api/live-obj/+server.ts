@@ -25,6 +25,15 @@ const KNOWN_OPS = new Set([
 	'trace_paths', 'sdf_tubes', 'voxelize', 'mesh_from_volume', 'tread',
 	'union', 'subtract', 'intersect', 'chamfer', 'shell', 'offset'
 ]);
+// Ops valid inside `#@sdf:` blocks. SDF primitive/modifier ops are disjoint
+// from top-level `#@ops:` ops, so we must not flag them when encountered under
+// a `#@sdf:` section.
+const KNOWN_SDF_OPS = new Set([
+	'sphere', 'box', 'cylinder', 'capsule', 'torus', 'cone', 'plane',
+	'union', 'subtract', 'intersect', 'smooth_union',
+	'repeat', 'twist', 'bend', 'displace', 'noise_displace',
+	'mesh_from_sdf'
+]);
 const KNOWN_SOURCES = new Set(['procedural', 'llm_mesh', 'assembly', 'sdf', 'simulation']);
 const KNOWN_TYPES = new Set([
 	'box', 'cylinder', 'surface_grid', 'heightfield', 'curve', 'sweep', 'mesh',
@@ -34,19 +43,41 @@ const KNOWN_SIMS = new Set(['cellular_automata', 'differential_growth', 'boids']
 
 function unknownOpsInLiveObj(liveObj: string): string[] {
 	const unknown = new Set<string>();
+	// Track which `#@` block the current `#@ - …` line belongs to so SDF ops
+	// don't get flagged as if they were top-level mesh ops.
+	let block: 'ops' | 'sdf' | 'other' = 'other';
 	for (const rawLine of liveObj.split('\n')) {
 		const line = rawLine.trim();
-		if (!line.startsWith('#@')) continue;
-		const body = line.slice(2).trim();
-		let opToken = '';
-		if (body.startsWith('op:')) {
-			opToken = body.slice(3).trim().split(/\s+/)[0] ?? '';
-		} else if (body.startsWith('-')) {
-			opToken = body.slice(1).trim().split(/\s+/)[0] ?? '';
+		if (!line.startsWith('#@')) {
+			// A non-`#@` line (e.g. `o foo`, blank line, `v`/`f`) terminates any
+			// continuation block.
+			if (line.length === 0 || !line.startsWith('#')) block = 'other';
+			continue;
 		}
-		if (!opToken) continue;
-		const op = opToken.toLowerCase();
-		if (!KNOWN_OPS.has(op)) unknown.add(op);
+		const body = line.slice(2).trim();
+		if (body.startsWith('ops:')) { block = 'ops'; continue; }
+		if (body.startsWith('sdf:')) { block = 'sdf'; continue; }
+		if (body.startsWith('-')) {
+			const opToken = body.slice(1).trim().split(/\s+/)[0] ?? '';
+			if (!opToken) continue;
+			const op = opToken.toLowerCase();
+			if (block === 'sdf') {
+				if (!KNOWN_SDF_OPS.has(op)) unknown.add(`sdf:${op}`);
+			} else {
+				if (!KNOWN_OPS.has(op)) unknown.add(op);
+			}
+			continue;
+		}
+		if (body.startsWith('op:')) {
+			const opToken = body.slice(3).trim().split(/\s+/)[0] ?? '';
+			if (!opToken) continue;
+			const op = opToken.toLowerCase();
+			if (!KNOWN_OPS.has(op)) unknown.add(op);
+			block = 'other';
+			continue;
+		}
+		// Any other `#@key: value` header ends the previous block.
+		if (body.includes(':')) block = 'other';
 	}
 	return [...unknown];
 }
@@ -149,71 +180,93 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 		correctedLiveObj = `${lines.join('\n')}\n`;
 	}
-	const unknownOps = unknownOpsInLiveObj(liveObj);
-	const unknownMeta = unknownMetaValues(liveObj);
-	const hasUnknownMeta =
-		unknownMeta.badSources.length > 0 || unknownMeta.badTypes.length > 0 || unknownMeta.badSims.length > 0;
-	if (unknownOps.length > 0 || hasUnknownMeta) {
-		const metaHints: string[] = [];
-		if (unknownMeta.badSources.length > 0) metaHints.push(`unknown source values: ${unknownMeta.badSources.join(', ')}`);
-		if (unknownMeta.badTypes.length > 0) metaHints.push(`unknown type values: ${unknownMeta.badTypes.join(', ')}`);
-		if (unknownMeta.badSims.length > 0) metaHints.push(`unknown sim values: ${unknownMeta.badSims.join(', ')}`);
-		const correctionPrompt =
-			`Rewrite the previous Live OBJ to use only supported ops. ` +
-			`Unknown ops found: ${unknownOps.join(', ')}. ` +
-			(metaHints.length > 0 ? `${metaHints.join('. ')}. ` : '') +
-			`Keep object IDs/anchors/params unless required for compatibility. ` +
-			`Do not use #@op_experimental; use #@op: or #@ops: only.`;
+	// Collect every diagnostic from a single run (static lint + executor result)
+	// into one list, then do at most one consolidated LLM correction pass.
+	const unknownOps = unknownOpsInLiveObj(correctedLiveObj);
+	const unknownMeta = unknownMetaValues(correctedLiveObj);
+
+	let executedObj = correctedLiveObj;
+	let executorWarnings: string[] = [];
+	let executorError: string | undefined;
+	try {
+		const result = await expandLiveObjWithExecutor(correctedLiveObj);
+		executedObj = result.executedObj;
+		executorWarnings = result.warnings;
+	} catch (e) {
+		executorError = e instanceof Error ? e.message : String(e);
+	}
+
+	const issues = collectSceneIssues({
+		unknownOps,
+		unknownMeta,
+		executorWarnings,
+		executorError
+	});
+
+	if (issues.length > 0) {
+		const correctionPrompt = buildCorrectionPrompt(issues);
 		try {
 			const correctedRaw = await requestLiveObjFromLlm(
 				correctionPrompt,
-				[...history, { role: 'assistant', content: liveObj }],
+				[...history, { role: 'assistant', content: correctedLiveObj }],
 				model
 			);
-			correctedLiveObj = stripCodeFences(correctedRaw);
-		} catch {
-			// Keep first-pass output when correction pass fails.
-		}
-	}
-	let executedObj: string;
-	let executorWarning: string | undefined;
-	try {
-		executedObj = await expandLiveObjWithExecutor(correctedLiveObj);
-	} catch (e) {
-		executorWarning = e instanceof Error ? e.message : String(e);
-		const anchorMissing = /anchor '([^']+)'\.'([^']+)' not available/.exec(executorWarning);
-		if (anchorMissing) {
-			const [, asm, anchorId] = anchorMissing;
-			const anchorFixPrompt =
-				`Rewrite the previous Live OBJ and fix missing anchor references. ` +
-				`Anchor missing: ${asm}.${anchorId}. ` +
-				`Define the anchor in the correct assembly #@anchors block or replace bad references with existing anchors. ` +
-				`Keep object IDs and dimensions stable.`;
+			const retryLiveObj = stripCodeFences(correctedRaw);
 			try {
-				const fixedRaw = await requestLiveObjFromLlm(
-					anchorFixPrompt,
-					[...history, { role: 'assistant', content: correctedLiveObj }],
-					model
-				);
-				const fixedLiveObj = stripCodeFences(fixedRaw);
-				executedObj = await expandLiveObjWithExecutor(fixedLiveObj);
+				const retryResult = await expandLiveObjWithExecutor(retryLiveObj);
 				return json({
-					liveObj: fixedLiveObj,
+					liveObj: retryLiveObj,
 					rawLlm,
-					executedObj,
-					executorWarning: `Auto-corrected missing anchor ${asm}.${anchorId} after first execution failure.`
+					executedObj: retryResult.executedObj,
+					executorWarning: `Auto-corrected after first pass:\n- ${issues.join('\n- ')}`,
+					executorWarnings: retryResult.warnings
 				});
-			} catch {
-				// Fall through and return first-pass result with warning.
+			} catch (retryErr) {
+				// Retry execution also failed; fall through with first-pass output.
+				executorError = retryErr instanceof Error ? retryErr.message : String(retryErr);
 			}
+		} catch {
+			// Correction LLM call failed; fall through with first-pass output.
 		}
-		executedObj = correctedLiveObj;
 	}
 
+	const firstPassBanner = issues.length > 0 ? `First-pass issues:\n- ${issues.join('\n- ')}` : undefined;
 	return json({
 		liveObj: correctedLiveObj,
 		rawLlm,
 		executedObj,
-		...(executorWarning ? { executorWarning } : {})
+		...(executorError || firstPassBanner
+			? { executorWarning: [executorError, firstPassBanner].filter(Boolean).join('\n\n') }
+			: {}),
+		...(executorWarnings.length > 0 ? { executorWarnings } : {})
 	});
 };
+
+function collectSceneIssues(args: {
+	unknownOps: string[];
+	unknownMeta: { badSources: string[]; badTypes: string[]; badSims: string[] };
+	executorWarnings: string[];
+	executorError: string | undefined;
+}): string[] {
+	const issues: string[] = [];
+	if (args.unknownOps.length > 0) issues.push(`unknown ops: ${args.unknownOps.join(', ')}`);
+	if (args.unknownMeta.badSources.length > 0) issues.push(`unknown source values: ${args.unknownMeta.badSources.join(', ')}`);
+	if (args.unknownMeta.badTypes.length > 0) issues.push(`unknown type values: ${args.unknownMeta.badTypes.join(', ')}`);
+	if (args.unknownMeta.badSims.length > 0) issues.push(`unknown sim values: ${args.unknownMeta.badSims.join(', ')}`);
+	for (const w of args.executorWarnings) issues.push(`executor warning: ${w}`);
+	if (args.executorError) issues.push(`executor error: ${args.executorError.split('\n').slice(0, 8).join(' | ')}`);
+	return issues;
+}
+
+function buildCorrectionPrompt(issues: string[]): string {
+	return [
+		'Rewrite the previous Live OBJ so the executor runs cleanly. Preserve intent, object IDs, and dimensions.',
+		'Fix every issue listed below in a single revision. Do not introduce new objects unless required to resolve an issue.',
+		'Use only supported ops. Use #@op: or #@ops: (never #@op_experimental).',
+		'If a missing anchor is reported, either add a valid #@anchors block on the referenced assembly or replace the anchor() reference with concrete coordinates.',
+		'If unsupported ops are reported, replace them with supported equivalents.',
+		'',
+		'Issues to fix:',
+		...issues.map((i) => `- ${i}`)
+	].join('\n');
+}

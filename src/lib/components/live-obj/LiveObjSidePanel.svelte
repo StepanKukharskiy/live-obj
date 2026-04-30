@@ -43,7 +43,7 @@
 		onApplyEditedSource,
 		onSend,
 		onCaptureSceneScreenshot,
-		kernelDefault = $bindable<'auto' | 'cadquery'>('auto')
+		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery')
 	}: {
 		showPanel?: boolean;
 		msgs?: ChatMsg[];
@@ -104,13 +104,6 @@
 				<button type="button" class="live-obj-panel-close" onclick={() => (showPanel = false)} title="Close panel">✕</button>
 			</header>
 			<div class="planner-tabs" role="tablist" aria-label="Panel tabs">
-				<label class="kernel-default">
-					Kernel
-					<select bind:value={kernelDefault}>
-						<option value="auto">Auto</option>
-						<option value="cadquery">CadQuery</option>
-					</select>
-				</label>
 				<button type="button" class:active={activeTab === 'chat'} onclick={() => (activeTab = 'chat')}>Chat</button>
 				<button type="button" class:active={activeTab === 'adjust'} onclick={() => (activeTab = 'adjust')}>Adjust</button>
 				<button type="button" class:active={activeTab === 'scene'} onclick={() => (activeTab = 'scene')}>Scene</button>
@@ -156,6 +149,8 @@
 					bind:fogColor
 					bind:cameraFov
 					bind:toneMappingExposure
+					bind:kernelDefault
+					{executedObjText}
 				/>
 				{:else}
 					<LiveObjRenderTab
@@ -189,21 +184,6 @@
 	}
 	:global(.live-obj-side-panel .planner-tabs) {
 		padding: 0 12px 0 16px;
-	}
-	.kernel-default {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 11px;
-		color: #5f5f5f;
-		margin-right: 8px;
-	}
-	.kernel-default select {
-		font-size: 12px;
-		border: 1px solid #d6dbe4;
-		border-radius: 8px;
-		padding: 2px 6px;
-		background: #fff;
 	}
 	.live-obj-reopen {
 		position: absolute;

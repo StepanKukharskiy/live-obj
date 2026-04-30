@@ -12,7 +12,9 @@
 		fogFar = $bindable(50),
 		fogColor = $bindable('#f8fafc'),
 		cameraFov = $bindable(50),
-		toneMappingExposure = $bindable(1)
+		toneMappingExposure = $bindable(1),
+		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery'),
+		executedObjText = ''
 	}: {
 		backgroundColor?: string;
 		showGrid?: boolean;
@@ -27,11 +29,36 @@
 		fogColor?: string;
 		cameraFov?: number;
 		toneMappingExposure?: number;
+		kernelDefault?: 'auto' | 'cadquery';
+		executedObjText?: string;
 	} = $props();
+
+	function downloadObj() {
+		if (!executedObjText.trim()) return;
+		const blob = new Blob([executedObjText], { type: 'text/plain' });
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = 'project-name.obj';
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		URL.revokeObjectURL(url);
+	}
 </script>
 
 <div class="live-obj-scene">
+	<button type="button" class="send-button" onclick={downloadObj} disabled={!executedObjText.trim()}>
+		Download OBJ
+	</button>
 	<div class="planner-chain">
+		<label class="planner-context-field kernel-default">
+			<span class="planner-label-inline">Kernel</span>
+			<select bind:value={kernelDefault}>
+				<option value="auto">Auto</option>
+				<option value="cadquery">CadQuery</option>
+			</select>
+		</label>
 		<label class="planner-context-field"
 			><span class="planner-label-inline">Background</span>
 			<input class="planner-text-input" type="color" bind:value={backgroundColor} />
@@ -86,3 +113,25 @@
 		</label>
 	</div>
 </div>
+
+<style>
+	.live-obj-scene > button {
+		margin: 12px 0;
+		width: 100%;
+	}
+
+	.kernel-default select {
+		box-sizing: border-box;
+		max-width: 140px;
+		height: 32px;
+		font-family: inherit;
+		font-size: 12px;
+		font-weight: 600;
+		color: #333;
+		border: 1px solid rgba(0, 0, 0, 0.12);
+		border-radius: 999px;
+		padding: 0 10px;
+		background: rgba(255, 255, 255, 0.95);
+		cursor: pointer;
+	}
+</style>

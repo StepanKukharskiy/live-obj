@@ -193,8 +193,12 @@ def _parse_op_line(line):
     if len(parts) > 1:
         rest = parts[1].strip()
         parsed = {}
+        positional = []
         for token in _split_top_level_spaces(rest):
             if "=" not in token:
+                # Preserve positional args so handlers (e.g. sdf union) can
+                # accept `union shaft cap_top` in addition to `ids=shaft,cap_top`.
+                positional.append(token.strip())
                 continue
             k, v = token.split("=", 1)
             key = k.strip()
@@ -205,10 +209,12 @@ def _parse_op_line(line):
         if not parsed and "=" in rest:
             parsed = _parse_params(rest)
         op.update(parsed)
+        if positional:
+            op["_args"] = positional
     return op
 
 
-def build_rhino_mesh(obj):
+def build_rhino_mesh(obj, warnings=None):
     m = rg.Mesh()
     for v in obj.vertices:
         m.Vertices.Add(*v)
@@ -225,6 +231,15 @@ def build_rhino_mesh(obj):
         elif len(loc) > 4:
             for i in range(1, len(loc) - 1):
                 m.Faces.AddFace(loc[0], loc[i], loc[i + 1])
+
+    # Live OBJ `v`/`f` caches are sometimes written with per-face duplicated
+    # vertices (e.g. voxel-shell meshers that emit 4 fresh verts per quad).
+    # Weld defensively so the rendered mesh isn't a heap of isolated tiles.
+    try:
+        m.Vertices.CombineIdentical(True, True)
+    except Exception:
+        pass
+    m = _weld_mesh_by_tolerance(m, tol=1e-5, warnings=warnings, label="obj_cache")
 
     m.Normals.ComputeNormals()
     m.Compact()
@@ -363,7 +378,69 @@ def build_native_geometry(obj, warnings, sdf_registry=None):
 
 
 
-def _prepare_mesh_for_smooth(mesh):
+def _weld_mesh_by_tolerance(mesh, tol=1e-4, warnings=None, label=""):
+    """Return a new `Mesh` with coincident vertices merged within `tol`.
+
+    Rhino's `MeshVertexList.CombineIdentical` requires exact position equality.
+    `Mesh.CreateFromBrep` computes seam vertices independently per face, so
+    floating-point drift along shared edges leaves duplicates CombineIdentical
+    never merges. That disconnects the surface -> smoothing (and rendering)
+    treats every face as an isolated island. This snaps coincident vertices
+    onto a shared grid before merging.
+
+    Returns a fresh mesh rather than mutating in place; in-place Clear+rebuild
+    on a `Rhino.Geometry.Mesh` can leave internal caches out of sync.
+    """
+    if mesh is None:
+        return mesh
+    n = mesh.Vertices.Count
+    if n == 0:
+        return mesh
+    try:
+        inv = 1.0 / max(tol, 1e-12)
+        buckets = {}
+        remap = [0] * n
+        unique_pts = []
+        for i in range(n):
+            v = mesh.Vertices[i]
+            key = (int(round(v.X * inv)), int(round(v.Y * inv)), int(round(v.Z * inv)))
+            idx = buckets.get(key)
+            if idx is None:
+                idx = len(unique_pts)
+                buckets[key] = idx
+                unique_pts.append((float(v.X), float(v.Y), float(v.Z)))
+            remap[i] = idx
+        if warnings is not None:
+            warnings.append("weld[%s]: verts %d -> %d (tol=%g)" % (label, n, len(unique_pts), tol))
+        if len(unique_pts) == n:
+            return mesh
+        new_mesh = rg.Mesh()
+        for (x, y, z) in unique_pts:
+            new_mesh.Vertices.Add(x, y, z)
+        for fi in range(mesh.Faces.Count):
+            f = mesh.Faces[fi]
+            if f.IsQuad:
+                a, b, c, d = remap[f.A], remap[f.B], remap[f.C], remap[f.D]
+                if len({a, b, c, d}) == 4:
+                    new_mesh.Faces.AddFace(a, b, c, d)
+                elif len({a, b, c}) == 3:
+                    new_mesh.Faces.AddFace(a, b, c)
+                elif len({a, c, d}) == 3:
+                    new_mesh.Faces.AddFace(a, c, d)
+            else:
+                a, b, c = remap[f.A], remap[f.B], remap[f.C]
+                if len({a, b, c}) == 3:
+                    new_mesh.Faces.AddFace(a, b, c)
+        new_mesh.Normals.ComputeNormals()
+        new_mesh.Compact()
+        return new_mesh
+    except Exception as ex:
+        if warnings is not None:
+            warnings.append("weld[%s] failed: %s" % (label, ex))
+        return mesh
+
+
+def _prepare_mesh_for_smooth(mesh, warnings=None):
     try:
         mesh.Vertices.CombineIdentical(True, True)
     except Exception:
@@ -376,6 +453,10 @@ def _prepare_mesh_for_smooth(mesh):
         mesh.UnifyNormals()
     except Exception:
         pass
+    # Caller should replace its reference with the returned mesh; but since
+    # smooth ops iterate and mutate in place afterward, return the welded copy
+    # so callers can swap if they want.
+    return _weld_mesh_by_tolerance(mesh, tol=1e-4, warnings=warnings, label="smooth_prep")
 
 
 def _smooth_mesh_safe(mesh, iters, strength):
@@ -387,12 +468,16 @@ def _smooth_mesh_safe(mesh, iters, strength):
             except Exception:
                 pass
         if hasattr(mesh, "Smooth"):
+            # bFixBoundaries=False: if any seam vertices remain unwelded they
+            # would otherwise be pinned, and the interior of each patch would
+            # smooth inward on its own, producing a faceted "separate planes"
+            # look instead of a continuous surface.
             try:
-                mesh.Smooth(float(strength), True, True, True, True, rg.SmoothingCoordinateSystem.World)
+                mesh.Smooth(float(strength), True, True, True, False, rg.SmoothingCoordinateSystem.World)
                 continue
             except Exception:
                 try:
-                    mesh.Smooth(float(strength), True, True, True, True)
+                    mesh.Smooth(float(strength), True, True, True, False)
                     continue
                 except Exception:
                     pass
@@ -400,7 +485,7 @@ def _smooth_mesh_safe(mesh, iters, strength):
     return True
 
 
-def _mesh_from_brep(brep, edge_len=0.15):
+def _mesh_from_brep(brep, edge_len=0.15, warnings=None):
     try:
         mp = rg.MeshingParameters()
         mp.MaximumEdgeLength = max(0.001, float(edge_len))
@@ -411,10 +496,29 @@ def _mesh_from_brep(brep, edge_len=0.15):
         m = rg.Mesh()
         for part in parts:
             m.Append(part)
+        # CreateFromBrep emits one patch per face; Append concatenates without
+        # merging shared seam vertices, leaving the surface topologically
+        # disconnected. Weld here so downstream ops (smooth, displace) see a
+        # continuous mesh instead of isolated planar patches.
+        try:
+            m.Vertices.CombineIdentical(True, True)
+        except Exception:
+            pass
+        # Seam vertices from adjacent Brep faces are computed independently and
+        # can differ by floating-point epsilon, so exact-equality merging above
+        # often misses them. Tolerance-based weld is the real fix.
+        tol = max(1e-4, float(edge_len) * 0.1)
+        m = _weld_mesh_by_tolerance(m, tol=tol, warnings=warnings, label="mesh_from_brep")
+        try:
+            m.Weld(math.radians(180.0))
+        except Exception:
+            pass
         m.Normals.ComputeNormals()
         m.Compact()
         return m
-    except Exception:
+    except Exception as ex:
+        if warnings is not None:
+            warnings.append("_mesh_from_brep failed: %s" % ex)
         return None
 
 def _clean_ref(v):
@@ -430,6 +534,47 @@ def _sdf_vec3(op, key, default):
     return default
 
 
+def _build_capsule_brep(op):
+    """Build a capsule Brep from an SDF op dict.
+
+    Accepts either `p1=[...] p2=[...] radius=R` or
+    `center=[cx,cy,cz] height=H radius=R axis=z` (default axis z).
+    Caps are spheres unioned to a cylinder body.
+    """
+    try:
+        r = float(op.get("radius", 0.5))
+        p1 = op.get("p1")
+        p2 = op.get("p2")
+        if (isinstance(p1, (list, tuple)) and len(p1) >= 3 and
+            isinstance(p2, (list, tuple)) and len(p2) >= 3):
+            pt1 = rg.Point3d(float(p1[0]), float(p1[1]), float(p1[2]))
+            pt2 = rg.Point3d(float(p2[0]), float(p2[1]), float(p2[2]))
+        else:
+            cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
+            h = float(op.get("height", 1.0))
+            axis = str(op.get("axis", "z")).lower()
+            if axis == "x":
+                d = rg.Vector3d(h * 0.5, 0.0, 0.0)
+            elif axis == "y":
+                d = rg.Vector3d(0.0, h * 0.5, 0.0)
+            else:
+                d = rg.Vector3d(0.0, 0.0, h * 0.5)
+            pt1 = rg.Point3d(cx - d.X, cy - d.Y, cz - d.Z)
+            pt2 = rg.Point3d(cx + d.X, cy + d.Y, cz + d.Z)
+        axis_vec = pt2 - pt1
+        if axis_vec.Length < 1e-6:
+            return rg.Sphere(pt1, r).ToBrep()
+        plane = rg.Plane(pt1, axis_vec)
+        circle = rg.Circle(plane, r)
+        body = rg.Cylinder(circle, axis_vec.Length).ToBrep(True, True)
+        s1 = rg.Sphere(pt1, r).ToBrep()
+        s2 = rg.Sphere(pt2, r).ToBrep()
+        u = rg.Brep.CreateBooleanUnion([body, s1, s2], 0.01)
+        return u[0] if (u and len(u) > 0) else body
+    except Exception:
+        return None
+
+
 def build_sdf_geometry(obj, warnings, sdf_registry=None):
     sdf_ops = obj.meta.get("sdf_ops", [])
     if not isinstance(sdf_ops, list) or not sdf_ops:
@@ -442,6 +587,10 @@ def build_sdf_geometry(obj, warnings, sdf_registry=None):
     last = None
     want_mesh = False
     mesh_resolution = 0.15
+    # SDF deformers (noise_displace, twist, bend, displace) have no Brep
+    # analogue. Queue them here so booleans in the same block can keep
+    # operating on Breps; apply after mesh_from_sdf expands to a Mesh.
+    pending_mesh_ops = []
     for op in sdf_ops:
         name = str(op.get("op", "")).lower()
         if name == "sphere":
@@ -472,28 +621,96 @@ def build_sdf_geometry(obj, warnings, sdf_registry=None):
                 solids[sid] = g
             last = g
         elif name == "subtract":
-            id_a = _clean_ref(op.get("id_a", ""))
-            id_b = _clean_ref(op.get("id_b", ""))
+            # Accept `subtract A B`, `subtract id_a=A id_b=B`, or `subtract ids=A,B`.
+            pos = op.get("_args", []) or []
+            id_a = _clean_ref(op.get("id_a", pos[0] if len(pos) >= 1 else ""))
+            id_b = _clean_ref(op.get("id_b", pos[1] if len(pos) >= 2 else ""))
+            if not (id_a and id_b) and "ids" in op:
+                parts = [p.strip() for p in str(op.get("ids", "")).split(",") if p.strip()]
+                if len(parts) >= 2:
+                    id_a, id_b = parts[0], parts[1]
             a = solids.get(id_a)
             b = solids.get(id_b)
             if a is not None and b is not None:
-                out = rg.Brep.CreateBooleanDifference(a, [b], 0.01)
-                if out and len(out) > 0:
-                    last = out[0]
+                diff = rg.Brep.CreateBooleanDifference(a, [b], 0.01)
+                if diff and len(diff) > 0:
+                    last = diff[0]
                     sid = _clean_ref(op.get("id", ""))
                     if sid:
                         solids[sid] = last
             else:
                 warnings.append("sdf subtract missing id_a/id_b geometry on '%s' (id_a=%s, id_b=%s)" % (obj.name, id_a, id_b))
         elif name == "union":
-            ids = str(op.get("ids", "")).split(",") if "ids" in op else []
-            geoms = [solids.get(i.strip()) for i in ids if solids.get(i.strip()) is not None]
-            if len(geoms) >= 2:
-                out = rg.Brep.CreateBooleanUnion(geoms, 0.01)
-                if out and len(out) > 0:
-                    last = out[0]
+            # Accept `union A B [C...]`, `union ids=A,B,...`.
+            pos = op.get("_args", []) or []
+            if "ids" in op:
+                ids = [p.strip() for p in str(op.get("ids", "")).split(",") if p.strip()]
             else:
-                warnings.append("sdf union needs ids list with at least two known solids on '%s'" % obj.name)
+                ids = [_clean_ref(a) for a in pos if _clean_ref(a)]
+            geoms = [solids.get(i) for i in ids if solids.get(i) is not None]
+            if len(geoms) >= 2:
+                u = rg.Brep.CreateBooleanUnion(geoms, 0.01)
+                if u and len(u) > 0:
+                    last = u[0]
+                    sid = _clean_ref(op.get("id", ""))
+                    if sid:
+                        solids[sid] = last
+            else:
+                warnings.append("sdf union needs at least two known solids on '%s' (ids=%s)" % (obj.name, ids))
+        elif name == "capsule":
+            g = _build_capsule_brep(op)
+            if g is None:
+                warnings.append("sdf capsule could not be built on '%s'" % obj.name)
+                continue
+            sid = _clean_ref(op.get("id", ""))
+            if sid:
+                solids[sid] = g
+            last = g
+        elif name == "smooth_union":
+            # Rhino has no native SDF smooth-union; approximate by regular
+            # boolean-union then filleting the seam edges to the requested
+            # radius. If fillet fails (common on tangential contact), fall
+            # back to the plain union so we don't lose the geometry.
+            pos = op.get("_args", []) or []
+            if "ids" in op:
+                ids = [p.strip() for p in str(op.get("ids", "")).split(",") if p.strip()]
+            else:
+                ids = [_clean_ref(a) for a in pos if _clean_ref(a)]
+            geoms = [solids.get(i) for i in ids if solids.get(i) is not None]
+            blend = float(op.get("radius", op.get("blend", 0.1)))
+            if len(geoms) >= 2:
+                u = rg.Brep.CreateBooleanUnion(geoms, 0.01)
+                if u and len(u) > 0:
+                    base_u = u[0]
+                    filleted = None
+                    try:
+                        edge_ids = [e.EdgeIndex for e in base_u.Edges if e.Valence == rg.EdgeAdjacency.Interior]
+                        if edge_ids:
+                            rads = [blend] * len(edge_ids)
+                            f = rg.Brep.CreateFilletEdges(
+                                base_u, edge_ids, rads, rads,
+                                rg.BlendType.Fillet, rg.RailType.RollingBall, 0.01
+                            )
+                            if f and len(f) > 0:
+                                filleted = f[0]
+                    except Exception as ex:
+                        warnings.append("sdf smooth_union fillet failed on '%s': %s" % (obj.name, ex))
+                    last = filleted if filleted is not None else base_u
+                    sid = _clean_ref(op.get("id", ""))
+                    if sid:
+                        solids[sid] = last
+            else:
+                warnings.append("sdf smooth_union needs at least two known solids on '%s' (ids=%s)" % (obj.name, ids))
+        elif name == "noise_displace":
+            # SDF-level noise displacement has no Brep equivalent. Defer it
+            # until after mesh_from_sdf runs so subsequent SDF booleans still
+            # operate on a Brep.
+            pending_mesh_ops.append({
+                "kind": "noise_displace",
+                "strength": float(op.get("strength", 0.1)),
+                "frequency": float(op.get("frequency", 3.0)),
+                "seed": int(op.get("seed", 0)),
+            })
         elif name == "mesh_from_sdf":
             want_mesh = True
             if op.get("resolution") is not None:
@@ -508,11 +725,43 @@ def build_sdf_geometry(obj, warnings, sdf_registry=None):
             warnings.append("unsupported sdf op on '%s': %s" % (obj.name, name))
 
     if want_mesh and isinstance(last, rg.Brep):
-        mesh = _mesh_from_brep(last, mesh_resolution)
+        mesh = _mesh_from_brep(last, mesh_resolution, warnings=warnings)
         if mesh is not None:
-            return mesh
-        warnings.append("mesh_from_sdf failed to mesh brep on '%s'" % obj.name)
+            last = mesh
+        else:
+            warnings.append("mesh_from_sdf failed to mesh brep on '%s'" % obj.name)
+    # If any SDF-level deformers were queued, apply them now on the mesh.
+    if pending_mesh_ops:
+        if isinstance(last, rg.Brep):
+            meshed = _mesh_from_brep(last, mesh_resolution, warnings=warnings)
+            if meshed is not None:
+                last = meshed
+        if isinstance(last, rg.Mesh):
+            for pending in pending_mesh_ops:
+                _apply_sdf_mesh_op(last, pending)
+            last.Normals.ComputeNormals()
     return last
+
+
+def _apply_sdf_mesh_op(mesh, pending):
+    """Apply a deferred SDF deformer (noise_displace/twist/bend/displace) to a mesh in place."""
+    kind = pending.get("kind")
+    if kind == "noise_displace":
+        strength = float(pending.get("strength", 0.1))
+        freq = float(pending.get("frequency", 3.0))
+        phase = float(pending.get("seed", 0)) * 0.173
+        for i in range(mesh.Vertices.Count):
+            v = mesh.Vertices[i]
+            # Cheap tri-axis sinusoid stand-in for gradient noise.
+            n = (math.sin(v.X * freq + phase) *
+                 math.cos(v.Y * freq + phase * 1.3) *
+                 math.sin(v.Z * freq + phase * 0.7))
+            mesh.Vertices.SetVertex(
+                i,
+                v.X + n * strength,
+                v.Y + n * strength * 0.6,
+                v.Z + n * strength * 0.4,
+            )
 
 
 def prebuild_sdf_registry(objs, warnings):
@@ -547,9 +796,120 @@ def prebuild_sdf_registry(objs, warnings):
                     g = rg.Box(plane, rg.Interval(-sx/2.0, sx/2.0), rg.Interval(-sy/2.0, sy/2.0), rg.Interval(-sz/2.0, sz/2.0)).ToBrep()
                     registry[sid] = g
                     registry[_clean_ref(obj.name)] = g
+                elif name == "capsule":
+                    g = _build_capsule_brep(op)
+                    if g is not None:
+                        registry[sid] = g
+                        registry[_clean_ref(obj.name)] = g
             except Exception as ex:
                 warnings.append("sdf prebuild failed for id '%s': %s" % (sid, ex))
     return registry
+
+
+def _axis_bounds(bb, axis):
+    """Return (min, max, span) along a named axis ('x'/'y'/'z')."""
+    a = (axis or "z").lower()
+    if a == "x":
+        lo, hi = bb.Min.X, bb.Max.X
+    elif a == "y":
+        lo, hi = bb.Min.Y, bb.Max.Y
+    else:
+        lo, hi = bb.Min.Z, bb.Max.Z
+    return lo, hi, max(1e-9, hi - lo)
+
+
+def _mesh_twist_inplace(mesh, axis, angle_deg):
+    """Rotate cross-sections progressively along `axis` by up to `angle_deg`."""
+    bb = mesh.GetBoundingBox(True)
+    lo, _, span = _axis_bounds(bb, axis)
+    rad = math.radians(float(angle_deg))
+    a = (axis or "z").lower()
+    for i in range(mesh.Vertices.Count):
+        v = mesh.Vertices[i]
+        if a == "x":
+            t = (v.X - lo) / span
+            theta = rad * t
+            c, s = math.cos(theta), math.sin(theta)
+            y = v.Y * c - v.Z * s
+            z = v.Y * s + v.Z * c
+            mesh.Vertices.SetVertex(i, v.X, y, z)
+        elif a == "y":
+            t = (v.Y - lo) / span
+            theta = rad * t
+            c, s = math.cos(theta), math.sin(theta)
+            x = v.X * c - v.Z * s
+            z = v.X * s + v.Z * c
+            mesh.Vertices.SetVertex(i, x, v.Y, z)
+        else:
+            t = (v.Z - lo) / span
+            theta = rad * t
+            c, s = math.cos(theta), math.sin(theta)
+            x = v.X * c - v.Y * s
+            y = v.X * s + v.Y * c
+            mesh.Vertices.SetVertex(i, x, y, v.Z)
+
+
+def _mesh_taper_inplace(mesh, axis, factor):
+    """Scale cross-sections perpendicular to `axis` by 1 - factor*t."""
+    bb = mesh.GetBoundingBox(True)
+    lo, _, span = _axis_bounds(bb, axis)
+    a = (axis or "z").lower()
+    f = float(factor)
+    for i in range(mesh.Vertices.Count):
+        v = mesh.Vertices[i]
+        if a == "x":
+            t = (v.X - lo) / span
+            s = 1.0 - f * t
+            mesh.Vertices.SetVertex(i, v.X, v.Y * s, v.Z * s)
+        elif a == "y":
+            t = (v.Y - lo) / span
+            s = 1.0 - f * t
+            mesh.Vertices.SetVertex(i, v.X * s, v.Y, v.Z * s)
+        else:
+            t = (v.Z - lo) / span
+            s = 1.0 - f * t
+            mesh.Vertices.SetVertex(i, v.X * s, v.Y * s, v.Z)
+
+
+def _mesh_bend_inplace(mesh, axis, angle_deg):
+    """Progressive rotation around `axis` based on position along `axis`."""
+    bb = mesh.GetBoundingBox(True)
+    lo, _, span = _axis_bounds(bb, axis)
+    rad = math.radians(float(angle_deg))
+    a = (axis or "x").lower()
+    for i in range(mesh.Vertices.Count):
+        v = mesh.Vertices[i]
+        if a == "x":
+            t = (v.X - lo) / span
+            theta = rad * t
+            c, s = math.cos(theta), math.sin(theta)
+            y = v.Y * c - v.Z * s
+            z = v.Y * s + v.Z * c
+            mesh.Vertices.SetVertex(i, v.X, y, z)
+        elif a == "y":
+            t = (v.Y - lo) / span
+            theta = rad * t
+            c, s = math.cos(theta), math.sin(theta)
+            x = v.X * c - v.Z * s
+            z = v.X * s + v.Z * c
+            mesh.Vertices.SetVertex(i, x, v.Y, z)
+        else:
+            t = (v.Z - lo) / span
+            theta = rad * t
+            c, s = math.cos(theta), math.sin(theta)
+            x = v.X * c - v.Y * s
+            y = v.X * s + v.Y * c
+            mesh.Vertices.SetVertex(i, x, y, v.Z)
+
+
+def _mesh_wave_inplace(mesh, amplitude, frequency):
+    """Displace `z` by `amp * sin(x*f) * cos(y*f)`."""
+    amp = float(amplitude)
+    freq = float(frequency)
+    for i in range(mesh.Vertices.Count):
+        v = mesh.Vertices[i]
+        dz = amp * math.sin(v.X * freq) * math.cos(v.Y * freq)
+        mesh.Vertices.SetVertex(i, v.X, v.Y, v.Z + dz)
 
 
 def apply_deformer(mesh, obj, warnings):
@@ -563,46 +923,15 @@ def apply_deformer(mesh, obj, warnings):
     if m.Vertices.Count == 0:
         return m
 
-    bb = m.GetBoundingBox(True)
-    z0, z1 = bb.Min.Z, bb.Max.Z
-    zspan = max(1e-9, z1 - z0)
-
+    axis = str(p.get("axis", "z")).lower()
     if deformer == "twist":
-        angle_deg = float(p.get("angle_deg", p.get("angle", 30.0)))
-        angle_rad = math.radians(angle_deg)
-        for i in range(m.Vertices.Count):
-            v = m.Vertices[i]
-            t = (v.Z - z0) / zspan
-            a = angle_rad * t
-            c, s = math.cos(a), math.sin(a)
-            x = v.X * c - v.Y * s
-            y = v.X * s + v.Y * c
-            m.Vertices.SetVertex(i, x, y, v.Z)
+        _mesh_twist_inplace(m, axis, p.get("angle_deg", p.get("angle", 30.0)))
     elif deformer == "taper":
-        factor = float(p.get("factor", 0.5))
-        for i in range(m.Vertices.Count):
-            v = m.Vertices[i]
-            t = (v.Z - z0) / zspan
-            s = 1.0 - factor * t
-            m.Vertices.SetVertex(i, v.X * s, v.Y * s, v.Z)
+        _mesh_taper_inplace(m, axis, p.get("factor", p.get("amount", 0.5)))
     elif deformer == "wave":
-        amp = float(p.get("amplitude", 0.4))
-        freq = float(p.get("frequency", 1.0))
-        for i in range(m.Vertices.Count):
-            v = m.Vertices[i]
-            dz = amp * math.sin(v.X * freq) * math.cos(v.Y * freq)
-            m.Vertices.SetVertex(i, v.X, v.Y, v.Z + dz)
+        _mesh_wave_inplace(m, p.get("amplitude", 0.4), p.get("frequency", 1.0))
     elif deformer == "bend":
-        angle_deg = float(p.get("angle_deg", 20.0))
-        angle_rad = math.radians(angle_deg)
-        for i in range(m.Vertices.Count):
-            v = m.Vertices[i]
-            t = (v.X - bb.Min.X) / max(1e-9, bb.Max.X - bb.Min.X)
-            a = angle_rad * t
-            c, s = math.cos(a), math.sin(a)
-            y = v.Y * c - v.Z * s
-            z = v.Y * s + v.Z * c
-            m.Vertices.SetVertex(i, v.X, y, z)
+        _mesh_bend_inplace(m, str(p.get("axis", "x")).lower(), p.get("angle_deg", p.get("angle", 20.0)))
     else:
         warnings.append("unsupported deformer on '%s': %s" % (obj.name, deformer))
         return mesh
@@ -812,14 +1141,19 @@ def apply_native_ops(geom, ops, warnings):
             out = result if isinstance(out, list) else result[0]
         elif name == "smooth":
             iters = max(1, int(op.get("iterations", 1)))
-            strength = float(op.get("factor", 1.0))
-            for g in each_geom(out):
+            # Live OBJ spec uses `strength`; older scripts used `factor`.
+            strength = float(op.get("strength", op.get("factor", 0.5)))
+            geoms = each_geom(out)
+            new_list = []
+            for g in geoms:
                 if isinstance(g, rg.Mesh):
-                    _prepare_mesh_for_smooth(g)
+                    g = _prepare_mesh_for_smooth(g, warnings=warnings) or g
                     ok = _smooth_mesh_safe(g, iters, strength)
                     if not ok:
                         warnings.append("smooth not supported for current Rhino mesh API")
                     g.Normals.ComputeNormals()
+                new_list.append(g)
+            out = new_list if isinstance(out, list) else new_list[0]
         elif name == "simplify":
             ratio = float(op.get("ratio", 0.5))
             target = max(4, int(1000 * max(0.05, min(1.0, ratio))))
@@ -926,7 +1260,7 @@ def apply_native_ops(geom, ops, warnings):
                 b.Transform(rg.Transform.Translation(i * run, 0, i * rise))
                 treads.append(b)
             out = treads
-        elif name in {"union", "subtract"}:
+        elif name in {"union", "subtract", "intersect"}:
             geoms = [g for g in each_geom(out) if isinstance(g, rg.Brep)]
             if len(geoms) >= 2:
                 a = geoms[0]
@@ -935,10 +1269,55 @@ def apply_native_ops(geom, ops, warnings):
                     u = rg.Brep.CreateBooleanUnion(geoms, 0.01)
                     if u:
                         out = list(u)
-                else:
+                elif name == "subtract":
                     d = rg.Brep.CreateBooleanDifference(a, bs, 0.01)
                     if d:
                         out = list(d)
+                else:
+                    inter = rg.Brep.CreateBooleanIntersection([a] + bs, 0.01)
+                    if inter:
+                        out = list(inter)
+        elif name in {"taper", "twist", "bend"}:
+            # Whole-object deformers applied to meshes. Brep inputs are meshed
+            # first since there's no Brep-level equivalent.
+            axis = str(op.get("axis", "x" if name == "bend" else "z")).lower()
+            amount = op.get("angle_deg", op.get("angle", op.get("factor", op.get("amount", 0.0))))
+            new_list = []
+            for g in each_geom(out):
+                target = g
+                if isinstance(target, rg.Brep):
+                    target = _mesh_from_brep(target, 0.1, warnings=warnings)
+                if isinstance(target, rg.Mesh):
+                    target = target.DuplicateMesh()
+                    if name == "taper":
+                        _mesh_taper_inplace(target, axis, amount)
+                    elif name == "twist":
+                        _mesh_twist_inplace(target, axis, amount)
+                    else:
+                        _mesh_bend_inplace(target, axis, amount)
+                    target.Normals.ComputeNormals()
+                new_list.append(target if target is not None else g)
+            out = new_list if isinstance(out, list) else new_list[0]
+        elif name in {"shell", "thicken", "offset"}:
+            # Brep-only: inward shell using Rhino's CreateShell. `thickness` can
+            # be negative to shell outward; `offset` maps to signed shell.
+            thickness = float(op.get("thickness", op.get("amount", op.get("distance", 0.05))))
+            result = []
+            for g in each_geom(out):
+                if isinstance(g, rg.Brep):
+                    try:
+                        # Remove the top face by default so the shell has an opening.
+                        face_ids = []
+                        if g.Faces.Count > 0 and name == "shell":
+                            face_ids = [g.Faces.Count - 1]
+                        shelled = rg.Brep.CreateShell(g, face_ids, thickness, 0.01) if hasattr(rg.Brep, "CreateShell") else None
+                        if shelled and len(shelled) > 0:
+                            result.append(shelled[0])
+                            continue
+                    except Exception as ex:
+                        warnings.append("%s failed on '%s': %s" % (name, "brep", ex))
+                result.append(g)
+            out = result if isinstance(out, list) else result[0]
         else:
             warnings.append("unsupported op: %s" % name)
             if STRICT_COMPAT:
@@ -960,7 +1339,9 @@ def validate_compat(obj, warnings):
         "smooth", "simplify", "remesh",
         "bevel", "chamfer", "trace_paths", "sdf_tubes",
         "voxelize", "mesh_from_volume", "tread",
-        "union", "subtract",
+        "union", "subtract", "intersect",
+        "taper", "twist", "bend",
+        "shell", "thicken", "offset",
     }
 
     source = str(obj.meta.get("source", "")).lower()
@@ -1067,7 +1448,7 @@ for o in objs:
 
     if o.vertices and o.faces:
         try:
-            mesh = build_rhino_mesh(o)
+            mesh = build_rhino_mesh(o, warnings=warn)
             mesh = apply_deformer(mesh, o, warn)
             meshes.append(mesh)
         except Exception as ex:

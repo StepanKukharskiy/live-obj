@@ -60,14 +60,17 @@ async function probeCadQuery(cmd: string): Promise<string> {
 	}
 }
 
-async function runPythonOnFile(script: string, inputPath: string, outputPath: string): Promise<void> {
+async function runPythonOnFile(script: string, inputPath: string, outputPath: string): Promise<string> {
 	const args = [script, inputPath, '-o', outputPath];
 	const tried = pythonInterpreterCandidates();
 	let lastEnoent: unknown;
 	for (const cmd of tried) {
 		try {
-			await execFileAsync(cmd, args, { timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
-			return;
+			const { stderr } = await execFileAsync(cmd, args, {
+				timeout: 120_000,
+				maxBuffer: 32 * 1024 * 1024
+			});
+			return stderr ?? '';
 		} catch (e) {
 			if (isExecutableNotFound(e)) {
 				lastEnoent = e;
@@ -88,18 +91,35 @@ async function runPythonOnFile(script: string, inputPath: string, outputPath: st
 	);
 }
 
+export type ExecutorResult = {
+	executedObj: string;
+	/** Non-fatal diagnostics collected from the executor's stderr (one per line). */
+	warnings: string[];
+};
+
+/** Extract meaningful warning lines from the executor's stderr. Drops blank lines and tracebacks. */
+function parseExecutorWarnings(stderr: string): string[] {
+	if (!stderr) return [];
+	return stderr
+		.split('\n')
+		.map((l) => l.trim())
+		.filter((l) => l.length > 0 && !l.startsWith('Traceback') && !l.startsWith('  File "'));
+}
+
 /**
- * Run `live_obj_executor_v02.py` on the Live OBJ text; returns the serialized scene with v/f updated.
+ * Run `live_obj_executor_v02.py` on the Live OBJ text; returns the serialized scene with v/f
+ * updated plus any non-fatal warnings the executor emitted on stderr.
  */
-export async function expandLiveObjWithExecutor(liveObjText: string): Promise<string> {
+export async function expandLiveObjWithExecutor(liveObjText: string): Promise<ExecutorResult> {
 	const script = resolveExecutorScript();
 	const dir = await mkdtemp(path.join(tmpdir(), 'live-obj-'));
 	const inputPath = path.join(dir, 'scene.obj');
 	const outputPath = path.join(dir, 'scene.executed.obj');
 	try {
 		await writeFile(inputPath, liveObjText, 'utf-8');
-		await runPythonOnFile(script, inputPath, outputPath);
-		return await readFile(outputPath, 'utf-8');
+		const stderr = await runPythonOnFile(script, inputPath, outputPath);
+		const executedObj = await readFile(outputPath, 'utf-8');
+		return { executedObj, warnings: parseExecutorWarnings(stderr) };
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
