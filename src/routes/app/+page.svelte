@@ -1,213 +1,452 @@
 <script lang="ts">
-	function goToApp() {
-		window.location.href = '/app?mode=editor';
+	import * as THREE from 'three';
+	import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+	import Canvas3D from '$lib/components/Canvas3D.svelte';
+	import LiveObjSidePanel from '$lib/components/live-obj/LiveObjSidePanel.svelte';
+	import type { SourceTab } from '$lib/components/live-obj/LiveObjOutputTab.svelte';
+
+	type ChatMsg = {
+		role: 'user' | 'assistant';
+		content: string;
+		imageDataUrl?: string;
+		historyContent?: string;
+	};
+
+	let showPanel = $state(true);
+	let msgs = $state<ChatMsg[]>([]);
+	let busy = $state(false);
+	let statusLine = $state<string | null>(null);
+
+	let sourceTab = $state<SourceTab>('executed');
+	let liveObjText = $state('');
+	let rawLlmText = $state('');
+	let executedObjText = $state('');
+	let sceneEpoch = $state(0);
+	let sourceApplyBusy = $state(false);
+	let kernelDefault = $state<'auto' | 'cadquery'>('cadquery');
+	let renderObject = $state<THREE.Object3D | null>(null);
+
+	let backgroundColor = $state('#e8ebf2');
+	let showGrid = $state(true);
+	let showAxes = $state(true);
+	let ambientLightIntensity = $state(1);
+	let directionalLightIntensity = $state(1.5);
+	let wireframe = $state(false);
+	let enableShadows = $state(false);
+	let fogEnabled = $state(false);
+	let fogNear = $state(10);
+	let fogFar = $state(50);
+	let fogColor = $state('#f8fafc');
+	let cameraFov = $state(50);
+	let toneMappingExposure = $state(1);
+
+	let objectColor = $state('#0000eb');
+	let objectScale = $state(1);
+	let objectPosX = $state(0);
+	let objectPosY = $state(0);
+	let objectPosZ = $state(0);
+	let objectRotYDeg = $state(0);
+	let preserveObjMaterials = $state(false);
+	let canvasRef = $state<Canvas3D | null>(null);
+
+	function materialColorFromName(name: string): THREE.Color {
+		let hash = 0;
+		for (let i = 0; i < name.length; i += 1) {
+			hash = (hash << 5) - hash + name.charCodeAt(i);
+			hash |= 0;
+		}
+		const hue = ((hash % 360) + 360) % 360;
+		return new THREE.Color().setHSL(hue / 360, 0.45, 0.56);
+	}
+
+	type MaterialPreset = {
+		color?: string;
+		metalness?: number;
+		roughness?: number;
+	};
+
+	function parseMaterialPresets(sourceText: string): Map<string, MaterialPreset> {
+		const presets = new Map<string, MaterialPreset>();
+		for (const rawLine of sourceText.split(/\r?\n/)) {
+			const lineMatch = rawLine.match(/^\s*#@material_preset:\s*([a-zA-Z0-9_\-.]+)\s*(.*)$/);
+			if (!lineMatch) continue;
+			const name = lineMatch[1].trim();
+			const tail = lineMatch[2] ?? '';
+			const preset: MaterialPreset = {};
+			const colorMatch = tail.match(/color=([#a-zA-Z0-9_\-.]+)/);
+			if (colorMatch) preset.color = colorMatch[1];
+			const metalnessMatch = tail.match(/metalness=([-+]?\d*\.?\d+)/);
+			if (metalnessMatch) preset.metalness = Number(metalnessMatch[1]);
+			const roughnessMatch = tail.match(/roughness=([-+]?\d*\.?\d+)/);
+			if (roughnessMatch) preset.roughness = Number(roughnessMatch[1]);
+			presets.set(name, preset);
+		}
+		return presets;
+	}
+
+	function parseObjectMaterialTags(sourceText: string): Map<string, string> {
+		const byObject = new Map<string, string>();
+		let currentObject: string | null = null;
+		for (const line of sourceText.split(/\r?\n/)) {
+			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
+			if (objectMatch) {
+				currentObject = objectMatch[1];
+				continue;
+			}
+			if (!currentObject) continue;
+			const opListMaterialMatch = line.match(
+				/^\s*#@\s*-\s*material\s+name=([a-zA-Z0-9_\-.]+)\s*$/
+			);
+			if (opListMaterialMatch) {
+				byObject.set(currentObject, opListMaterialMatch[1]);
+				continue;
+			}
+			const inlineMaterialMatch = line.match(
+				/^\s*#@material:\s*(?:name=)?([a-zA-Z0-9_\-.]+)\s*$/
+			);
+			if (inlineMaterialMatch) byObject.set(currentObject, inlineMaterialMatch[1]);
+		}
+		return byObject;
+	}
+
+	function getLiveObjUpAxis(objText: string): 'x' | 'y' | 'z' {
+		const m = objText.match(/^\s*#@up:\s*([xyz])\s*$/im);
+		const axis = (m?.[1] ?? 'y').toLowerCase();
+		return axis === 'x' || axis === 'z' ? axis : 'y';
+	}
+
+	function applyObjectControls() {
+		if (!renderObject) return;
+		renderObject.position.set(objectPosX, objectPosY, objectPosZ);
+		renderObject.scale.setScalar(objectScale);
+		renderObject.rotation.y = (objectRotYDeg * Math.PI) / 180;
+	}
+
+	$effect(() => {
+		objectScale;
+		objectPosX;
+		objectPosY;
+		objectPosZ;
+		objectRotYDeg;
+		applyObjectControls();
+	});
+
+	function applyObjString(objText: string, sourceTextForMetadata: string = objText) {
+		const loader = new OBJLoader();
+		const group = loader.parse(objText);
+		const upAxis = getLiveObjUpAxis(objText);
+		const hasPerObjectMaterials = /^\s*usemtl\s+/im.test(objText);
+		const materialTagsByObject = parseObjectMaterialTags(sourceTextForMetadata);
+		const materialPresets = parseMaterialPresets(sourceTextForMetadata);
+		const hasMetadataMaterialTags = materialTagsByObject.size > 0;
+		const objectDefinitions = new Set(
+			[...sourceTextForMetadata.matchAll(/^\s*o\s+([^\s#]+)/gm)].map((m) => m[1])
+		);
+		const objectNameSet = new Set<string>();
+		group.traverse((o: THREE.Object3D) => {
+			if (o instanceof THREE.Mesh && o.name) objectNameSet.add(o.name);
+		});
+		const hasMultipleNamedObjects = Math.max(objectNameSet.size, objectDefinitions.size) > 1;
+		preserveObjMaterials = hasPerObjectMaterials || hasMultipleNamedObjects || hasMetadataMaterialTags;
+		const fallbackMat = new THREE.MeshStandardMaterial({
+			color: objectColor,
+			metalness: 0.12,
+			roughness: 0.48,
+			side: THREE.DoubleSide,
+			flatShading: false,
+			wireframe
+		});
+		group.traverse((o: THREE.Object3D) => {
+			if (!(o instanceof THREE.Mesh)) return;
+			if (!hasPerObjectMaterials && !hasMultipleNamedObjects) {
+				o.material = fallbackMat;
+				return;
+			}
+			const materialToStandard = (material: THREE.Material): THREE.MeshStandardMaterial => {
+				const base = material as THREE.MeshPhongMaterial & { name?: string };
+				const taggedMaterial = o.name ? materialTagsByObject.get(o.name) : null;
+				const colorName = hasPerObjectMaterials ? base.name : o.name;
+				const taggedPreset = taggedMaterial ? materialPresets.get(taggedMaterial) : undefined;
+				const colorValue = taggedPreset?.color;
+				const color = colorValue
+					? new THREE.Color(colorValue)
+					: colorName
+						? materialColorFromName(colorName)
+						: new THREE.Color(objectColor);
+				return new THREE.MeshStandardMaterial({
+					color,
+					metalness: taggedPreset?.metalness ?? 0.12,
+					roughness: taggedPreset?.roughness ?? 0.48,
+					side: THREE.DoubleSide,
+					flatShading: false,
+					wireframe
+				});
+			};
+			if (Array.isArray(o.material)) {
+				o.material = o.material.map((material) => materialToStandard(material));
+				return;
+			}
+			o.material = materialToStandard(o.material);
+		});
+		if (upAxis === 'z') group.rotation.x = -Math.PI / 2;
+		else if (upAxis === 'x') group.rotation.z = Math.PI / 2;
+		renderObject = group;
+		applyObjectControls();
+	}
+
+
+	async function regenerateFromMetadata(updatedLiveObj: string) {
+		if (!updatedLiveObj.trim()) return;
+		statusLine = null;
+		const sceneWithKernel = applyKernelDefaultHeader(updatedLiveObj);
+		liveObjText = sceneWithKernel;
+		try {
+			const res = await fetch('/api/live-obj/execute', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ liveObj: sceneWithKernel })
+			});
+			const payload = (await res.json().catch(() => ({}))) as {
+				message?: string;
+				detail?: string;
+				liveObj?: string;
+				executedObj?: string;
+			};
+			if (!res.ok) throw new Error(payload.detail || payload.message || res.statusText || 'Metadata regeneration failed');
+			liveObjText = payload.liveObj ?? sceneWithKernel;
+			executedObjText = payload.executedObj ?? '';
+			sourceTab = 'executed';
+			sceneEpoch += 1;
+			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? sceneWithKernel);
+		} catch (e) {
+			const m = e instanceof Error ? e.message : String(e);
+			statusLine = `Metadata regenerate failed: ${m}`;
+		}
+	}
+
+	function applyKernelDefaultHeader(sceneText: string): string {
+		const raw = sceneText.trim();
+		if (!raw) return sceneText;
+		if (kernelDefault !== 'cadquery') return sceneText;
+		const lines = raw.split('\n');
+		const idx = lines.findIndex((l) => l.trim().startsWith('#@kernel_default:'));
+		if (idx >= 0) {
+			lines[idx] = '#@kernel_default: cadquery';
+			return `${lines.join('\n')}\n`;
+		}
+		const headerIdx = lines.findIndex((l) => l.trim().startsWith('#@live_obj_version:'));
+		if (headerIdx >= 0) {
+			lines.splice(headerIdx + 1, 0, '#@kernel_default: cadquery');
+			return `${lines.join('\n')}\n`;
+		}
+		return `#@kernel_default: cadquery\n${raw}\n`;
+	}
+
+	async function sendPrompt(payload: { text: string; model: string; imageDataUrl?: string }) {
+		const { text, model, imageDataUrl } = payload;
+		if ((!text.trim() && !imageDataUrl) || busy) return;
+		statusLine = null;
+		busy = true;
+
+		const priorMsgs = [...msgs];
+		const userLine: ChatMsg = {
+			role: 'user',
+			content: text,
+			...(imageDataUrl ? { imageDataUrl } : {})
+		};
+		msgs = [...priorMsgs, userLine];
+		const history = priorMsgs.map((m) => ({
+			role: m.role,
+			content: m.historyContent ?? m.content,
+			...(m.imageDataUrl ? { imageUrl: m.imageDataUrl } : {})
+		}));
+		const latestHistoryContent = [...priorMsgs]
+			.reverse()
+			.find((m) => m.role === 'assistant' && (m.historyContent ?? '').trim())?.historyContent;
+		const currentLiveObj = liveObjText.trim();
+		if (currentLiveObj && currentLiveObj !== (latestHistoryContent ?? '').trim()) {
+			history.push({ role: 'assistant', content: currentLiveObj });
+		}
+
+		try {
+			const res = await fetch('/api/live-obj', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					userMessage: text,
+					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
+					history,
+					model,
+					kernelDefault
+				})
+			});
+			const payload = (await res.json().catch(() => ({}))) as {
+				message?: string;
+				liveObj?: string;
+				rawLlm?: string;
+				executedObj?: string;
+				executorWarning?: string;
+			};
+			if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
+
+			liveObjText = payload.liveObj ?? '';
+			rawLlmText = payload.rawLlm ?? '';
+			executedObjText = payload.executedObj ?? '';
+			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? payload.executedObj);
+			sourceTab = 'executed';
+			sceneEpoch += 1;
+
+			if (payload.executorWarning) {
+				statusLine = `Executor: ${payload.executorWarning}`;
+			}
+
+			msgs = [
+				...msgs,
+				{
+					role: 'assistant',
+					content: payload.executorWarning
+						? 'Received model output. Executor had issues; check status and the Adjust tab.'
+						: 'Updated scene applied. You can keep chatting to add/remove/modify objects.',
+					historyContent: payload.liveObj ?? payload.executedObj ?? ''
+				}
+			];
+		} catch (e) {
+			const m = e instanceof Error ? e.message : String(e);
+			statusLine = m;
+			msgs = [...msgs, { role: 'assistant', content: `Error: ${m}` }];
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function applyEditedSource(sceneText: string) {
+		if (!sceneText.trim()) return;
+		sourceApplyBusy = true;
+		statusLine = null;
+		try {
+			await regenerateFromMetadata(sceneText);
+		} finally {
+			sourceApplyBusy = false;
+		}
+	}
+
+	function captureSceneScreenshot() {
+		return (
+			canvasRef?.captureScreenshot({
+				maxWidth: 1280,
+				format: 'image/jpeg',
+				quality: 0.9
+			}) ?? ''
+		);
 	}
 </script>
 
-<div class="landing">
-	<header class="landing-header">
-		<img class="landing-logo" src="/images/spellshape_text_logo.svg" alt="Spellshape" />
-	</header>
-
-	<main class="landing-main">
-		<section class="hero">
-			<h1>Create 3D Models by Just Describing Them</h1>
-			<p class="hero-subtitle">
-				No complex software. No technical skills needed. Just type what you want to build.
-			</p>
-
-			<div class="video-placeholder">
-				<div class="video-placeholder-content">
-					<div class="play-icon">▶</div>
-					<p>Watch it in action</p>
-				</div>
+<div class="app-root">
+	<div class="canvas-layer">
+		<Canvas3D
+			bind:this={canvasRef}
+			className="app-canvas"
+			{backgroundColor}
+			{renderObject}
+			{objectColor}
+			respectObjectMaterials={preserveObjMaterials}
+			{showGrid}
+			{showAxes}
+			{ambientLightIntensity}
+			{directionalLightIntensity}
+			showWireframe={wireframe}
+			{enableShadows}
+			{fogEnabled}
+			{fogNear}
+			{fogFar}
+			{fogColor}
+			{cameraFov}
+			{toneMappingExposure}
+		/>
+		{#if busy || sourceApplyBusy}
+			<div class="canvas-loading-overlay" aria-live="polite" aria-busy="true">
+				<div class="canvas-loading-spinner"></div>
 			</div>
+		{/if}
+	</div>
 
-			<button class="cta-button" onclick={goToApp}>Try It Free</button>
-		</section>
-
-		<section class="problem-solution">
-			<div class="problem">
-				<h2>The Problem</h2>
-				<p>
-					Traditional 3D modeling requires expensive software, months of training, and deep technical knowledge.
-					It's slow, frustrating, and out of reach for most people.
-				</p>
-			</div>
-
-			<div class="solution">
-				<h2>The Solution</h2>
-				<p>
-					Spellshape lets you create 3D models simply by describing what you want in plain English.
-					Our AI understands your description and generates the model instantly. Edit, refine, and export—all in one place.
-				</p>
-			</div>
-		</section>
-	</main>
-
-	<footer class="landing-footer">
-		<p>&copy; 2026 Spellshape. AI-native 3D authoring.</p>
-	</footer>
+	<LiveObjSidePanel
+		bind:showPanel
+		{msgs}
+		{busy}
+		{statusLine}
+		bind:sourceTab
+		{liveObjText}
+		{rawLlmText}
+		{executedObjText}
+		{sceneEpoch}
+		{sourceApplyBusy}
+		bind:backgroundColor
+		bind:showGrid
+		bind:showAxes
+		bind:wireframe
+		bind:objectColor
+		bind:objectScale
+		bind:objectPosX
+		bind:objectPosY
+		bind:objectPosZ
+		bind:objectRotYDeg
+		bind:ambientLightIntensity
+		bind:directionalLightIntensity
+		bind:enableShadows
+		bind:fogEnabled
+		bind:fogNear
+		bind:fogFar
+		bind:fogColor
+		bind:cameraFov
+		bind:toneMappingExposure
+		onLiveObjMetadataChange={(updatedText) => void regenerateFromMetadata(updatedText)}
+		onApplyEditedSource={(text) => void applyEditedSource(text)}
+		onSend={(p) => void sendPrompt(p)}
+		onCaptureSceneScreenshot={captureSceneScreenshot}
+		bind:kernelDefault
+	/>
 </div>
 
 <style>
-	.landing {
-		min-height: 100vh;
-		display: flex;
-		flex-direction: column;
-		background: linear-gradient(135deg, #f5f7fa 0%, #e8ebf2 100%);
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	.app-root {
+		position: fixed;
+		inset: 0;
+		overflow: hidden;
 	}
-
-	.landing-header {
-		padding: 24px 48px;
-		display: flex;
-		align-items: center;
+	.canvas-layer {
+		position: absolute;
+		inset: 0;
+		z-index: 0;
 	}
-
-	.landing-logo {
-		height: 32px;
-		width: auto;
-	}
-
-	.landing-main {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		padding: 48px 24px;
-		max-width: 1200px;
-		margin: 0 auto;
-	}
-
-	.hero {
-		text-align: center;
-		max-width: 800px;
-		margin-bottom: 80px;
-	}
-
-	.hero h1 {
-		font-size: 56px;
-		font-weight: 700;
-		color: #1a1a1a;
-		margin: 0 0 24px 0;
-		line-height: 1.1;
-	}
-
-	.hero-subtitle {
-		font-size: 20px;
-		color: #555;
-		margin: 0 0 48px 0;
-		line-height: 1.5;
-	}
-
-	.video-placeholder {
+	:global(.app-canvas) {
 		width: 100%;
-		max-width: 800px;
-		aspect-ratio: 16/9;
-		background: linear-gradient(135deg, #0000eb 0%, #0000a8 100%);
-		border-radius: 16px;
+		height: 100%;
+	}
+	:global(.app-canvas canvas) {
+		border-radius: 0;
+		box-shadow: none;
+	}
+	.canvas-loading-overlay {
+		position: absolute;
+		inset: 0;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		margin: 0 auto 48px auto;
-		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+		background: rgba(255, 255, 255, 0.28);
+		backdrop-filter: blur(1px);
+		z-index: 2;
+		pointer-events: none;
 	}
-
-	.video-placeholder-content {
-		text-align: center;
-		color: white;
-	}
-
-	.play-icon {
-		font-size: 64px;
-		margin-bottom: 16px;
-	}
-
-	.video-placeholder-content p {
-		font-size: 18px;
-		font-weight: 500;
-		margin: 0;
-	}
-
-	.cta-button {
-		background: #0000eb;
-		color: white;
-		border: none;
-		padding: 16px 48px;
-		font-size: 18px;
-		font-weight: 600;
+	.canvas-loading-spinner {
+		width: 36px;
+		height: 36px;
+		border: 3px solid rgba(15, 23, 42, 0.15);
+		border-top-color: rgba(15, 23, 42, 0.82);
 		border-radius: 999px;
-		cursor: pointer;
-		transition: all 0.2s ease;
-		box-shadow: 0 4px 12px rgba(0, 0, 235, 0.3);
+		animation: canvasSpin 0.8s linear infinite;
 	}
-
-	.cta-button:hover {
-		background: #0000a8;
-		transform: translateY(-2px);
-		box-shadow: 0 6px 16px rgba(0, 0, 235, 0.4);
-	}
-
-	.problem-solution {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 48px;
-		width: 100%;
-		max-width: 900px;
-	}
-
-	.problem,
-	.solution {
-		padding: 32px;
-		background: white;
-		border-radius: 16px;
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-	}
-
-	.problem h2,
-	.solution h2 {
-		font-size: 24px;
-		font-weight: 600;
-		color: #1a1a1a;
-		margin: 0 0 16px 0;
-	}
-
-	.problem p,
-	.solution p {
-		font-size: 16px;
-		color: #555;
-		line-height: 1.6;
-		margin: 0;
-	}
-
-	.landing-footer {
-		text-align: center;
-		padding: 32px;
-		color: #888;
-		font-size: 14px;
-	}
-
-	@media (max-width: 768px) {
-		.hero h1 {
-			font-size: 36px;
-		}
-
-		.hero-subtitle {
-			font-size: 16px;
-		}
-
-		.problem-solution {
-			grid-template-columns: 1fr;
-			gap: 24px;
-		}
-
-		.landing-header {
-			padding: 16px 24px;
-		}
-
-		.landing-main {
-			padding: 32px 16px;
-		}
+	@keyframes canvasSpin {
+		to { transform: rotate(360deg); }
 	}
 </style>
