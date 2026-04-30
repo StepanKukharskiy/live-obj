@@ -1076,6 +1076,44 @@ def cadquery_loft_mesh(center: Vec3, sections: List[List[List[float]]], segments
     return Mesh(vertices, faces)
 
 
+def cadquery_tessellated_mesh(shape: Any, center: Vec3, segments: int) -> Mesh:
+    tri = shape.tessellate(1.0 / max(8, int(segments)))
+    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
+    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
+    return Mesh(vertices, faces)
+
+
+def cadquery_solid_from_params(typ: str, params: Dict[str, Any]) -> Optional[Any]:
+    import importlib.util
+    if importlib.util.find_spec("cadquery") is None:
+        return None
+    import cadquery as cq
+    if typ == "box":
+        size = params.get("size", [params.get("width", 1), params.get("depth", params.get("length", 1)), params.get("height", 1)])
+        if isinstance(size, str):
+            return None
+        sx, sy, sz = _as_float3(size, (1.0, 1.0, 1.0))
+        return cq.Workplane("XY").box(sx, sy, sz).val()
+    if typ == "cylinder":
+        axis = str(params.get("axis", "z")).lower()
+        if axis != "z":
+            return None
+        depth = float(params.get("depth", params.get("height", params.get("width", 1))))
+        radius = float(params.get("radius", 0.5))
+        return cq.Workplane("XY").cylinder(depth, radius).val()
+    if typ == "cone":
+        axis = str(params.get("axis", "z")).lower()
+        if axis != "z":
+            return None
+        height = float(params.get("height", params.get("depth", 1.0)))
+        radius = float(params.get("radius", 0.5))
+        return cq.Workplane("XY").cone(height, radius, 0.0).val()
+    if typ == "sphere":
+        radius = float(params.get("radius", 0.5))
+        return cq.Workplane("XY").sphere(radius).val()
+    return None
+
+
 def kernel_mesh_profile_op(kernel: str, typ: str, params: Dict[str, Any], center: Vec3) -> Optional[Mesh]:
     if kernel != "cadquery":
         return None
@@ -2494,6 +2532,21 @@ def kernel_op_bevel(obj: LiveObject, env: Dict[str, Any], amount: float, segment
     return kernel_mesh_primitive(kernel, typ, params, center)
 
 
+def kernel_op_cadquery_solid(obj: LiveObject, env: Dict[str, Any]) -> Optional[Tuple[Any, Vec3, int]]:
+    params = dict(obj.meta.get("params", {}) or {})
+    kernel = str(params.get("kernel", "")).lower()
+    if kernel != "cadquery":
+        return None
+    center_raw = params.get("center", params.get("position", [0, 0, 0]))
+    center = _as_float3(eval_mixed_value(center_raw, env, {}) if isinstance(center_raw, str) else center_raw, (0.0, 0.0, 0.0))
+    typ = str(obj.meta.get("type", "")).lower()
+    solid = cadquery_solid_from_params(typ, params)
+    if solid is None:
+        return None
+    segments = int(params.get("segments", 24))
+    return (solid, center, segments)
+
+
 def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     out = mesh
     env = get_effective_params(obj, obn)
@@ -2568,6 +2621,34 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             seg = int(resolve_op_value(op, "segments", 1))
             ker_mesh = kernel_op_bevel(obj, env, amount, seg)
             out = ker_mesh if ker_mesh is not None else op_bevel(out, amount, seg)
+        elif name in {"union", "subtract", "intersect"}:
+            target_name = str(op.get("with", op.get("target", "")))
+            target_obj = obn.get(target_name) if target_name else None
+            cur = kernel_op_cadquery_solid(obj, env)
+            tgt = kernel_op_cadquery_solid(target_obj, env) if target_obj is not None else None
+            if cur is not None and tgt is not None:
+                solid_a, center_a, seg_a = cur
+                solid_b, _, _ = tgt
+                if name == "union":
+                    out = cadquery_tessellated_mesh(solid_a.fuse(solid_b), center_a, seg_a)
+                elif name == "subtract":
+                    out = cadquery_tessellated_mesh(solid_a.cut(solid_b), center_a, seg_a)
+                else:
+                    out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
+        elif name == "chamfer":
+            amount = float(resolve_op_value(op, "amount", op.get("distance", 0.02)))
+            cur = kernel_op_cadquery_solid(obj, env)
+            if cur is not None and amount > 0:
+                solid, center_s, seg_s = cur
+                out = cadquery_tessellated_mesh(solid.chamfer(amount), center_s, seg_s)
+            else:
+                out = op_bevel(out, amount, int(resolve_op_value(op, "segments", 1)))
+        elif name in {"shell", "thicken", "offset"}:
+            thickness = float(resolve_op_value(op, "thickness", op.get("amount", 0.05)))
+            cur = kernel_op_cadquery_solid(obj, env)
+            if cur is not None and abs(thickness) > 1e-9:
+                solid, center_s, seg_s = cur
+                out = cadquery_tessellated_mesh(solid.shell(thickness), center_s, seg_s)
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
         elif name == "taper":
