@@ -244,13 +244,37 @@ def _resolve_value(v, scope):
     return _resolve_scalar(v, scope)
 
 
+
+
+def _dict_items_safe(d):
+    if not d:
+        return []
+    try:
+        return list(d.items())
+    except Exception:
+        pass
+    out = []
+    try:
+        keys = list(d.keys())
+    except Exception:
+        return out
+    for k in keys:
+        try:
+            out.append((k, d[k]))
+        except Exception:
+            try:
+                out.append((k, d.get(k)))
+            except Exception:
+                pass
+    return out
+
 def _build_scope_for_object(obj, assembly_params):
     scope = {}
     parent = str(obj.meta.get("parent", "")).strip()
     if parent and parent in assembly_params:
         scope.update(assembly_params[parent])
     if isinstance(obj.meta.get("params", {}), dict):
-        for k, v in obj.meta["params"].items():
+        for k, v in _dict_items_safe(obj.meta.get("params")):
             rv = _resolve_value(v, scope)
             scope[k] = rv
     return scope
@@ -738,7 +762,7 @@ for o in objs:
         raw = o.meta.get("params", {})
         if isinstance(raw, dict):
             scope = {}
-            for k, v in raw.items():
+            for k, v in _dict_items_safe(raw):
                 scope[k] = _resolve_value(v, scope)
             assembly_params[o.name] = scope
 
@@ -754,7 +778,7 @@ for o in objs:
     if isinstance(o.meta.get("params", {}), dict):
         scope = _build_scope_for_object(o, assembly_params)
         resolved = {}
-        for k, v in o.meta["params"].items():
+        for k, v in _dict_items_safe(o.meta.get("params")):
             resolved[k] = _resolve_value(v, scope)
         o.meta["params"] = resolved
 
