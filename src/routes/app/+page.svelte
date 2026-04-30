@@ -23,6 +23,7 @@
 	let executedObjText = $state('');
 	let sceneEpoch = $state(0);
 	let sourceApplyBusy = $state(false);
+	let kernelDefault = $state<'auto' | 'cadquery'>('auto');
 	let renderObject = $state<THREE.Object3D | null>(null);
 
 	let backgroundColor = $state('#e8ebf2');
@@ -197,12 +198,13 @@
 	async function regenerateFromMetadata(updatedLiveObj: string) {
 		if (!updatedLiveObj.trim()) return;
 		statusLine = null;
-		liveObjText = updatedLiveObj;
+		const sceneWithKernel = applyKernelDefaultHeader(updatedLiveObj);
+		liveObjText = sceneWithKernel;
 		try {
 			const res = await fetch('/api/live-obj/execute', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ liveObj: updatedLiveObj })
+				body: JSON.stringify({ liveObj: sceneWithKernel })
 			});
 			const payload = (await res.json().catch(() => ({}))) as {
 				message?: string;
@@ -211,15 +213,33 @@
 				executedObj?: string;
 			};
 			if (!res.ok) throw new Error(payload.detail || payload.message || res.statusText || 'Metadata regeneration failed');
-			liveObjText = payload.liveObj ?? updatedLiveObj;
+			liveObjText = payload.liveObj ?? sceneWithKernel;
 			executedObjText = payload.executedObj ?? '';
 			sourceTab = 'executed';
 			sceneEpoch += 1;
-			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? updatedLiveObj);
+			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? sceneWithKernel);
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
 			statusLine = `Metadata regenerate failed: ${m}`;
 		}
+	}
+
+	function applyKernelDefaultHeader(sceneText: string): string {
+		const raw = sceneText.trim();
+		if (!raw) return sceneText;
+		if (kernelDefault !== 'cadquery') return sceneText;
+		const lines = raw.split('\n');
+		const idx = lines.findIndex((l) => l.trim().startsWith('#@kernel_default:'));
+		if (idx >= 0) {
+			lines[idx] = '#@kernel_default: cadquery';
+			return `${lines.join('\n')}\n`;
+		}
+		const headerIdx = lines.findIndex((l) => l.trim().startsWith('#@live_obj_version:'));
+		if (headerIdx >= 0) {
+			lines.splice(headerIdx + 1, 0, '#@kernel_default: cadquery');
+			return `${lines.join('\n')}\n`;
+		}
+		return `#@kernel_default: cadquery\n${raw}\n`;
 	}
 
 	async function sendPrompt(payload: { text: string; model: string; imageDataUrl?: string }) {
@@ -256,7 +276,8 @@
 					userMessage: text,
 					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
 					history,
-					model
+					model,
+					kernelDefault
 				})
 			});
 			const payload = (await res.json().catch(() => ({}))) as {
@@ -383,6 +404,7 @@
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
 		onSend={(p) => void sendPrompt(p)}
 		onCaptureSceneScreenshot={captureSceneScreenshot}
+		bind:kernelDefault
 	/>
 </div>
 

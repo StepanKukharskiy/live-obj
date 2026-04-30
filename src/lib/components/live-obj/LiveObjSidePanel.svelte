@@ -42,7 +42,8 @@
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
 		onSend,
-		onCaptureSceneScreenshot
+		onCaptureSceneScreenshot,
+		kernelDefault = $bindable<'auto' | 'cadquery'>('auto')
 	}: {
 		showPanel?: boolean;
 		msgs?: ChatMsg[];
@@ -77,6 +78,7 @@
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
 		onSend?: (payload: { text: string; model: string; imageDataUrl?: string }) => void;
 		onCaptureSceneScreenshot?: () => string;
+		kernelDefault?: 'auto' | 'cadquery';
 	} = $props();
 
 	let activeTab = $state<PanelTab>('chat');
@@ -102,6 +104,13 @@
 				<button type="button" class="live-obj-panel-close" onclick={() => (showPanel = false)} title="Close panel">✕</button>
 			</header>
 			<div class="planner-tabs" role="tablist" aria-label="Panel tabs">
+				<label class="kernel-default">
+					Kernel
+					<select bind:value={kernelDefault}>
+						<option value="auto">Auto</option>
+						<option value="cadquery">CadQuery</option>
+					</select>
+				</label>
 				<button type="button" class:active={activeTab === 'chat'} onclick={() => (activeTab = 'chat')}>Chat</button>
 				<button type="button" class:active={activeTab === 'adjust'} onclick={() => (activeTab = 'adjust')}>Adjust</button>
 				<button type="button" class:active={activeTab === 'scene'} onclick={() => (activeTab = 'scene')}>Scene</button>
@@ -180,6 +189,21 @@
 	}
 	:global(.live-obj-side-panel .planner-tabs) {
 		padding: 0 12px 0 16px;
+	}
+	.kernel-default {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+		color: #5f5f5f;
+		margin-right: 8px;
+	}
+	.kernel-default select {
+		font-size: 12px;
+		border: 1px solid #d6dbe4;
+		border-radius: 8px;
+		padding: 2px 6px;
+		background: #fff;
 	}
 	.live-obj-reopen {
 		position: absolute;

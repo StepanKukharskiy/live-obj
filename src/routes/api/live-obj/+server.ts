@@ -15,6 +15,7 @@ type Body = {
 	imageUrl?: string;
 	history?: WireHistoryItem[];
 	model?: string;
+	kernelDefault?: 'auto' | 'cadquery';
 };
 
 const KNOWN_OPS = new Set([
@@ -123,6 +124,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const model = (body.model?.trim() || DEFAULT_LIVE_OBJ_MODEL) as string;
+	const kernelDefault = body.kernelDefault === 'cadquery' ? 'cadquery' : 'auto';
 	const rawHistory = body.history ?? [];
 	const history: ChatCompletionMessage[] = wireHistoryToMessages(rawHistory);
 
@@ -136,6 +138,17 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const liveObj = stripCodeFences(rawLlm);
 	let correctedLiveObj = liveObj;
+	if (kernelDefault === 'cadquery') {
+		const lines = correctedLiveObj.trim().split('\n');
+		const idx = lines.findIndex((l) => l.trim().startsWith('#@kernel_default:'));
+		if (idx >= 0) lines[idx] = '#@kernel_default: cadquery';
+		else {
+			const headerIdx = lines.findIndex((l) => l.trim().startsWith('#@live_obj_version:'));
+			if (headerIdx >= 0) lines.splice(headerIdx + 1, 0, '#@kernel_default: cadquery');
+			else lines.unshift('#@kernel_default: cadquery');
+		}
+		correctedLiveObj = `${lines.join('\n')}\n`;
+	}
 	const unknownOps = unknownOpsInLiveObj(liveObj);
 	const unknownMeta = unknownMetaValues(liveObj);
 	const hasUnknownMeta =
