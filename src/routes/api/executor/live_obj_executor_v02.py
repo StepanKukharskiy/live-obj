@@ -2183,6 +2183,38 @@ def op_subdivide(mesh: Mesh, level: int = 1) -> Mesh:
     return out
 
 
+def _axis_aligned_bbox(mesh: Mesh) -> Optional[Tuple[Vec3, Vec3]]:
+    if not mesh.vertices:
+        return None
+    xs = [v[0] for v in mesh.vertices]
+    ys = [v[1] for v in mesh.vertices]
+    zs = [v[2] for v in mesh.vertices]
+    return (min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs))
+
+
+def op_bevel(mesh: Mesh, amount: float = 0.05, segments: int = 1) -> Mesh:
+    """Approximate a CAD-like edge bevel for boxy meshes.
+
+    Current executor primitives often produce axis-aligned cuboids. For those,
+    generate a rounded box directly (12 edge strips + 8 corner patches) instead
+    of Laplacian smoothing, which shrinks/distorts the whole mesh.
+    """
+    bbox = _axis_aligned_bbox(mesh)
+    if bbox is None:
+        return mesh.copy()
+    (min_x, min_y, min_z), (max_x, max_y, max_z) = bbox
+    sx, sy, sz = max_x - min_x, max_y - min_y, max_z - min_z
+    if sx <= 1e-9 or sy <= 1e-9 or sz <= 1e-9:
+        return mesh.copy()
+
+    seg = max(1, int(segments))
+    r = max(0.0, float(amount))
+    r = min(r, sx * 0.499, sy * 0.499, sz * 0.499)
+    if r <= 1e-8:
+        return mesh.copy()
+    return rounded_box_mesh(((min_x + max_x) * 0.5, (min_y + max_y) * 0.5, (min_z + max_z) * 0.5), (sx, sy, sz), r, seg)
+
+
 def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     out = mesh
     env = get_effective_params(obj, obn)
@@ -2224,10 +2256,11 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         elif name == "tread":
             out = op_tread(out, op)
         elif name == "bevel":
-            amt = float(op.get("amount", 0.05))
-            seg = max(1, int(op.get("segments", 1)))
-            out = op_subdivide(out, min(2, seg))
-            out = op_smooth(out, max(1, seg), min(0.8, 0.2 + amt))
+            out = op_bevel(
+                out,
+                float(op.get("amount", 0.05)),
+                int(op.get("segments", 1)),
+            )
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
         elif name == "taper":
