@@ -2274,13 +2274,22 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             offset = op.get("offset", [1,0,0])
             if isinstance(offset, str):
                 offset = eval_mixed_value(offset, env, obn)
-            out = op_array(out, int(op.get("count",2)), tuple(map(float, offset)))
+            count_raw = op.get("count", 2)
+            if isinstance(count_raw, str):
+                count_raw = eval_mixed_value(count_raw, env, obn)
+            out = op_array(out, int(count_raw), tuple(map(float, offset)))
         elif name == "radial_array":
+            count_raw = op.get("count", 6)
+            radius_raw = op.get("radius", 1.0)
+            if isinstance(count_raw, str):
+                count_raw = eval_mixed_value(count_raw, env, obn)
+            if isinstance(radius_raw, str):
+                radius_raw = eval_mixed_value(radius_raw, env, obn)
             out = op_radial_array(
                 out,
-                int(op.get("count", 6)),
+                int(count_raw),
                 str(op.get("axis", "z")),
-                float(op.get("radius", 1.0))
+                float(radius_raw)
             )
         elif name == "tread":
             out = op_tread(out, op)
