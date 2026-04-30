@@ -2986,6 +2986,12 @@ def generate_simulation(obj: LiveObject) -> Mesh:
 
 def execute_scene(scene: Scene) -> Scene:
     obn: Dict[str, LiveObject] = {o.name: o for o in scene.objects}
+    kernel_default = ""
+    for line in scene.header_lines:
+        t = line.strip()
+        if t.startswith("#@kernel_default:"):
+            kernel_default = t.split(":", 1)[1].strip().lower()
+            break
     normalize_misplaced_assembly_anchors(scene)
     order = topological_objects(scene.objects, obn)
     for obj in order:
@@ -3001,7 +3007,10 @@ def execute_scene(scene: Scene) -> Scene:
             continue
         if source == "procedural":
             oldp = obj.meta.get("params")
-            obj.meta["params"] = get_effective_params(obj, obn)
+            resolved_params = get_effective_params(obj, obn)
+            if kernel_default and not str(resolved_params.get("kernel", "")).strip():
+                resolved_params["kernel"] = kernel_default
+            obj.meta["params"] = resolved_params
             try:
                 base = generate_procedural(obj, obn)
                 base = apply_meta_instancing(base, obj, obn)
