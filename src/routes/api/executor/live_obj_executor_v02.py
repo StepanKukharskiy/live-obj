@@ -2327,11 +2327,20 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
         elif name == "taper":
-            out = op_taper(out, str(op.get("axis", "z")), float(op.get("amount", 0.0)))
+            amount_raw = op.get("amount", 0.0)
+            if isinstance(amount_raw, str):
+                amount_raw = eval_mixed_value(amount_raw, env, obn)
+            out = op_taper(out, str(op.get("axis", "z")), float(amount_raw))
         elif name == "twist":
-            out = op_twist(out, str(op.get("axis", "z")), float(op.get("angle", 0.0)))
+            angle_raw = op.get("angle", 0.0)
+            if isinstance(angle_raw, str):
+                angle_raw = eval_mixed_value(angle_raw, env, obn)
+            out = op_twist(out, str(op.get("axis", "z")), float(angle_raw))
         elif name == "bend":
-            out = op_bend(out, str(op.get("axis", "x")), float(op.get("angle", 0.0)))
+            angle_raw = op.get("angle", 0.0)
+            if isinstance(angle_raw, str):
+                angle_raw = eval_mixed_value(angle_raw, env, obn)
+            out = op_bend(out, str(op.get("axis", "x")), float(angle_raw))
         elif name == "simplify":
             out = op_simplify(out, float(op.get("ratio", 1.0)))
         elif name == "remesh":
