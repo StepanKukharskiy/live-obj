@@ -209,11 +209,14 @@ def _safe_eval_expr(expr, scope):
         node = ast.parse(str(expr), mode="eval")
     except Exception:
         return expr
-    allowed = (
+    allowed = [
         ast.Expression, ast.BinOp, ast.UnaryOp, ast.Add, ast.Sub, ast.Mult, ast.Div,
-        ast.Pow, ast.USub, ast.UAdd, ast.Load, ast.Constant, ast.Num, ast.Name,
-        ast.Tuple, ast.List
-    )
+        ast.Pow, ast.USub, ast.UAdd, ast.Load, ast.Num, ast.Name, ast.Tuple, ast.List
+    ]
+    ast_constant = getattr(ast, "Constant", None)
+    if ast_constant is not None:
+        allowed.append(ast_constant)
+    allowed = tuple(allowed)
     for n in ast.walk(node):
         if not isinstance(n, allowed):
             return expr
