@@ -6,7 +6,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install optional CAD kernel dependency used by live_obj_executor_v02.py
-RUN python3.11 -m pip install --no-cache-dir cadquery
+RUN python3.11 -m pip install --no-cache-dir --break-system-packages cadquery
 
 WORKDIR /app
 
