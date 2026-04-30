@@ -17,6 +17,33 @@ type Body = {
 	model?: string;
 };
 
+const KNOWN_OPS = new Set([
+	'transform', 'mirror', 'array', 'radial_array', 'bevel', 'smooth', 'subdivide', 'remesh', 'simplify',
+	'displace', 'bend', 'twist', 'taper', 'sweep', 'thicken', 'skin', 'loft',
+	'boolean', 'mesh_from_sdf', 'collision', 'snap', 'anchor', 'attach', 'constraint', 'material', 'tag',
+	'trace_paths', 'sdf_tubes', 'voxelize', 'mesh_from_volume', 'tread',
+	'union', 'subtract', 'intersect', 'chamfer', 'shell', 'offset'
+]);
+
+function unknownOpsInLiveObj(liveObj: string): string[] {
+	const unknown = new Set<string>();
+	for (const rawLine of liveObj.split('\n')) {
+		const line = rawLine.trim();
+		if (!line.startsWith('#@')) continue;
+		const body = line.slice(2).trim();
+		let opToken = '';
+		if (body.startsWith('op:')) {
+			opToken = body.slice(3).trim().split(/\s+/)[0] ?? '';
+		} else if (body.startsWith('-')) {
+			opToken = body.slice(1).trim().split(/\s+/)[0] ?? '';
+		}
+		if (!opToken) continue;
+		const op = opToken.toLowerCase();
+		if (!KNOWN_OPS.has(op)) unknown.add(op);
+	}
+	return [...unknown];
+}
+
 function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[] {
 	return items
 		.filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -72,17 +99,36 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const liveObj = stripCodeFences(rawLlm);
+	let correctedLiveObj = liveObj;
+	const unknownOps = unknownOpsInLiveObj(liveObj);
+	if (unknownOps.length > 0) {
+		const correctionPrompt =
+			`Rewrite the previous Live OBJ to use only supported ops. ` +
+			`Unknown ops found: ${unknownOps.join(', ')}. ` +
+			`Keep object IDs/anchors/params unless required for compatibility. ` +
+			`Do not use #@op_experimental; use #@op: or #@ops: only.`;
+		try {
+			const correctedRaw = await requestLiveObjFromLlm(
+				correctionPrompt,
+				[...history, { role: 'assistant', content: liveObj }],
+				model
+			);
+			correctedLiveObj = stripCodeFences(correctedRaw);
+		} catch {
+			// Keep first-pass output when correction pass fails.
+		}
+	}
 	let executedObj: string;
 	let executorWarning: string | undefined;
 	try {
-		executedObj = await expandLiveObjWithExecutor(liveObj);
+		executedObj = await expandLiveObjWithExecutor(correctedLiveObj);
 	} catch (e) {
 		executorWarning = e instanceof Error ? e.message : String(e);
-		executedObj = liveObj;
+		executedObj = correctedLiveObj;
 	}
 
 	return json({
-		liveObj,
+		liveObj: correctedLiveObj,
 		rawLlm,
 		executedObj,
 		...(executorWarning ? { executorWarning } : {})
