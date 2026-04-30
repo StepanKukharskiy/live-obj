@@ -168,6 +168,32 @@ export const POST: RequestHandler = async ({ request }) => {
 		executedObj = await expandLiveObjWithExecutor(correctedLiveObj);
 	} catch (e) {
 		executorWarning = e instanceof Error ? e.message : String(e);
+		const anchorMissing = /anchor '([^']+)'\.'([^']+)' not available/.exec(executorWarning);
+		if (anchorMissing) {
+			const [, asm, anchorId] = anchorMissing;
+			const anchorFixPrompt =
+				`Rewrite the previous Live OBJ and fix missing anchor references. ` +
+				`Anchor missing: ${asm}.${anchorId}. ` +
+				`Define the anchor in the correct assembly #@anchors block or replace bad references with existing anchors. ` +
+				`Keep object IDs and dimensions stable.`;
+			try {
+				const fixedRaw = await requestLiveObjFromLlm(
+					anchorFixPrompt,
+					[...history, { role: 'assistant', content: correctedLiveObj }],
+					model
+				);
+				const fixedLiveObj = stripCodeFences(fixedRaw);
+				executedObj = await expandLiveObjWithExecutor(fixedLiveObj);
+				return json({
+					liveObj: fixedLiveObj,
+					rawLlm,
+					executedObj,
+					executorWarning: `Auto-corrected missing anchor ${asm}.${anchorId} after first execution failure.`
+				});
+			} catch {
+				// Fall through and return first-pass result with warning.
+			}
+		}
 		executedObj = correctedLiveObj;
 	}
 
