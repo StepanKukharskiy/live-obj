@@ -317,12 +317,14 @@ def _build_scope_for_object(obj, assembly_params):
 def build_native_geometry(obj, warnings):
     meta = obj.meta
     source = str(meta.get("source", "")).lower()
-    if source not in {"procedural", "simulation"}:
+    if source not in {"procedural", "simulation", "sdf"}:
         return None
 
     p = meta.get("params", {}) if isinstance(meta.get("params", {}), dict) else {}
     if source == "simulation":
         return build_simulation_geometry(obj, p, warnings)
+    if source == "sdf":
+        return build_sdf_geometry(obj, warnings)
 
     typ = str(meta.get("type", "")).lower()
 
@@ -354,6 +356,82 @@ def build_native_geometry(obj, warnings):
     if typ:
         warnings.append("unsupported procedural type on '%s': %s" % (obj.name, typ))
     return None
+
+
+def _sdf_vec3(op, key, default):
+    raw = op.get(key, default)
+    if isinstance(raw, (list, tuple)) and len(raw) >= 3:
+        try:
+            return float(raw[0]), float(raw[1]), float(raw[2])
+        except Exception:
+            return default
+    return default
+
+
+def build_sdf_geometry(obj, warnings):
+    sdf_ops = obj.meta.get("sdf_ops", [])
+    if not isinstance(sdf_ops, list) or not sdf_ops:
+        warnings.append("sdf source on '%s' has no #@sdf ops" % obj.name)
+        return None
+
+    solids = {}
+    last = None
+    for op in sdf_ops:
+        name = str(op.get("op", "")).lower()
+        if name == "sphere":
+            cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
+            r = float(op.get("radius", 1.0))
+            g = rg.Sphere(rg.Point3d(cx, cy, cz), r).ToBrep()
+            sid = str(op.get("id", ""))
+            if sid:
+                solids[sid] = g
+            last = g
+        elif name == "cylinder":
+            cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
+            r = float(op.get("radius", 1.0))
+            h = float(op.get("height", 1.0))
+            circle = rg.Circle(rg.Plane(rg.Point3d(cx, cy, cz), rg.Vector3d.ZAxis), r)
+            g = rg.Cylinder(circle, h).ToBrep(True, True)
+            sid = str(op.get("id", ""))
+            if sid:
+                solids[sid] = g
+            last = g
+        elif name == "box":
+            cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
+            sx, sy, sz = _sdf_vec3(op, "size", (1.0, 1.0, 1.0))
+            plane = rg.Plane(rg.Point3d(cx, cy, cz), rg.Vector3d.ZAxis)
+            g = rg.Box(plane, rg.Interval(-sx/2.0, sx/2.0), rg.Interval(-sy/2.0, sy/2.0), rg.Interval(-sz/2.0, sz/2.0)).ToBrep()
+            sid = str(op.get("id", ""))
+            if sid:
+                solids[sid] = g
+            last = g
+        elif name == "subtract":
+            a = solids.get(str(op.get("id_a", "")))
+            b = solids.get(str(op.get("id_b", "")))
+            if a is not None and b is not None:
+                out = rg.Brep.CreateBooleanDifference(a, [b], 0.01)
+                if out and len(out) > 0:
+                    last = out[0]
+                    sid = str(op.get("id", ""))
+                    if sid:
+                        solids[sid] = last
+            else:
+                warnings.append("sdf subtract missing id_a/id_b geometry on '%s'" % obj.name)
+        elif name == "union":
+            ids = str(op.get("ids", "")).split(",") if "ids" in op else []
+            geoms = [solids.get(i.strip()) for i in ids if solids.get(i.strip()) is not None]
+            if len(geoms) >= 2:
+                out = rg.Brep.CreateBooleanUnion(geoms, 0.01)
+                if out and len(out) > 0:
+                    last = out[0]
+            else:
+                warnings.append("sdf union needs ids list with at least two known solids on '%s'" % obj.name)
+        elif name in {"mesh_from_sdf", "repeat"}:
+            continue
+        else:
+            warnings.append("unsupported sdf op on '%s': %s" % (obj.name, name))
+
+    return last
 
 
 def apply_deformer(mesh, obj, warnings):
