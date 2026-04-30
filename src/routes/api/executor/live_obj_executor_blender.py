@@ -18,8 +18,6 @@ This is Blender-native and intentionally compact; it does not fully replicate
 server-side executor behavior.
 """
 
-from __future__ import annotations
-
 import ast
 import math
 import random

@@ -38,8 +38,6 @@ Notes
 - OBJ mesh cache is still parsed and returned as Rhino meshes.
 """
 
-from __future__ import annotations
-
 import ast
 import math
 import random
