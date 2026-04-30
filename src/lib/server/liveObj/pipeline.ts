@@ -47,6 +47,19 @@ function formatExecFailureMessage(cmd: string, err: unknown): string {
 	return `Python executor failed (interpreter: ${cmd}). ${hint}`.trim();
 }
 
+async function probeCadQuery(cmd: string): Promise<string> {
+	try {
+		const { stdout } = await execFileAsync(cmd, [
+			'-c',
+			'import importlib.util; import sys; s=importlib.util.find_spec("cadquery"); print(sys.executable); print("cadquery=" + ("yes" if s else "no"))'
+		]);
+		return stdout.trim();
+	} catch (e) {
+		if (isExecutableNotFound(e)) return `interpreter not found: ${cmd}`;
+		return `probe failed: ${e instanceof Error ? e.message : String(e)}`;
+	}
+}
+
 async function runPythonOnFile(script: string, inputPath: string, outputPath: string): Promise<void> {
 	const args = [script, inputPath, '-o', outputPath];
 	const tried = pythonInterpreterCandidates();
@@ -60,7 +73,8 @@ async function runPythonOnFile(script: string, inputPath: string, outputPath: st
 				lastEnoent = e;
 				continue;
 			}
-			throw new Error(formatExecFailureMessage(cmd, e));
+			const cadQueryProbe = await probeCadQuery(cmd);
+			throw new Error(`${formatExecFailureMessage(cmd, e)}\nCadQuery probe:\n${cadQueryProbe}`);
 		}
 	}
 	const tail =
