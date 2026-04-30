@@ -2228,9 +2228,17 @@ def op_bevel(mesh: Mesh, amount: float = 0.05, segments: int = 1) -> Mesh:
     generate a rounded box directly (12 edge strips + 8 corner patches) instead
     of Laplacian smoothing, which shrinks/distorts the whole mesh.
     """
+    def fallback_bevel(m: Mesh, amt: float, seg: int) -> Mesh:
+        out = op_subdivide(m, min(2, max(1, seg)))
+        return op_smooth(out, max(1, seg), min(0.8, 0.2 + max(0.0, amt)))
+
     bbox = _axis_aligned_bbox(mesh)
     if bbox is None:
         return mesh.copy()
+    # Only replace geometry with a rounded box for truly box-like meshes.
+    # Cylinders/tubes were being incorrectly converted into rounded boxes.
+    if len(mesh.faces) > 24 or len(mesh.vertices) > 32:
+        return fallback_bevel(mesh, float(amount), max(1, int(segments)))
     (min_x, min_y, min_z), (max_x, max_y, max_z) = bbox
     sx, sy, sz = max_x - min_x, max_y - min_y, max_z - min_z
     if sx <= 1e-9 or sy <= 1e-9 or sz <= 1e-9:
