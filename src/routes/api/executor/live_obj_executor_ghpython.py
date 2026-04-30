@@ -1,42 +1,5 @@
-"""
-Live OBJ Executor for Grasshopper (GHPython)
-
-Purpose
--------
-A minimal, standalone executor that can be pasted into a GHPython component.
-It accepts raw OBJ or Live OBJ text from a Grasshopper Panel input and builds
-native Rhino/Grasshopper geometry.
-
-Input (GHPython)
-----------------
-x: str
-    OBJ or Live OBJ text. Live OBJ metadata lines begin with '#@'.
-
-Outputs (suggested)
--------------------
-A: list[Rhino.Geometry.Mesh]      Parsed mesh objects from v/f sections.
-B: list[Rhino.Geometry.GeometryBase]  Metadata-driven native geometry.
-C: list[str]                      Object names.
-D: list[str]                      Parse/execution warnings.
-
-Supported metadata (native geometry path)
------------------------------------------
-- #@source: procedural
-- #@type: box | sphere | cylinder | polyline
-- #@params: key=value, ...
-
-Example:
-    o demo_box
-    #@source: procedural
-    #@type: box
-    #@params: center=[0,0,0], size=[10,8,4]
-
-Notes
------
-- This is intentionally small and Grasshopper-first.
-- It does not attempt to replicate the full server-side Python executor.
-- OBJ mesh cache is still parsed and returned as Rhino meshes.
-"""
+# Live OBJ Executor for Grasshopper (GHPython)
+# Paste into a GHPython component.
 
 import ast
 import math
