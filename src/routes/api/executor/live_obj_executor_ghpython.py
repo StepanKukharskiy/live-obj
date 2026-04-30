@@ -363,6 +363,21 @@ def build_native_geometry(obj, warnings, sdf_registry=None):
 
 
 
+def _prepare_mesh_for_smooth(mesh):
+    try:
+        mesh.Vertices.CombineIdentical(True, True)
+    except Exception:
+        pass
+    try:
+        mesh.Weld(math.radians(180.0))
+    except Exception:
+        pass
+    try:
+        mesh.UnifyNormals()
+    except Exception:
+        pass
+
+
 def _smooth_mesh_safe(mesh, iters, strength):
     for _ in range(max(1, int(iters))):
         if hasattr(mesh, "LaplacianSmooth"):
@@ -800,6 +815,7 @@ def apply_native_ops(geom, ops, warnings):
             strength = float(op.get("factor", 1.0))
             for g in each_geom(out):
                 if isinstance(g, rg.Mesh):
+                    _prepare_mesh_for_smooth(g)
                     ok = _smooth_mesh_safe(g, iters, strength)
                     if not ok:
                         warnings.append("smooth not supported for current Rhino mesh API")
