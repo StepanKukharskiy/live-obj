@@ -2265,7 +2265,21 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             return eval_mixed_value(raw, env, obn)
         return raw
     if isinstance(obj.meta.get("transform"), dict):
-        out = apply_transform(out, obj.meta["transform"])
+        transform_dict = dict(obj.meta["transform"])
+        # Common Live OBJ pattern: procedural params define `center=anchor(...)` and
+        # transform repeats `position=anchor(...)`. Applying both double-translates.
+        if str(obj.meta.get("source", "")) == "procedural":
+            params = obj.meta.get("params", {}) or {}
+            c = params.get("center")
+            p = transform_dict.get("position")
+            if isinstance(c, (list, tuple)) and isinstance(p, (list, tuple)) and len(c) >= 3 and len(p) >= 3:
+                if (
+                    abs(float(c[0]) - float(p[0])) <= 1e-8
+                    and abs(float(c[1]) - float(p[1])) <= 1e-8
+                    and abs(float(c[2]) - float(p[2])) <= 1e-8
+                ):
+                    transform_dict["position"] = [0.0, 0.0, 0.0]
+        out = apply_transform(out, transform_dict)
     # Child object transforms are local to their parent assembly/object.
     # Promote mesh into world space by applying ancestor transforms (root -> leaf).
     parent_chain: List[Dict[str, Any]] = []
