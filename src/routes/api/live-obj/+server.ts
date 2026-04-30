@@ -24,6 +24,12 @@ const KNOWN_OPS = new Set([
 	'trace_paths', 'sdf_tubes', 'voxelize', 'mesh_from_volume', 'tread',
 	'union', 'subtract', 'intersect', 'chamfer', 'shell', 'offset'
 ]);
+const KNOWN_SOURCES = new Set(['procedural', 'llm_mesh', 'assembly', 'sdf', 'simulation']);
+const KNOWN_TYPES = new Set([
+	'box', 'cylinder', 'surface_grid', 'heightfield', 'curve', 'sweep', 'mesh',
+	'extrude', 'revolve', 'lathe', 'loft', 'cone', 'sphere'
+]);
+const KNOWN_SIMS = new Set(['cellular_automata', 'differential_growth', 'boids']);
 
 function unknownOpsInLiveObj(liveObj: string): string[] {
 	const unknown = new Set<string>();
@@ -42,6 +48,36 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 		if (!KNOWN_OPS.has(op)) unknown.add(op);
 	}
 	return [...unknown];
+}
+
+function unknownMetaValues(liveObj: string): { badSources: string[]; badTypes: string[]; badSims: string[] } {
+	const badSources = new Set<string>();
+	const badTypes = new Set<string>();
+	const badSims = new Set<string>();
+	for (const rawLine of liveObj.split('\n')) {
+		const line = rawLine.trim();
+		if (!line.startsWith('#@')) continue;
+		const body = line.slice(2).trim();
+		if (body.startsWith('source:')) {
+			const v = body.slice('source:'.length).trim().toLowerCase();
+			if (v && !KNOWN_SOURCES.has(v)) badSources.add(v);
+			continue;
+		}
+		if (body.startsWith('type:')) {
+			const v = body.slice('type:'.length).trim().toLowerCase();
+			if (v && !KNOWN_TYPES.has(v)) badTypes.add(v);
+			continue;
+		}
+		if (body.startsWith('sim:')) {
+			const v = body.slice('sim:'.length).trim().toLowerCase();
+			if (v && !KNOWN_SIMS.has(v)) badSims.add(v);
+		}
+	}
+	return {
+		badSources: [...badSources],
+		badTypes: [...badTypes],
+		badSims: [...badSims]
+	};
 }
 
 function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[] {
@@ -101,10 +137,18 @@ export const POST: RequestHandler = async ({ request }) => {
 	const liveObj = stripCodeFences(rawLlm);
 	let correctedLiveObj = liveObj;
 	const unknownOps = unknownOpsInLiveObj(liveObj);
-	if (unknownOps.length > 0) {
+	const unknownMeta = unknownMetaValues(liveObj);
+	const hasUnknownMeta =
+		unknownMeta.badSources.length > 0 || unknownMeta.badTypes.length > 0 || unknownMeta.badSims.length > 0;
+	if (unknownOps.length > 0 || hasUnknownMeta) {
+		const metaHints: string[] = [];
+		if (unknownMeta.badSources.length > 0) metaHints.push(`unknown source values: ${unknownMeta.badSources.join(', ')}`);
+		if (unknownMeta.badTypes.length > 0) metaHints.push(`unknown type values: ${unknownMeta.badTypes.join(', ')}`);
+		if (unknownMeta.badSims.length > 0) metaHints.push(`unknown sim values: ${unknownMeta.badSims.join(', ')}`);
 		const correctionPrompt =
 			`Rewrite the previous Live OBJ to use only supported ops. ` +
 			`Unknown ops found: ${unknownOps.join(', ')}. ` +
+			(metaHints.length > 0 ? `${metaHints.join('. ')}. ` : '') +
 			`Keep object IDs/anchors/params unless required for compatibility. ` +
 			`Do not use #@op_experimental; use #@op: or #@ops: only.`;
 		try {
