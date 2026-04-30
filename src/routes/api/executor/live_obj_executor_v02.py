@@ -153,6 +153,12 @@ class Scene:
     objects: List[LiveObject] = field(default_factory=list)
 
 
+def record_kernel_event(obj: LiveObject, event: str) -> None:
+    events = obj.meta.setdefault("_kernel_events", [])
+    if isinstance(events, list) and event not in events:
+        events.append(event)
+
+
 # ----------------------------
 # Parsing
 # ----------------------------
@@ -2620,7 +2626,11 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             amount = float(resolve_op_value(op, "amount", 0.05))
             seg = int(resolve_op_value(op, "segments", 1))
             ker_mesh = kernel_op_bevel(obj, env, amount, seg)
-            out = ker_mesh if ker_mesh is not None else op_bevel(out, amount, seg)
+            if ker_mesh is not None:
+                record_kernel_event(obj, "op:bevel")
+                out = ker_mesh
+            else:
+                out = op_bevel(out, amount, seg)
         elif name in {"union", "subtract", "intersect"}:
             target_name = str(op.get("with", op.get("target", "")))
             target_obj = obn.get(target_name) if target_name else None
@@ -2630,16 +2640,20 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
                 solid_a, center_a, seg_a = cur
                 solid_b, _, _ = tgt
                 if name == "union":
+                    record_kernel_event(obj, "op:union")
                     out = cadquery_tessellated_mesh(solid_a.fuse(solid_b), center_a, seg_a)
                 elif name == "subtract":
+                    record_kernel_event(obj, "op:subtract")
                     out = cadquery_tessellated_mesh(solid_a.cut(solid_b), center_a, seg_a)
                 else:
+                    record_kernel_event(obj, "op:intersect")
                     out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
         elif name == "chamfer":
             amount = float(resolve_op_value(op, "amount", op.get("distance", 0.02)))
             cur = kernel_op_cadquery_solid(obj, env)
             if cur is not None and amount > 0:
                 solid, center_s, seg_s = cur
+                record_kernel_event(obj, "op:chamfer")
                 out = cadquery_tessellated_mesh(solid.chamfer(amount), center_s, seg_s)
             else:
                 out = op_bevel(out, amount, int(resolve_op_value(op, "segments", 1)))
@@ -2648,6 +2662,7 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             cur = kernel_op_cadquery_solid(obj, env)
             if cur is not None and abs(thickness) > 1e-9:
                 solid, center_s, seg_s = cur
+                record_kernel_event(obj, f"op:{name}")
                 out = cadquery_tessellated_mesh(solid.shell(thickness), center_s, seg_s)
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
@@ -2764,6 +2779,7 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         if kernel:
             ker_mesh = kernel_mesh_profile_op(kernel, "sweep", params, center)
             if ker_mesh is not None:
+                record_kernel_event(obj, "generate:sweep")
                 return ker_mesh
         p = dict(params)
         along = p.get("along")
@@ -2778,6 +2794,7 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         if kernel:
             ker_mesh = kernel_mesh_profile_op(kernel, "curve", params, center)
             if ker_mesh is not None:
+                record_kernel_event(obj, "generate:curve")
                 return ker_mesh
         sw = obj.meta.get("sweep")
         if isinstance(sw, dict) and str(sw.get("profile", "circle")).lower() == "circle":
@@ -2788,12 +2805,14 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         if kernel:
             ker_mesh = kernel_mesh_profile_op(kernel, typ, params, center)
             if ker_mesh is not None:
+                record_kernel_event(obj, f"generate:{typ}")
                 return ker_mesh
         return obj.mesh.copy()
     if typ == "loft":
         if kernel:
             ker_mesh = kernel_mesh_profile_op(kernel, "loft", params, center)
             if ker_mesh is not None:
+                record_kernel_event(obj, "generate:loft")
                 return ker_mesh
         return obj.mesh.copy()
 
@@ -2804,6 +2823,7 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         if kernel:
             ker_mesh = kernel_mesh_primitive(kernel, "box", params, center)
             if ker_mesh is not None:
+                record_kernel_event(obj, "generate:box")
                 return ker_mesh
         return box_mesh(center, _as_float3(size, (1.0, 1.0, 1.0)))
     if typ == "cylinder":
@@ -2825,6 +2845,7 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         if kernel and not base_aligned:
             ker_mesh = kernel_mesh_primitive(kernel, "cylinder", params, center)
             if ker_mesh is not None:
+                record_kernel_event(obj, "generate:cylinder")
                 return ker_mesh
         return cylinder_mesh(
             axis,
@@ -2838,6 +2859,7 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         if kernel:
             ker_mesh = kernel_mesh_primitive(kernel, "cone", params, center)
             if ker_mesh is not None:
+                record_kernel_event(obj, "generate:cone")
                 return ker_mesh
         axis = str(params.get("axis", "z")).lower()
         height = float(params.get("height", params.get("depth", 1.0)))
@@ -2852,6 +2874,7 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         if kernel:
             ker_mesh = kernel_mesh_primitive(kernel, "sphere", params, center)
             if ker_mesh is not None:
+                record_kernel_event(obj, "generate:sphere")
                 return ker_mesh
         return sphere_mesh(
             center,
@@ -2993,6 +3016,9 @@ def serialize_scene(scene: Scene) -> str:
         lines.append("")
         lines.append(f"{obj.declaration} {obj.name}")
         lines.extend(obj.meta_lines)
+        events = obj.meta.get("_kernel_events", [])
+        if isinstance(events, list) and events:
+            lines.append(f"#@runtime: kernel_used=true, events={events}")
         for l in obj.raw_nonlive_lines:
             if l.strip():
                 lines.append(l)
