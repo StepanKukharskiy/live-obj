@@ -2,8 +2,11 @@ FROM node:20-slim
 
 # Install Python 3.11
 RUN apt-get update \
-    && apt-get install -y python3.11 \
+    && apt-get install -y python3.11 python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install optional CAD kernel dependency used by live_obj_executor_v02.py
+RUN python3.11 -m pip install --no-cache-dir cadquery
 
 WORKDIR /app
 
