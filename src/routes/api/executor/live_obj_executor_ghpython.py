@@ -64,6 +64,29 @@ def _split_top_level_commas(text):
     return parts
 
 
+
+
+def _split_top_level_spaces(s):
+    parts = []
+    cur = []
+    depth = 0
+    for ch in str(s):
+        if ch in "[({":
+            depth += 1
+        elif ch in "]) }".replace(" ", ""):
+            depth = max(0, depth - 1)
+        if ch.isspace() and depth == 0:
+            token = "".join(cur).strip()
+            if token:
+                parts.append(token)
+            cur = []
+        else:
+            cur.append(ch)
+    tail = "".join(cur).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
 def _parse_params(raw):
     params = {}
     for part in _split_top_level_commas(raw):
@@ -168,7 +191,20 @@ def _parse_op_line(line):
         return {}
     op = {"op": parts[0].strip().lower()}
     if len(parts) > 1:
-        op.update(_parse_params(parts[1]))
+        rest = parts[1].strip()
+        parsed = {}
+        for token in _split_top_level_spaces(rest):
+            if "=" not in token:
+                continue
+            k, v = token.split("=", 1)
+            key = k.strip()
+            val = _parse_scalar(v)
+            if key in parsed and (val == "" or val is None):
+                continue
+            parsed[key] = val
+        if not parsed and "=" in rest:
+            parsed = _parse_params(rest)
+        op.update(parsed)
     return op
 
 
