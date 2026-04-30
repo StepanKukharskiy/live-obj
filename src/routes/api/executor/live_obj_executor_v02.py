@@ -890,6 +890,229 @@ def cylinder_mesh(
     return Mesh(verts, faces)
 
 
+def cadquery_cylinder_mesh(
+    axis: str,
+    center: Vec3,
+    radius: float,
+    depth: float,
+    segments: int,
+    bevel_radius: float,
+) -> Optional[Mesh]:
+    if axis != "z":
+        return None
+    if bevel_radius <= 0:
+        return None
+    import importlib.util
+    if importlib.util.find_spec("cadquery") is None:
+        return None
+    import cadquery as cq
+
+    solid = cq.Workplane("XY").cylinder(depth, radius)
+    bevel = min(float(bevel_radius), float(radius) * 0.999, float(depth) * 0.499)
+    if bevel <= 0:
+        return None
+    solid = solid.edges("|Z").fillet(bevel)
+    shape = solid.val()
+    tri = shape.tessellate(1.0 / max(6, int(segments)))
+    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
+    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
+    return Mesh(vertices, faces)
+
+
+def cadquery_box_mesh(center: Vec3, size: Vec3, segments: int, bevel_radius: float = 0.0) -> Optional[Mesh]:
+    if min(size) <= 0:
+        return None
+    import importlib.util
+    if importlib.util.find_spec("cadquery") is None:
+        return None
+    import cadquery as cq
+
+    sx, sy, sz = size
+    solid = cq.Workplane("XY").box(sx, sy, sz)
+    if bevel_radius > 0:
+        bevel = min(float(bevel_radius), sx * 0.499, sy * 0.499, sz * 0.499)
+        if bevel > 0:
+            solid = solid.edges().fillet(bevel)
+    shape = solid.val()
+    tri = shape.tessellate(1.0 / max(6, int(segments)))
+    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
+    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
+    return Mesh(vertices, faces)
+
+
+def cadquery_cone_mesh(axis: str, center: Vec3, radius: float, height: float, segments: int) -> Optional[Mesh]:
+    if axis != "z":
+        return None
+    import importlib.util
+    if importlib.util.find_spec("cadquery") is None:
+        return None
+    import cadquery as cq
+    solid = cq.Workplane("XY").cone(height, radius, 0.0)
+    tri = solid.val().tessellate(1.0 / max(8, int(segments)))
+    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
+    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
+    return Mesh(vertices, faces)
+
+
+def cadquery_sphere_mesh(center: Vec3, radius: float, segments: int) -> Optional[Mesh]:
+    import importlib.util
+    if importlib.util.find_spec("cadquery") is None:
+        return None
+    import cadquery as cq
+    solid = cq.Workplane("XY").sphere(radius)
+    tri = solid.val().tessellate(1.0 / max(8, int(segments)))
+    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
+    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
+    return Mesh(vertices, faces)
+
+
+def kernel_mesh_primitive(
+    kernel: str,
+    typ: str,
+    params: Dict[str, Any],
+    center: Vec3,
+) -> Optional[Mesh]:
+    """Kernel plugin contract for procedural primitives.
+
+    Contract:
+    - input shape parameters are normalized upstream
+    - return Mesh when handled
+    - return None when unsupported/unavailable so caller can fallback
+    """
+    if kernel != "cadquery":
+        return None
+    segments = int(params.get("segments", 16))
+    bevel_radius = float(params.get("bevel_radius", 0.0))
+    if typ == "cylinder":
+        axis = str(params.get("axis", "z")).lower()
+        depth = float(params.get("depth", params.get("height", params.get("width", 1))))
+        radius = float(params.get("radius", 0.5))
+        return cadquery_cylinder_mesh(axis, center, radius, depth, segments, bevel_radius)
+    if typ == "box":
+        size = params.get("size", [params.get("width", 1), params.get("depth", params.get("length", 1)), params.get("height", 1)])
+        if isinstance(size, str):
+            return None
+        return cadquery_box_mesh(center, _as_float3(size, (1.0, 1.0, 1.0)), segments, bevel_radius)
+    if typ == "cone":
+        axis = str(params.get("axis", "z")).lower()
+        height = float(params.get("height", params.get("depth", 1.0)))
+        radius = float(params.get("radius", 0.5))
+        return cadquery_cone_mesh(axis, center, radius, height, segments)
+    if typ == "sphere":
+        radius = float(params.get("radius", 0.5))
+        return cadquery_sphere_mesh(center, radius, segments)
+    return None
+
+
+def cadquery_profile_mesh(
+    mode: str,
+    center: Vec3,
+    profile_points: List[List[float]],
+    height: float,
+    segments: int,
+    angle_degrees: float = 360.0,
+) -> Optional[Mesh]:
+    if len(profile_points) < 3:
+        return None
+    import importlib.util
+    if importlib.util.find_spec("cadquery") is None:
+        return None
+    import cadquery as cq
+
+    wp = cq.Workplane("XY").polyline([(float(p[0]), float(p[1])) for p in profile_points]).close()
+    if mode == "extrude":
+        solid = wp.extrude(float(height))
+    elif mode in {"revolve", "lathe"}:
+        solid = wp.revolve(float(angle_degrees), (0, 0, 0), (0, 1, 0))
+    else:
+        return None
+    shape = solid.val()
+    tri = shape.tessellate(1.0 / max(8, int(segments)))
+    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
+    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
+    return Mesh(vertices, faces)
+
+
+def cadquery_sweep_mesh(
+    center: Vec3,
+    profile_points: List[List[float]],
+    path_points: List[List[float]],
+    segments: int,
+) -> Optional[Mesh]:
+    if len(profile_points) < 3 or len(path_points) < 2:
+        return None
+    import importlib.util
+    if importlib.util.find_spec("cadquery") is None:
+        return None
+    import cadquery as cq
+
+    profile = cq.Workplane("XY").polyline([(float(p[0]), float(p[1])) for p in profile_points]).close()
+    path_wire = cq.Wire.makePolygon([cq.Vector(float(p[0]), float(p[1]), float(p[2])) for p in path_points])
+    solid = profile.sweep(path_wire)
+    tri = solid.val().tessellate(1.0 / max(8, int(segments)))
+    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
+    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
+    return Mesh(vertices, faces)
+
+
+def cadquery_loft_mesh(center: Vec3, sections: List[List[List[float]]], segments: int) -> Optional[Mesh]:
+    if len(sections) < 2:
+        return None
+    import importlib.util
+    if importlib.util.find_spec("cadquery") is None:
+        return None
+    import cadquery as cq
+
+    wires = []
+    for sec in sections:
+        if not isinstance(sec, list) or len(sec) < 3:
+            return None
+        pts = [cq.Vector(float(p[0]), float(p[1]), float(p[2])) for p in sec]
+        wires.append(cq.Wire.makePolygon(pts))
+    solid = cq.Solid.makeLoft(wires, True)
+    tri = solid.tessellate(1.0 / max(8, int(segments)))
+    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
+    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
+    return Mesh(vertices, faces)
+
+
+def kernel_mesh_profile_op(kernel: str, typ: str, params: Dict[str, Any], center: Vec3) -> Optional[Mesh]:
+    if kernel != "cadquery":
+        return None
+    profile_points = params.get("profile", [])
+    if not isinstance(profile_points, list):
+        return None
+    segments = int(params.get("segments", 24))
+    if typ == "extrude":
+        height = float(params.get("height", params.get("depth", 1.0)))
+        return cadquery_profile_mesh("extrude", center, profile_points, height, segments)
+    if typ in {"revolve", "lathe"}:
+        angle = float(params.get("angle", 360.0))
+        return cadquery_profile_mesh(typ, center, profile_points, 0.0, segments, angle)
+    if typ == "sweep":
+        path_points = params.get("path", [])
+        if not isinstance(path_points, list):
+            return None
+        return cadquery_sweep_mesh(center, profile_points, path_points, segments)
+    if typ == "loft":
+        sections = params.get("sections", [])
+        if not isinstance(sections, list):
+            return None
+        return cadquery_loft_mesh(center, sections, segments)
+    if typ == "curve":
+        path_points = params.get("points", [])
+        if not isinstance(path_points, list) or len(path_points) < 2:
+            return None
+        radius = float(params.get("radius", 0.05))
+        sides = max(8, int(params.get("profile_segments", 16)))
+        prof: List[List[float]] = []
+        for i in range(sides):
+            a = 2 * math.pi * i / sides
+            prof.append([radius * math.cos(a), radius * math.sin(a)])
+        return cadquery_sweep_mesh(center, prof, path_points, segments)
+    return None
+
+
 def cone_mesh(axis: str, center: Vec3, radius: float, height: float, segments: int = 16) -> Mesh:
     cx, cy, cz = center
     axis = axis.lower()
@@ -2256,6 +2479,21 @@ def op_bevel(mesh: Mesh, amount: float = 0.05, segments: int = 1) -> Mesh:
     return rounded_box_mesh(((min_x + max_x) * 0.5, (min_y + max_y) * 0.5, (min_z + max_z) * 0.5), (sx, sy, sz), r, seg)
 
 
+def kernel_op_bevel(obj: LiveObject, env: Dict[str, Any], amount: float, segments: int) -> Optional[Mesh]:
+    params = dict(obj.meta.get("params", {}) or {})
+    params["bevel_radius"] = amount
+    params["segments"] = segments
+    kernel = str(params.get("kernel", "")).lower()
+    if not kernel:
+        return None
+    center_raw = params.get("center", params.get("position", [0, 0, 0]))
+    center = _as_float3(eval_mixed_value(center_raw, env, {}) if isinstance(center_raw, str) else center_raw, (0.0, 0.0, 0.0))
+    typ = str(obj.meta.get("type", "")).lower()
+    if typ not in {"box", "cylinder"}:
+        return None
+    return kernel_mesh_primitive(kernel, typ, params, center)
+
+
 def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     out = mesh
     env = get_effective_params(obj, obn)
@@ -2326,13 +2564,10 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         elif name == "tread":
             out = op_tread(out, op)
         elif name == "bevel":
-            amount_raw = resolve_op_value(op, "amount", 0.05)
-            segments_raw = resolve_op_value(op, "segments", 1)
-            out = op_bevel(
-                out,
-                float(amount_raw),
-                int(segments_raw),
-            )
+            amount = float(resolve_op_value(op, "amount", 0.05))
+            seg = int(resolve_op_value(op, "segments", 1))
+            ker_mesh = kernel_op_bevel(obj, env, amount, seg)
+            out = ker_mesh if ker_mesh is not None else op_bevel(out, amount, seg)
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
         elif name == "taper":
@@ -2434,6 +2669,7 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
     typ = str(obj.meta.get("type", "mesh"))
     params = obj.meta.get("params", {}) or {}
     center = _as_float3(params.get("center", params.get("position", [0, 0, 0])), (0.0, 0.0, 0.0))
+    kernel = str(params.get("kernel", "")).lower()
 
     if typ == "mesh":
         gen = str(params.get("generator", ""))
@@ -2444,6 +2680,10 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         return obj.mesh.copy()
 
     if typ == "sweep":
+        if kernel:
+            ker_mesh = kernel_mesh_profile_op(kernel, "sweep", params, center)
+            if ker_mesh is not None:
+                return ker_mesh
         p = dict(params)
         along = p.get("along")
         if along and obn is not None:
@@ -2454,19 +2694,42 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         return obj.mesh.copy()
 
     if typ == "curve":
+        if kernel:
+            ker_mesh = kernel_mesh_profile_op(kernel, "curve", params, center)
+            if ker_mesh is not None:
+                return ker_mesh
         sw = obj.meta.get("sweep")
         if isinstance(sw, dict) and str(sw.get("profile", "circle")).lower() == "circle":
             return curve_sweep_tube_mesh(params, center, sw, obn)
+        return obj.mesh.copy()
+
+    if typ in {"extrude", "revolve", "lathe"}:
+        if kernel:
+            ker_mesh = kernel_mesh_profile_op(kernel, typ, params, center)
+            if ker_mesh is not None:
+                return ker_mesh
+        return obj.mesh.copy()
+    if typ == "loft":
+        if kernel:
+            ker_mesh = kernel_mesh_profile_op(kernel, "loft", params, center)
+            if ker_mesh is not None:
+                return ker_mesh
         return obj.mesh.copy()
 
     if typ == "box":
         size = params.get("size", [params.get("width", 1), params.get("depth", params.get("length", 1)), params.get("height", 1)])
         if isinstance(size, str):
             raise TypeError("size should be a 3-vector after parametric resolution")
+        if kernel:
+            ker_mesh = kernel_mesh_primitive(kernel, "box", params, center)
+            if ker_mesh is not None:
+                return ker_mesh
         return box_mesh(center, _as_float3(size, (1.0, 1.0, 1.0)))
     if typ == "cylinder":
         axis = str(params.get("axis", "z")).lower()
         depth = float(params.get("depth", params.get("height", params.get("width", 1))))
+        radius = float(params.get("radius", 0.5))
+        segments = int(params.get("segments", 16))
         base_aligned = str(params.get("align", "")).lower() in ("base", "bottom") or _cylinder_anchor_is_base(obj)
         if params.get("center") is None and params.get("position") is None:
             if base_aligned:
@@ -2477,15 +2740,24 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
                 center = (0.0, depth / 2, 0.0)
             else:
                 center = (depth / 2, 0.0, 0.0)
+        kernel = str(params.get("kernel", "")).lower()
+        if kernel and not base_aligned:
+            ker_mesh = kernel_mesh_primitive(kernel, "cylinder", params, center)
+            if ker_mesh is not None:
+                return ker_mesh
         return cylinder_mesh(
             axis,
             center,
-            float(params.get("radius", 0.5)),
+            radius,
             depth,
-            int(params.get("segments", 16)),
+            segments,
             base_aligned=base_aligned,
         )
     if typ == "cone":
+        if kernel:
+            ker_mesh = kernel_mesh_primitive(kernel, "cone", params, center)
+            if ker_mesh is not None:
+                return ker_mesh
         axis = str(params.get("axis", "z")).lower()
         height = float(params.get("height", params.get("depth", 1.0)))
         return cone_mesh(
@@ -2496,6 +2768,10 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
             int(params.get("segments", 16)),
         )
     if typ == "sphere":
+        if kernel:
+            ker_mesh = kernel_mesh_primitive(kernel, "sphere", params, center)
+            if ker_mesh is not None:
+                return ker_mesh
         return sphere_mesh(
             center,
             float(params.get("radius", 0.5)),
