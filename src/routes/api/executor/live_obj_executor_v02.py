@@ -824,6 +824,35 @@ def box_mesh(center: Vec3, size: Vec3) -> Mesh:
     return Mesh(v, f)
 
 
+def rounded_box_mesh(center: Vec3, size: Vec3, radius: float, segments: int = 1) -> Mesh:
+    """Generate a rounded box by subdividing then projecting to a filleted profile."""
+    cx, cy, cz = center
+    sx, sy, sz = size
+    hx, hy, hz = sx * 0.5, sy * 0.5, sz * 0.5
+    r = max(0.0, min(float(radius), hx * 0.999, hy * 0.999, hz * 0.999))
+    if r <= 1e-9:
+        return box_mesh(center, size)
+
+    dense = op_subdivide(box_mesh(center, size), max(1, int(segments)))
+    ix, iy, iz = max(0.0, hx - r), max(0.0, hy - r), max(0.0, hz - r)
+    new_vertices: List[Vec3] = []
+    for x, y, z in dense.vertices:
+        lx, ly, lz = x - cx, y - cy, z - cz
+        qx = min(max(lx, -ix), ix)
+        qy = min(max(ly, -iy), iy)
+        qz = min(max(lz, -iz), iz)
+        dx, dy, dz = lx - qx, ly - qy, lz - qz
+        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if d > 1e-9:
+            s = r / d
+            nx, ny, nz = qx + dx * s, qy + dy * s, qz + dz * s
+        else:
+            nx, ny, nz = lx, ly, lz
+        new_vertices.append((cx + nx, cy + ny, cz + nz))
+    dense.vertices = new_vertices
+    return dense
+
+
 def cylinder_mesh(
     axis: str,
     center: Vec3,
