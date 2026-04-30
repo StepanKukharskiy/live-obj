@@ -316,6 +316,75 @@ def apply_ops(bl_obj, ops):
                 ang = (2*math.pi*i)/float(count)
                 c.matrix_world = Matrix.Rotation(ang, 4, 'Z') @ bl_obj.matrix_world
                 bpy.context.scene.collection.objects.link(c)
+        elif name == "mirror":
+            mod = bl_obj.modifiers.new("Mirror", "MIRROR")
+            mod.use_axis[0] = True
+        elif name in {"smooth", "remesh", "subdivide", "bevel", "simplify"} and bl_obj.type == "MESH":
+            if name == "smooth":
+                mod = bl_obj.modifiers.new("Smooth", "SMOOTH")
+                mod.iterations = int(op.get("iterations", 4))
+            elif name == "remesh":
+                mod = bl_obj.modifiers.new("Remesh", "REMESH")
+                mod.mode = "VOXEL"
+                mod.voxel_size = float(op.get("voxel_size", 0.2))
+            elif name == "subdivide":
+                mod = bl_obj.modifiers.new("Subdiv", "SUBSURF")
+                mod.levels = int(op.get("levels", 1))
+            elif name == "bevel":
+                mod = bl_obj.modifiers.new("Bevel", "BEVEL")
+                mod.width = float(op.get("distance", 0.05))
+                mod.segments = int(op.get("segments", 2))
+            elif name == "simplify":
+                # lightweight simplification using Decimate
+                mod = bl_obj.modifiers.new("Decimate", "DECIMATE")
+                mod.ratio = float(op.get("ratio", 0.5))
+        elif name == "chamfer" and bl_obj.type == "MESH":
+            mod = bl_obj.modifiers.new("Chamfer", "BEVEL")
+            mod.width = float(op.get("distance", 0.03))
+            mod.segments = 1
+            mod.profile = 0.5
+        elif name == "trace_paths" and bl_obj.type == "MESH":
+            # quick boundary-wire extraction approximation
+            wire = bl_obj.copy()
+            wire.data = bl_obj.data.copy()
+            mod = wire.modifiers.new("Wireframe", "WIREFRAME")
+            mod.thickness = float(op.get("thickness", 0.01))
+            bpy.context.scene.collection.objects.link(wire)
+        elif name == "sdf_tubes" and bl_obj.type == "CURVE":
+            bl_obj.data.bevel_depth = float(op.get("radius", 0.03))
+            bl_obj.data.bevel_resolution = int(op.get("resolution", 3))
+        elif name == "voxelize" and bl_obj.type == "MESH":
+            mod = bl_obj.modifiers.new("VoxelRemesh", "REMESH")
+            mod.mode = "VOXEL"
+            mod.voxel_size = float(op.get("cell", 0.2))
+        elif name == "mesh_from_volume" and bl_obj.type in {"CURVE", "META", "FONT"}:
+            bpy.context.view_layer.objects.active = bl_obj
+            bpy.ops.object.convert(target="MESH")
+        elif name == "tread":
+            count = max(1, int(op.get("count", 12)))
+            rise = float(op.get("rise", 0.2))
+            run = float(op.get("run", 0.4))
+            bpy.ops.mesh.primitive_cube_add(size=1.0)
+            step = bpy.context.active_object
+            step.scale = (run / 2.0, 0.5, 0.05)
+            for i in range(count):
+                c = step.copy(); c.data = step.data.copy()
+                c.location = (i * run, 0.0, i * rise)
+                bpy.context.scene.collection.objects.link(c)
+            bpy.data.objects.remove(step, do_unlink=True)
+        elif name in {"union", "subtract"} and bl_obj.type == "MESH":
+            # uses selected object as A; target name via op['target']
+            target_name = str(op.get("target", "")).strip()
+            other = bpy.data.objects.get(target_name) if target_name else None
+            if other and other.type == "MESH":
+                mod = bl_obj.modifiers.new("Boolean", "BOOLEAN")
+                mod.operation = "UNION" if name == "union" else "DIFFERENCE"
+                mod.object = other
+        elif name in {"displace", "noise_displace"} and bl_obj.type == "MESH":
+            mod = bl_obj.modifiers.new("Displace", "DISPLACE")
+            tex = bpy.data.textures.new(bl_obj.name + "_noise", "CLOUDS")
+            mod.texture = tex
+            mod.strength = float(op.get("strength", op.get("amplitude", 0.15)))
 
 
 def run(live_obj_text):
@@ -338,6 +407,15 @@ def run(live_obj_text):
                 created.append(s)
 
         if bl_obj is not None:
+            deformer = str(obj.meta.get("deformer", "")).lower()
+            if deformer in {"twist", "taper", "bend"} and bl_obj.type == "MESH":
+                smd = bl_obj.modifiers.new("SimpleDeform", "SIMPLE_DEFORM")
+                smd.deform_method = {"twist": "TWIST", "taper": "TAPER", "bend": "BEND"}[deformer]
+                smd.deform_axis = "Z"
+                smd.factor = float(obj.meta.get("params", {}).get("factor", 0.5)) if isinstance(obj.meta.get("params", {}), dict) else 0.5
+            elif deformer == "wave" and bl_obj.type == "MESH":
+                mod = bl_obj.modifiers.new("Wave", "WAVE")
+                mod.height = float(obj.meta.get("params", {}).get("amplitude", 0.2)) if isinstance(obj.meta.get("params", {}), dict) else 0.2
             apply_ops(bl_obj, obj.ops)
             link_obj(bl_obj, col)
             created.append(bl_obj)
