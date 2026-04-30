@@ -40,6 +40,7 @@ Notes
 
 import ast
 import math
+import os
 import random
 import Rhino.Geometry as rg
 
@@ -773,9 +774,53 @@ def validate_compat(obj, warnings):
             warnings.append("compat: unsupported op on '%s': %s" % (obj.name, opname))
 
 
+def _looks_like_obj_text(s):
+    if not isinstance(s, str):
+        return False
+    t = s.strip()
+    if not t:
+        return False
+    if "\n" in t or "\r" in t:
+        return True
+    if "#@" in t:
+        return True
+    if t.startswith("o ") or t.startswith("v ") or t.startswith("f "):
+        return True
+    return False
+
+
+def _read_input_text(x_in, warnings):
+    if isinstance(x_in, str):
+        raw = x_in
+    elif x_in is None:
+        raw = ""
+    else:
+        try:
+            raw = str(x_in)
+        except Exception:
+            raw = ""
+
+    if _looks_like_obj_text(raw):
+        return raw
+
+    path = raw.strip()
+    if path and os.path.isfile(path):
+        try:
+            with open(path, "r") as f:
+                return f.read()
+        except Exception as ex:
+            warnings.append("failed to read input file '%s': %s" % (path, ex))
+            return ""
+
+    if path:
+        warnings.append("input does not look like OBJ text and file was not found: %s" % path)
+    return ""
+
+
 # ---- GHPython entrypoint ----
 
-text_in = x if isinstance(x, str) else ""
+warn = []
+text_in = _read_input_text(x, warn)
 objs = parse_live_obj(text_in)
 
 # Precompute assembly param scopes so child procedural objects can resolve
@@ -793,7 +838,6 @@ for o in objs:
 meshes = []
 native = []
 names = []
-warn = []
 
 for o in objs:
     names.append(o.name)
