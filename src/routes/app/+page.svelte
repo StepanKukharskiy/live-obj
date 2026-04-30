@@ -206,10 +206,11 @@
 			});
 			const payload = (await res.json().catch(() => ({}))) as {
 				message?: string;
+				detail?: string;
 				liveObj?: string;
 				executedObj?: string;
 			};
-			if (!res.ok) throw new Error(payload.message || res.statusText || 'Metadata regeneration failed');
+			if (!res.ok) throw new Error(payload.detail || payload.message || res.statusText || 'Metadata regeneration failed');
 			liveObjText = payload.liveObj ?? updatedLiveObj;
 			executedObjText = payload.executedObj ?? '';
 			sourceTab = 'executed';
