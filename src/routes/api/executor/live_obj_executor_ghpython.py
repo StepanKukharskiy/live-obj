@@ -363,6 +363,28 @@ def build_native_geometry(obj, warnings, sdf_registry=None):
 
 
 
+def _smooth_mesh_safe(mesh, iters, strength):
+    for _ in range(max(1, int(iters))):
+        if hasattr(mesh, "LaplacianSmooth"):
+            try:
+                mesh.LaplacianSmooth(True, True, True, float(strength))
+                continue
+            except Exception:
+                pass
+        if hasattr(mesh, "Smooth"):
+            try:
+                mesh.Smooth(float(strength), True, True, True, True, rg.SmoothingCoordinateSystem.World)
+                continue
+            except Exception:
+                try:
+                    mesh.Smooth(float(strength), True, True, True, True)
+                    continue
+                except Exception:
+                    pass
+        return False
+    return True
+
+
 def _mesh_from_brep(brep, edge_len=0.15):
     try:
         mp = rg.MeshingParameters()
@@ -778,8 +800,9 @@ def apply_native_ops(geom, ops, warnings):
             strength = float(op.get("factor", 1.0))
             for g in each_geom(out):
                 if isinstance(g, rg.Mesh):
-                    for _ in range(iters):
-                        g.LaplacianSmooth(True, True, True, strength)
+                    ok = _smooth_mesh_safe(g, iters, strength)
+                    if not ok:
+                        warnings.append("smooth not supported for current Rhino mesh API")
                     g.Normals.ComputeNormals()
         elif name == "simplify":
             ratio = float(op.get("ratio", 0.5))
