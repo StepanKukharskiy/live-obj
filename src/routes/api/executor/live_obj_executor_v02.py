@@ -2302,10 +2302,16 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         elif name == "tread":
             out = op_tread(out, op)
         elif name == "bevel":
+            amount_raw = op.get("amount", 0.05)
+            segments_raw = op.get("segments", 1)
+            if isinstance(amount_raw, str):
+                amount_raw = eval_mixed_value(amount_raw, env, obn)
+            if isinstance(segments_raw, str):
+                segments_raw = eval_mixed_value(segments_raw, env, obn)
             out = op_bevel(
                 out,
-                float(op.get("amount", 0.05)),
-                int(op.get("segments", 1)),
+                float(amount_raw),
+                int(segments_raw),
             )
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
