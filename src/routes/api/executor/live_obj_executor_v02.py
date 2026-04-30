@@ -833,7 +833,10 @@ def rounded_box_mesh(center: Vec3, size: Vec3, radius: float, segments: int = 1)
     if r <= 1e-9:
         return box_mesh(center, size)
 
-    dense = op_subdivide(box_mesh(center, size), max(1, int(segments)))
+    # Subdivision growth is exponential (each level ~4x triangles), so clamp hard.
+    # High authored bevel `segments` values (e.g. 8-12) must not explode geometry.
+    lvl = max(1, min(3, int(segments)))
+    dense = op_subdivide(box_mesh(center, size), lvl)
     ix, iy, iz = max(0.0, hx - r), max(0.0, hy - r), max(0.0, hz - r)
     new_vertices: List[Vec3] = []
     for x, y, z in dense.vertices:
@@ -2229,8 +2232,9 @@ def op_bevel(mesh: Mesh, amount: float = 0.05, segments: int = 1) -> Mesh:
     of Laplacian smoothing, which shrinks/distorts the whole mesh.
     """
     def fallback_bevel(m: Mesh, amt: float, seg: int) -> Mesh:
-        out = op_subdivide(m, min(2, max(1, seg)))
-        return op_smooth(out, max(1, seg), min(0.8, 0.2 + max(0.0, amt)))
+        lvl = min(2, max(1, seg))
+        out = op_subdivide(m, lvl)
+        return op_smooth(out, min(4, max(1, seg)), min(0.8, 0.2 + max(0.0, amt)))
 
     bbox = _axis_aligned_bbox(mesh)
     if bbox is None:
