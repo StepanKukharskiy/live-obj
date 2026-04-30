@@ -2282,6 +2282,13 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             offset = op.get("offset", [1,0,0])
             if isinstance(offset, str):
                 offset = eval_mixed_value(offset, env, obn)
+            if isinstance(offset, (list, tuple)):
+                resolved_offset: List[float] = []
+                for item in offset:
+                    if isinstance(item, str):
+                        item = eval_mixed_value(item, env, obn)
+                    resolved_offset.append(float(item))
+                offset = resolved_offset
             count_raw = op.get("count", 2)
             if isinstance(count_raw, str):
                 count_raw = eval_mixed_value(count_raw, env, obn)
