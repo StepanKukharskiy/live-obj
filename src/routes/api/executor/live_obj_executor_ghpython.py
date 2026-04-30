@@ -314,7 +314,7 @@ def _build_scope_for_object(obj, assembly_params):
     return scope
 
 
-def build_native_geometry(obj, warnings):
+def build_native_geometry(obj, warnings, sdf_registry=None):
     meta = obj.meta
     source = str(meta.get("source", "")).lower()
     if source not in {"procedural", "simulation", "sdf"}:
@@ -324,7 +324,7 @@ def build_native_geometry(obj, warnings):
     if source == "simulation":
         return build_simulation_geometry(obj, p, warnings)
     if source == "sdf":
-        return build_sdf_geometry(obj, warnings)
+        return build_sdf_geometry(obj, warnings, sdf_registry)
 
     typ = str(meta.get("type", "")).lower()
 
@@ -368,13 +368,15 @@ def _sdf_vec3(op, key, default):
     return default
 
 
-def build_sdf_geometry(obj, warnings):
+def build_sdf_geometry(obj, warnings, sdf_registry=None):
     sdf_ops = obj.meta.get("sdf_ops", [])
     if not isinstance(sdf_ops, list) or not sdf_ops:
         warnings.append("sdf source on '%s' has no #@sdf ops" % obj.name)
         return None
 
     solids = {}
+    if isinstance(sdf_registry, dict):
+        solids.update(sdf_registry)
     last = None
     for op in sdf_ops:
         name = str(op.get("op", "")).lower()
@@ -406,8 +408,10 @@ def build_sdf_geometry(obj, warnings):
                 solids[sid] = g
             last = g
         elif name == "subtract":
-            a = solids.get(str(op.get("id_a", "")))
-            b = solids.get(str(op.get("id_b", "")))
+            id_a = str(op.get("id_a", ""))
+            id_b = str(op.get("id_b", ""))
+            a = solids.get(id_a)
+            b = solids.get(id_b)
             if a is not None and b is not None:
                 out = rg.Brep.CreateBooleanDifference(a, [b], 0.01)
                 if out and len(out) > 0:
@@ -416,7 +420,7 @@ def build_sdf_geometry(obj, warnings):
                     if sid:
                         solids[sid] = last
             else:
-                warnings.append("sdf subtract missing id_a/id_b geometry on '%s'" % obj.name)
+                warnings.append("sdf subtract missing id_a/id_b geometry on '%s' (id_a=%s, id_b=%s)" % (obj.name, id_a, id_b))
         elif name == "union":
             ids = str(op.get("ids", "")).split(",") if "ids" in op else []
             geoms = [solids.get(i.strip()) for i in ids if solids.get(i.strip()) is not None]
@@ -432,6 +436,37 @@ def build_sdf_geometry(obj, warnings):
             warnings.append("unsupported sdf op on '%s': %s" % (obj.name, name))
 
     return last
+
+
+def prebuild_sdf_registry(objs, warnings):
+    registry = {}
+    for obj in objs:
+        if str(obj.meta.get("source", "")).lower() != "sdf":
+            continue
+        for op in obj.meta.get("sdf_ops", []):
+            name = str(op.get("op", "")).lower()
+            sid = str(op.get("id", "")).strip()
+            if not sid:
+                continue
+            try:
+                if name == "sphere":
+                    cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
+                    r = float(op.get("radius", 1.0))
+                    registry[sid] = rg.Sphere(rg.Point3d(cx, cy, cz), r).ToBrep()
+                elif name == "cylinder":
+                    cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
+                    r = float(op.get("radius", 1.0))
+                    h = float(op.get("height", 1.0))
+                    circle = rg.Circle(rg.Plane(rg.Point3d(cx, cy, cz), rg.Vector3d.ZAxis), r)
+                    registry[sid] = rg.Cylinder(circle, h).ToBrep(True, True)
+                elif name == "box":
+                    cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
+                    sx, sy, sz = _sdf_vec3(op, "size", (1.0, 1.0, 1.0))
+                    plane = rg.Plane(rg.Point3d(cx, cy, cz), rg.Vector3d.ZAxis)
+                    registry[sid] = rg.Box(plane, rg.Interval(-sx/2.0, sx/2.0), rg.Interval(-sy/2.0, sy/2.0), rg.Interval(-sz/2.0, sz/2.0)).ToBrep()
+            except Exception as ex:
+                warnings.append("sdf prebuild failed for id '%s': %s" % (sid, ex))
+    return registry
 
 
 def apply_deformer(mesh, obj, warnings):
@@ -916,6 +951,7 @@ def _read_input_text(x_in, warnings):
 warn = []
 text_in = _read_input_text(x, warn)
 objs = parse_live_obj(text_in)
+sdf_registry = prebuild_sdf_registry(objs, warn)
 
 # Precompute assembly param scopes so child procedural objects can resolve
 # expressions like seat_width/2 and references to parent params.
@@ -952,7 +988,7 @@ for o in objs:
         except Exception as ex:
             warn.append("mesh build failed on '%s': %s" % (o.name, ex))
 
-    g = build_native_geometry(o, warn)
+    g = build_native_geometry(o, warn, sdf_registry)
     if g is None and str(o.meta.get("source", "")).lower() == "procedural":
         g = build_procedural_advanced(o, warn)
     if g is not None and o.ops:
