@@ -2021,9 +2021,13 @@ def op_smooth(mesh: Mesh, iterations: int = 1, strength: float = 0.5) -> Mesh:
     for _ in range(iterations):
         nbr = {i: set() for i in range(1, len(out.vertices)+1)}
         for face in out.faces:
-            for i,a in enumerate(face):
-                b = face[(i+1)%len(face)]
-                nbr[a].add(b); nbr[b].add(a)
+            valid = [int(ix) for ix in face if isinstance(ix, int) and 1 <= int(ix) <= len(out.vertices)]
+            if len(valid) < 2:
+                continue
+            for i, a in enumerate(valid):
+                b = valid[(i + 1) % len(valid)]
+                nbr[a].add(b)
+                nbr[b].add(a)
         newv = list(out.vertices)
         for idx1, ns in nbr.items():
             if not ns:
