@@ -22,6 +22,12 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ liveObj, executedObj });
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
-		throw error(500, `Executor failed: ${message}`);
+		const stack = e instanceof Error ? e.stack : undefined;
+		console.error('[live-obj/execute] Executor failed', {
+			message,
+			stack,
+			preview: liveObj.slice(0, 800)
+		});
+		return json({ error: 'Executor failed', detail: message }, { status: 500 });
 	}
 };
