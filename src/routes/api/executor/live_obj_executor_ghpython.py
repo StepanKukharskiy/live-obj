@@ -41,24 +41,22 @@ Notes
 import ast
 import math
 import random
-from dataclasses import dataclass, field
-
 import Rhino.Geometry as rg
 
 # Set to True for stricter Live OBJ op compatibility diagnostics.
 STRICT_COMPAT = True
 
 
-@dataclass
-class ObjObject:
-    name: str = "unnamed"
-    meta: dict = field(default_factory=dict)
-    vertices: list = field(default_factory=list)
-    faces: list = field(default_factory=list)
-    ops: list = field(default_factory=list)
+class ObjObject(object):
+    def __init__(self, name="unnamed"):
+        self.name = name
+        self.meta = {}
+        self.vertices = []
+        self.faces = []
+        self.ops = []
 
 
-def _parse_scalar(value: str):
+def _parse_scalar(value):
     value = value.strip()
     if not value:
         return ""
@@ -81,7 +79,7 @@ def _parse_scalar(value: str):
     return value
 
 
-def _split_top_level_commas(text: str):
+def _split_top_level_commas(text):
     parts, cur = [], []
     depth = 0
     for ch in text:
@@ -102,7 +100,7 @@ def _split_top_level_commas(text: str):
     return parts
 
 
-def _parse_params(raw: str):
+def _parse_params(raw):
     params = {}
     for part in _split_top_level_commas(raw):
         if "=" not in part:
@@ -112,7 +110,7 @@ def _parse_params(raw: str):
     return params
 
 
-def parse_live_obj(text: str):
+def parse_live_obj(text):
     objects = []
     current = ObjObject()
 
@@ -169,7 +167,7 @@ def _to_pt(v):
     return rg.Point3d(float(v[0]), float(v[1]), float(v[2]))
 
 
-def _parse_op_line(line: str):
+def _parse_op_line(line):
     parts = line.split(None, 1)
     if not parts:
         return {}
@@ -179,7 +177,7 @@ def _parse_op_line(line: str):
     return op
 
 
-def build_rhino_mesh(obj: ObjObject):
+def build_rhino_mesh(obj):
     m = rg.Mesh()
     for v in obj.vertices:
         m.Vertices.Add(*v)
@@ -206,7 +204,7 @@ def _vec3(params, key, default):
     return default
 
 
-def build_native_geometry(obj: ObjObject, warnings: list):
+def build_native_geometry(obj, warnings):
     meta = obj.meta
     source = str(meta.get("source", "")).lower()
     if source not in {"procedural", "simulation"}:
@@ -248,7 +246,7 @@ def build_native_geometry(obj: ObjObject, warnings: list):
     return None
 
 
-def apply_deformer(mesh: rg.Mesh, obj: ObjObject, warnings: list):
+def apply_deformer(mesh, obj, warnings):
     meta = obj.meta
     deformer = str(meta.get("deformer", "")).lower()
     if not deformer:
@@ -308,7 +306,7 @@ def apply_deformer(mesh: rg.Mesh, obj: ObjObject, warnings: list):
     return m
 
 
-def build_simulation_geometry(obj: ObjObject, p: dict, warnings: list):
+def build_simulation_geometry(obj, p, warnings):
     sim = str(obj.meta.get("sim", "")).lower()
     seed = int(p.get("seed", 1))
     rnd = random.Random(seed)
@@ -362,7 +360,7 @@ def build_simulation_geometry(obj: ObjObject, p: dict, warnings: list):
     return None
 
 
-def build_procedural_advanced(obj: ObjObject, warnings: list):
+def build_procedural_advanced(obj, warnings):
     p = obj.meta.get("params", {}) if isinstance(obj.meta.get("params", {}), dict) else {}
     typ = str(obj.meta.get("type", "")).lower()
     if typ == "extrude":
@@ -395,7 +393,7 @@ def build_procedural_advanced(obj: ObjObject, warnings: list):
     return None
 
 
-def apply_native_ops(geom, ops: list, warnings: list):
+def apply_native_ops(geom, ops, warnings):
     out = geom
 
     def each_geom(g):
@@ -640,7 +638,7 @@ def apply_native_ops(geom, ops: list, warnings: list):
     return out
 
 
-def validate_compat(obj: ObjObject, warnings: list):
+def validate_compat(obj, warnings):
     supported_sources = {"procedural", "simulation", "llm_mesh", ""}
     supported_types = {"box", "sphere", "cylinder", "polyline", "extrude", "loft", "sweep", ""}
     supported_sims = {"boids", "differential_growth", "cellular_automata", ""}
