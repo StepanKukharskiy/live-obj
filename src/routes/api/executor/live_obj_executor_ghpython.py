@@ -113,6 +113,7 @@ def _parse_params(raw):
 def parse_live_obj(text):
     objects = []
     current = ObjObject()
+    current_block = None
 
     def push_current():
         if current.vertices or current.faces or current.meta or current.name != "unnamed":
@@ -125,12 +126,23 @@ def parse_live_obj(text):
         if s.startswith("o "):
             push_current()
             current = ObjObject(name=s[2:].strip() or "unnamed")
+            current_block = None
             continue
 
         if s.startswith("#@"):
             payload = s[2:].strip()
             if payload.startswith("- "):
-                current.ops.append(_parse_op_line(payload[2:].strip()))
+                item = payload[2:].strip()
+                if current_block == "anchors":
+                    if "=" in item:
+                        k, v = item.split("=", 1)
+                        anchors = current.meta.get("anchors")
+                        if not isinstance(anchors, dict):
+                            anchors = {}
+                        anchors[k.strip()] = _parse_scalar(v.strip())
+                        current.meta["anchors"] = anchors
+                else:
+                    current.ops.append(_parse_op_line(item))
                 continue
             if ":" in payload:
                 key, value = payload.split(":", 1)
@@ -138,10 +150,16 @@ def parse_live_obj(text):
                 value = value.strip()
                 if key == "params":
                     current.meta["params"] = _parse_params(value)
+                    current_block = None
                 elif key == "ops":
                     current.meta["ops_block"] = True
+                    current_block = "ops"
+                elif key == "anchors":
+                    current.meta["anchors"] = {}
+                    current_block = "anchors"
                 else:
                     current.meta[key] = _parse_scalar(value)
+                    current_block = None
             continue
 
         if s.startswith("v "):
@@ -718,7 +736,7 @@ def apply_native_ops(geom, ops, warnings):
 
 
 def validate_compat(obj, warnings):
-    supported_sources = {"procedural", "simulation", "llm_mesh", ""}
+    supported_sources = {"procedural", "simulation", "llm_mesh", "assembly", ""}
     supported_types = {"box", "sphere", "cylinder", "polyline", "extrude", "loft", "sweep", ""}
     supported_sims = {"boids", "differential_growth", "cellular_automata", ""}
     supported_deformers = {"twist", "taper", "wave", "bend", ""}
