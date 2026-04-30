@@ -5,7 +5,7 @@
 
 	let {
 		sourceTab = $bindable<SourceTab>('executed'),
-		objectColor = $bindable('#7185d4'),
+		objectColor = $bindable('#0000eb'),
 		objectScale = $bindable(1),
 		objectPosX = $bindable(0),
 		objectPosY = $bindable(0),

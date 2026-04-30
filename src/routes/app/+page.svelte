@@ -105,7 +105,7 @@
 		width: 100%;
 		max-width: 800px;
 		aspect-ratio: 16/9;
-		background: linear-gradient(135deg, #7185d4 0%, #5a6bb8 100%);
+		background: linear-gradient(135deg, #0000eb 0%, #0000a8 100%);
 		border-radius: 16px;
 		display: flex;
 		align-items: center;
@@ -131,7 +131,7 @@
 	}
 
 	.cta-button {
-		background: #7185d4;
+		background: #0000eb;
 		color: white;
 		border: none;
 		padding: 16px 48px;
@@ -140,13 +140,13 @@
 		border-radius: 999px;
 		cursor: pointer;
 		transition: all 0.2s ease;
-		box-shadow: 0 4px 12px rgba(113, 133, 212, 0.3);
+		box-shadow: 0 4px 12px rgba(0, 0, 235, 0.3);
 	}
 
 	.cta-button:hover {
-		background: #5a6bb8;
+		background: #0000a8;
 		transform: translateY(-2px);
-		box-shadow: 0 6px 16px rgba(113, 133, 212, 0.4);
+		box-shadow: 0 6px 16px rgba(0, 0, 235, 0.4);
 	}
 
 	.problem-solution {

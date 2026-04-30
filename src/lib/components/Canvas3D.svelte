@@ -24,7 +24,7 @@
 	export let directionalLightIntensity = 1.5;
 	export let showWireframe = false;
 	/** Applied to the loaded `renderObject` mesh materials only (not grid/axes). */
-	export let objectColor = '#7185d4';
+	export let objectColor = '#0000eb';
 	export let respectObjectMaterials = false;
 	export let enableShadows = false;
 	export let fogEnabled = false;
