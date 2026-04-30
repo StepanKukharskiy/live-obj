@@ -364,6 +364,23 @@ def build_native_geometry(obj, warnings, sdf_registry=None):
 
 
 
+def _mesh_from_brep(brep, edge_len=0.15):
+    try:
+        mp = rg.MeshingParameters()
+        mp.MaximumEdgeLength = max(0.001, float(edge_len))
+        mp.MinimumEdgeLength = max(0.0, float(edge_len) * 0.25)
+        parts = rg.Mesh.CreateFromBrep(brep, mp)
+        if not parts:
+            return None
+        m = rg.Mesh()
+        for part in parts:
+            m.Append(part)
+        m.Normals.ComputeNormals()
+        m.Compact()
+        return m
+    except Exception:
+        return None
+
 def _clean_ref(v):
     return str(v).strip().strip(',').strip()
 
@@ -387,6 +404,8 @@ def build_sdf_geometry(obj, warnings, sdf_registry=None):
     if isinstance(sdf_registry, dict):
         solids.update(sdf_registry)
     last = None
+    want_mesh = False
+    mesh_resolution = 0.15
     for op in sdf_ops:
         name = str(op.get("op", "")).lower()
         if name == "sphere":
@@ -439,11 +458,24 @@ def build_sdf_geometry(obj, warnings, sdf_registry=None):
                     last = out[0]
             else:
                 warnings.append("sdf union needs ids list with at least two known solids on '%s'" % obj.name)
-        elif name in {"mesh_from_sdf", "repeat"}:
+        elif name == "mesh_from_sdf":
+            want_mesh = True
+            if op.get("resolution") is not None:
+                try:
+                    mesh_resolution = float(op.get("resolution"))
+                except Exception:
+                    pass
+            continue
+        elif name == "repeat":
             continue
         else:
             warnings.append("unsupported sdf op on '%s': %s" % (obj.name, name))
 
+    if want_mesh and isinstance(last, rg.Brep):
+        mesh = _mesh_from_brep(last, mesh_resolution)
+        if mesh is not None:
+            return mesh
+        warnings.append("mesh_from_sdf failed to mesh brep on '%s'" % obj.name)
     return last
 
 
