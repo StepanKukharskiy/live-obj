@@ -200,8 +200,11 @@ def build_rhino_mesh(obj):
     for v in obj.vertices:
         m.Vertices.Add(*v)
 
+    face_indices = [idx for f in obj.faces for idx in f if isinstance(idx, int)]
+    base_index = min(face_indices) if face_indices else 1
+
     for f in obj.faces:
-        loc = [i - 1 for i in f]
+        loc = [i - base_index for i in f]
         if len(loc) == 3:
             m.Faces.AddFace(loc[0], loc[1], loc[2])
         elif len(loc) == 4:
