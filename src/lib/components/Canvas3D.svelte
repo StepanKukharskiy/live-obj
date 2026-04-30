@@ -33,6 +33,7 @@
 	export let fogColor = '#f8fafc';
 	export let cameraFov = 50;
 	export let cameraProjection: 'perspective' | 'orthographic' = 'perspective';
+	export let autoFrameOnObjectChange = false;
 	export let toneMappingExposure = 1;
 	export let renderMode: 'standard' | 'outline' | 'overlay' | 'toon' = 'standard';
 	export let outlineColor = '#000000';
@@ -433,7 +434,7 @@
 			scene.add(mountedRenderObject);
 			if (objects?.cube) objects.cube.visible = false;
 			const bounds = new THREE.Box3().setFromObject(mountedRenderObject);
-			if (!bounds.isEmpty() && framedRenderObject !== renderObject) {
+			if (autoFrameOnObjectChange && !bounds.isEmpty() && framedRenderObject !== renderObject) {
 				const center = bounds.getCenter(new THREE.Vector3());
 				const size = bounds.getSize(new THREE.Vector3());
 				const distance = Math.max(size.x, size.y, size.z, 1) * 2.4;

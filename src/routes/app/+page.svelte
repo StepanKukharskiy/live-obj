@@ -341,6 +341,11 @@
 			{cameraFov}
 			{toneMappingExposure}
 		/>
+		{#if busy || sourceApplyBusy}
+			<div class="canvas-loading-overlay" aria-live="polite" aria-busy="true">
+				<div class="canvas-loading-spinner"></div>
+			</div>
+		{/if}
 	</div>
 
 	<LiveObjSidePanel
@@ -398,5 +403,27 @@
 	:global(.app-canvas canvas) {
 		border-radius: 0;
 		box-shadow: none;
+	}
+	.canvas-loading-overlay {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(255, 255, 255, 0.28);
+		backdrop-filter: blur(1px);
+		z-index: 2;
+		pointer-events: none;
+	}
+	.canvas-loading-spinner {
+		width: 36px;
+		height: 36px;
+		border: 3px solid rgba(15, 23, 42, 0.15);
+		border-top-color: rgba(15, 23, 42, 0.82);
+		border-radius: 999px;
+		animation: canvasSpin 0.8s linear infinite;
+	}
+	@keyframes canvasSpin {
+		to { transform: rotate(360deg); }
 	}
 </style>

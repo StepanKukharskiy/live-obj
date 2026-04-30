@@ -824,6 +824,38 @@ def box_mesh(center: Vec3, size: Vec3) -> Mesh:
     return Mesh(v, f)
 
 
+def rounded_box_mesh(center: Vec3, size: Vec3, radius: float, segments: int = 1) -> Mesh:
+    """Generate a rounded box by subdividing then projecting to a filleted profile."""
+    cx, cy, cz = center
+    sx, sy, sz = size
+    hx, hy, hz = sx * 0.5, sy * 0.5, sz * 0.5
+    r = max(0.0, min(float(radius), hx * 0.999, hy * 0.999, hz * 0.999))
+    if r <= 1e-9:
+        return box_mesh(center, size)
+
+    # Subdivision growth is exponential (each level ~4x triangles), so clamp hard.
+    # High authored bevel `segments` values (e.g. 8-12) must not explode geometry.
+    lvl = max(1, min(3, int(segments)))
+    dense = op_subdivide(box_mesh(center, size), lvl)
+    ix, iy, iz = max(0.0, hx - r), max(0.0, hy - r), max(0.0, hz - r)
+    new_vertices: List[Vec3] = []
+    for x, y, z in dense.vertices:
+        lx, ly, lz = x - cx, y - cy, z - cz
+        qx = min(max(lx, -ix), ix)
+        qy = min(max(ly, -iy), iy)
+        qz = min(max(lz, -iz), iz)
+        dx, dy, dz = lx - qx, ly - qy, lz - qz
+        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if d > 1e-9:
+            s = r / d
+            nx, ny, nz = qx + dx * s, qy + dy * s, qz + dz * s
+        else:
+            nx, ny, nz = lx, ly, lz
+        new_vertices.append((cx + nx, cy + ny, cz + nz))
+    dense.vertices = new_vertices
+    return dense
+
+
 def cylinder_mesh(
     axis: str,
     center: Vec3,
@@ -2183,11 +2215,71 @@ def op_subdivide(mesh: Mesh, level: int = 1) -> Mesh:
     return out
 
 
+def _axis_aligned_bbox(mesh: Mesh) -> Optional[Tuple[Vec3, Vec3]]:
+    if not mesh.vertices:
+        return None
+    xs = [v[0] for v in mesh.vertices]
+    ys = [v[1] for v in mesh.vertices]
+    zs = [v[2] for v in mesh.vertices]
+    return (min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs))
+
+
+def op_bevel(mesh: Mesh, amount: float = 0.05, segments: int = 1) -> Mesh:
+    """Approximate a CAD-like edge bevel for boxy meshes.
+
+    Current executor primitives often produce axis-aligned cuboids. For those,
+    generate a rounded box directly (12 edge strips + 8 corner patches) instead
+    of Laplacian smoothing, which shrinks/distorts the whole mesh.
+    """
+    def fallback_bevel(m: Mesh, amt: float, seg: int) -> Mesh:
+        lvl = min(2, max(1, seg))
+        out = op_subdivide(m, lvl)
+        return op_smooth(out, min(4, max(1, seg)), min(0.8, 0.2 + max(0.0, amt)))
+
+    bbox = _axis_aligned_bbox(mesh)
+    if bbox is None:
+        return mesh.copy()
+    # Only replace geometry with a rounded box for truly box-like meshes.
+    # Cylinders/tubes were being incorrectly converted into rounded boxes.
+    if len(mesh.faces) > 24 or len(mesh.vertices) > 32:
+        return fallback_bevel(mesh, float(amount), max(1, int(segments)))
+    (min_x, min_y, min_z), (max_x, max_y, max_z) = bbox
+    sx, sy, sz = max_x - min_x, max_y - min_y, max_z - min_z
+    if sx <= 1e-9 or sy <= 1e-9 or sz <= 1e-9:
+        return mesh.copy()
+
+    seg = max(1, int(segments))
+    r = max(0.0, float(amount))
+    r = min(r, sx * 0.499, sy * 0.499, sz * 0.499)
+    if r <= 1e-8:
+        return mesh.copy()
+    return rounded_box_mesh(((min_x + max_x) * 0.5, (min_y + max_y) * 0.5, (min_z + max_z) * 0.5), (sx, sy, sz), r, seg)
+
+
 def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     out = mesh
     env = get_effective_params(obj, obn)
+    def resolve_op_value(op: Dict[str, Any], key: str, default: Any) -> Any:
+        raw = op.get(key, default)
+        if isinstance(raw, str):
+            return eval_mixed_value(raw, env, obn)
+        return raw
     if isinstance(obj.meta.get("transform"), dict):
-        out = apply_transform(out, obj.meta["transform"])
+        transform_dict = dict(obj.meta["transform"])
+        # Common Live OBJ pattern: procedural params define `center=anchor(...)` and
+        # transform repeats `position=anchor(...)`. Applying both double-translates.
+        if str(obj.meta.get("source", "")) == "procedural":
+            params = obj.meta.get("params", {}) or {}
+            c = params.get("center")
+            p = transform_dict.get("position")
+            if isinstance(c, (list, tuple)) and isinstance(p, (list, tuple)) and len(c) >= 3 and len(p) >= 3:
+                if (
+                    abs(float(c[0]) - float(p[0])) <= 1e-8
+                    and abs(float(c[1]) - float(p[1])) <= 1e-8
+                    and abs(float(c[2]) - float(p[2])) <= 1e-8
+                ):
+                    transform_dict["position"] = [0.0, 0.0, 0.0]
+        out = apply_transform(out, transform_dict)
     # Child object transforms are local to their parent assembly/object.
     # Promote mesh into world space by applying ancestor transforms (root -> leaf).
     parent_chain: List[Dict[str, Any]] = []
@@ -2213,29 +2305,45 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             offset = op.get("offset", [1,0,0])
             if isinstance(offset, str):
                 offset = eval_mixed_value(offset, env, obn)
-            out = op_array(out, int(op.get("count",2)), tuple(map(float, offset)))
+            if isinstance(offset, (list, tuple)):
+                resolved_offset: List[float] = []
+                for item in offset:
+                    if isinstance(item, str):
+                        item = eval_mixed_value(item, env, obn)
+                    resolved_offset.append(float(item))
+                offset = resolved_offset
+            count_raw = resolve_op_value(op, "count", 2)
+            out = op_array(out, int(count_raw), tuple(map(float, offset)))
         elif name == "radial_array":
+            count_raw = resolve_op_value(op, "count", 6)
+            radius_raw = resolve_op_value(op, "radius", 1.0)
             out = op_radial_array(
                 out,
-                int(op.get("count", 6)),
+                int(count_raw),
                 str(op.get("axis", "z")),
-                float(op.get("radius", 1.0))
+                float(radius_raw)
             )
         elif name == "tread":
             out = op_tread(out, op)
         elif name == "bevel":
-            amt = float(op.get("amount", 0.05))
-            seg = max(1, int(op.get("segments", 1)))
-            out = op_subdivide(out, min(2, seg))
-            out = op_smooth(out, max(1, seg), min(0.8, 0.2 + amt))
+            amount_raw = resolve_op_value(op, "amount", 0.05)
+            segments_raw = resolve_op_value(op, "segments", 1)
+            out = op_bevel(
+                out,
+                float(amount_raw),
+                int(segments_raw),
+            )
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
         elif name == "taper":
-            out = op_taper(out, str(op.get("axis", "z")), float(op.get("amount", 0.0)))
+            amount_raw = resolve_op_value(op, "amount", 0.0)
+            out = op_taper(out, str(op.get("axis", "z")), float(amount_raw))
         elif name == "twist":
-            out = op_twist(out, str(op.get("axis", "z")), float(op.get("angle", 0.0)))
+            angle_raw = resolve_op_value(op, "angle", 0.0)
+            out = op_twist(out, str(op.get("axis", "z")), float(angle_raw))
         elif name == "bend":
-            out = op_bend(out, str(op.get("axis", "x")), float(op.get("angle", 0.0)))
+            angle_raw = resolve_op_value(op, "angle", 0.0)
+            out = op_bend(out, str(op.get("axis", "x")), float(angle_raw))
         elif name == "simplify":
             out = op_simplify(out, float(op.get("ratio", 1.0)))
         elif name == "remesh":
