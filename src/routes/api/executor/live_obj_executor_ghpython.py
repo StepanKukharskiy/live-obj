@@ -358,6 +358,11 @@ def build_native_geometry(obj, warnings, sdf_registry=None):
     return None
 
 
+
+
+def _clean_ref(v):
+    return str(v).strip().strip(',').strip()
+
 def _sdf_vec3(op, key, default):
     raw = op.get(key, default)
     if isinstance(raw, (list, tuple)) and len(raw) >= 3:
@@ -384,7 +389,7 @@ def build_sdf_geometry(obj, warnings, sdf_registry=None):
             cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
             r = float(op.get("radius", 1.0))
             g = rg.Sphere(rg.Point3d(cx, cy, cz), r).ToBrep()
-            sid = str(op.get("id", ""))
+            sid = _clean_ref(op.get("id", ""))
             if sid:
                 solids[sid] = g
             last = g
@@ -394,7 +399,7 @@ def build_sdf_geometry(obj, warnings, sdf_registry=None):
             h = float(op.get("height", 1.0))
             circle = rg.Circle(rg.Plane(rg.Point3d(cx, cy, cz), rg.Vector3d.ZAxis), r)
             g = rg.Cylinder(circle, h).ToBrep(True, True)
-            sid = str(op.get("id", ""))
+            sid = _clean_ref(op.get("id", ""))
             if sid:
                 solids[sid] = g
             last = g
@@ -403,20 +408,20 @@ def build_sdf_geometry(obj, warnings, sdf_registry=None):
             sx, sy, sz = _sdf_vec3(op, "size", (1.0, 1.0, 1.0))
             plane = rg.Plane(rg.Point3d(cx, cy, cz), rg.Vector3d.ZAxis)
             g = rg.Box(plane, rg.Interval(-sx/2.0, sx/2.0), rg.Interval(-sy/2.0, sy/2.0), rg.Interval(-sz/2.0, sz/2.0)).ToBrep()
-            sid = str(op.get("id", ""))
+            sid = _clean_ref(op.get("id", ""))
             if sid:
                 solids[sid] = g
             last = g
         elif name == "subtract":
-            id_a = str(op.get("id_a", ""))
-            id_b = str(op.get("id_b", ""))
+            id_a = _clean_ref(op.get("id_a", ""))
+            id_b = _clean_ref(op.get("id_b", ""))
             a = solids.get(id_a)
             b = solids.get(id_b)
             if a is not None and b is not None:
                 out = rg.Brep.CreateBooleanDifference(a, [b], 0.01)
                 if out and len(out) > 0:
                     last = out[0]
-                    sid = str(op.get("id", ""))
+                    sid = _clean_ref(op.get("id", ""))
                     if sid:
                         solids[sid] = last
             else:
@@ -445,25 +450,31 @@ def prebuild_sdf_registry(objs, warnings):
             continue
         for op in obj.meta.get("sdf_ops", []):
             name = str(op.get("op", "")).lower()
-            sid = str(op.get("id", "")).strip()
+            sid = _clean_ref(op.get("id", "")).strip()
             if not sid:
                 continue
             try:
                 if name == "sphere":
                     cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
                     r = float(op.get("radius", 1.0))
-                    registry[sid] = rg.Sphere(rg.Point3d(cx, cy, cz), r).ToBrep()
+                    g = rg.Sphere(rg.Point3d(cx, cy, cz), r).ToBrep()
+                    registry[sid] = g
+                    registry[_clean_ref(obj.name)] = g
                 elif name == "cylinder":
                     cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
                     r = float(op.get("radius", 1.0))
                     h = float(op.get("height", 1.0))
                     circle = rg.Circle(rg.Plane(rg.Point3d(cx, cy, cz), rg.Vector3d.ZAxis), r)
-                    registry[sid] = rg.Cylinder(circle, h).ToBrep(True, True)
+                    g = rg.Cylinder(circle, h).ToBrep(True, True)
+                    registry[sid] = g
+                    registry[_clean_ref(obj.name)] = g
                 elif name == "box":
                     cx, cy, cz = _sdf_vec3(op, "center", (0.0, 0.0, 0.0))
                     sx, sy, sz = _sdf_vec3(op, "size", (1.0, 1.0, 1.0))
                     plane = rg.Plane(rg.Point3d(cx, cy, cz), rg.Vector3d.ZAxis)
-                    registry[sid] = rg.Box(plane, rg.Interval(-sx/2.0, sx/2.0), rg.Interval(-sy/2.0, sy/2.0), rg.Interval(-sz/2.0, sz/2.0)).ToBrep()
+                    g = rg.Box(plane, rg.Interval(-sx/2.0, sx/2.0), rg.Interval(-sy/2.0, sy/2.0), rg.Interval(-sz/2.0, sz/2.0)).ToBrep()
+                    registry[sid] = g
+                    registry[_clean_ref(obj.name)] = g
             except Exception as ex:
                 warnings.append("sdf prebuild failed for id '%s': %s" % (sid, ex))
     return registry
