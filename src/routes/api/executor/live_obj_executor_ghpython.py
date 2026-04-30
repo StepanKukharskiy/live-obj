@@ -204,6 +204,58 @@ def _vec3(params, key, default):
     return default
 
 
+def _safe_eval_expr(expr, scope):
+    try:
+        node = ast.parse(str(expr), mode="eval")
+    except Exception:
+        return expr
+    allowed = (
+        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Add, ast.Sub, ast.Mult, ast.Div,
+        ast.Pow, ast.USub, ast.UAdd, ast.Load, ast.Constant, ast.Num, ast.Name,
+        ast.Tuple, ast.List
+    )
+    for n in ast.walk(node):
+        if not isinstance(n, allowed):
+            return expr
+        if isinstance(n, ast.Name) and n.id not in scope:
+            return expr
+    try:
+        return eval(compile(node, "<expr>", "eval"), {"__builtins__": {}}, scope)
+    except Exception:
+        return expr
+
+
+def _resolve_scalar(v, scope):
+    if isinstance(v, (int, float, bool)):
+        return v
+    if isinstance(v, str):
+        if v in scope:
+            return scope[v]
+        r = _safe_eval_expr(v, scope)
+        return r
+    return v
+
+
+def _resolve_value(v, scope):
+    if isinstance(v, list):
+        return [_resolve_value(x, scope) for x in v]
+    if isinstance(v, tuple):
+        return tuple(_resolve_value(x, scope) for x in v)
+    return _resolve_scalar(v, scope)
+
+
+def _build_scope_for_object(obj, assembly_params):
+    scope = {}
+    parent = str(obj.meta.get("parent", "")).strip()
+    if parent and parent in assembly_params:
+        scope.update(assembly_params[parent])
+    if isinstance(obj.meta.get("params", {}), dict):
+        for k, v in obj.meta["params"].items():
+            rv = _resolve_value(v, scope)
+            scope[k] = rv
+    return scope
+
+
 def build_native_geometry(obj, warnings):
     meta = obj.meta
     source = str(meta.get("source", "")).lower()
@@ -678,6 +730,18 @@ def validate_compat(obj, warnings):
 text_in = x if isinstance(x, str) else ""
 objs = parse_live_obj(text_in)
 
+# Precompute assembly param scopes so child procedural objects can resolve
+# expressions like seat_width/2 and references to parent params.
+assembly_params = {}
+for o in objs:
+    if str(o.meta.get("source", "")).lower() == "assembly":
+        raw = o.meta.get("params", {})
+        if isinstance(raw, dict):
+            scope = {}
+            for k, v in raw.items():
+                scope[k] = _resolve_value(v, scope)
+            assembly_params[o.name] = scope
+
 meshes = []
 native = []
 names = []
@@ -687,6 +751,13 @@ for o in objs:
     names.append(o.name)
     if STRICT_COMPAT:
         validate_compat(o, warn)
+    if isinstance(o.meta.get("params", {}), dict):
+        scope = _build_scope_for_object(o, assembly_params)
+        resolved = {}
+        for k, v in o.meta["params"].items():
+            resolved[k] = _resolve_value(v, scope)
+        o.meta["params"] = resolved
+
     if o.vertices and o.faces:
         try:
             mesh = build_rhino_mesh(o)
