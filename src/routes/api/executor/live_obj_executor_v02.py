@@ -917,7 +917,10 @@ def cadquery_cylinder_mesh(
     bevel = min(float(bevel_radius), float(radius) * 0.999, float(depth) * 0.499)
     if bevel <= 0:
         return None
-    solid = solid.edges("|Z").fillet(bevel)
+    try:
+        solid = solid.edges("|Z").fillet(bevel)
+    except Exception:
+        return None
     shape = solid.val()
     tri = shape.tessellate(1.0 / max(6, int(segments)))
     vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
@@ -938,7 +941,10 @@ def cadquery_box_mesh(center: Vec3, size: Vec3, segments: int, bevel_radius: flo
     if bevel_radius > 0:
         bevel = min(float(bevel_radius), sx * 0.499, sy * 0.499, sz * 0.499)
         if bevel > 0:
-            solid = solid.edges().fillet(bevel)
+            try:
+                solid = solid.edges().fillet(bevel)
+            except Exception:
+                return None
     shape = solid.val()
     tri = shape.tessellate(1.0 / max(6, int(segments)))
     vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
@@ -2639,22 +2645,28 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             if cur is not None and tgt is not None:
                 solid_a, center_a, seg_a = cur
                 solid_b, _, _ = tgt
-                if name == "union":
-                    record_kernel_event(obj, "op:union")
-                    out = cadquery_tessellated_mesh(solid_a.fuse(solid_b), center_a, seg_a)
-                elif name == "subtract":
-                    record_kernel_event(obj, "op:subtract")
-                    out = cadquery_tessellated_mesh(solid_a.cut(solid_b), center_a, seg_a)
-                else:
-                    record_kernel_event(obj, "op:intersect")
-                    out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
+                try:
+                    if name == "union":
+                        record_kernel_event(obj, "op:union")
+                        out = cadquery_tessellated_mesh(solid_a.fuse(solid_b), center_a, seg_a)
+                    elif name == "subtract":
+                        record_kernel_event(obj, "op:subtract")
+                        out = cadquery_tessellated_mesh(solid_a.cut(solid_b), center_a, seg_a)
+                    else:
+                        record_kernel_event(obj, "op:intersect")
+                        out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
+                except Exception:
+                    pass
         elif name == "chamfer":
             amount = float(resolve_op_value(op, "amount", op.get("distance", 0.02)))
             cur = kernel_op_cadquery_solid(obj, env)
             if cur is not None and amount > 0:
                 solid, center_s, seg_s = cur
-                record_kernel_event(obj, "op:chamfer")
-                out = cadquery_tessellated_mesh(solid.chamfer(amount), center_s, seg_s)
+                try:
+                    record_kernel_event(obj, "op:chamfer")
+                    out = cadquery_tessellated_mesh(solid.chamfer(amount), center_s, seg_s)
+                except Exception:
+                    out = op_bevel(out, amount, int(resolve_op_value(op, "segments", 1)))
             else:
                 out = op_bevel(out, amount, int(resolve_op_value(op, "segments", 1)))
         elif name in {"shell", "thicken", "offset"}:
@@ -2662,8 +2674,11 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             cur = kernel_op_cadquery_solid(obj, env)
             if cur is not None and abs(thickness) > 1e-9:
                 solid, center_s, seg_s = cur
-                record_kernel_event(obj, f"op:{name}")
-                out = cadquery_tessellated_mesh(solid.shell(thickness), center_s, seg_s)
+                try:
+                    record_kernel_event(obj, f"op:{name}")
+                    out = cadquery_tessellated_mesh(solid.shell(thickness), center_s, seg_s)
+                except Exception:
+                    pass
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
         elif name == "taper":
