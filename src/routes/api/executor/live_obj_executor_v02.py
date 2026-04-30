@@ -2259,6 +2259,11 @@ def op_bevel(mesh: Mesh, amount: float = 0.05, segments: int = 1) -> Mesh:
 def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     out = mesh
     env = get_effective_params(obj, obn)
+    def resolve_op_value(op: Dict[str, Any], key: str, default: Any) -> Any:
+        raw = op.get(key, default)
+        if isinstance(raw, str):
+            return eval_mixed_value(raw, env, obn)
+        return raw
     if isinstance(obj.meta.get("transform"), dict):
         out = apply_transform(out, obj.meta["transform"])
     # Child object transforms are local to their parent assembly/object.
@@ -2293,17 +2298,11 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
                         item = eval_mixed_value(item, env, obn)
                     resolved_offset.append(float(item))
                 offset = resolved_offset
-            count_raw = op.get("count", 2)
-            if isinstance(count_raw, str):
-                count_raw = eval_mixed_value(count_raw, env, obn)
+            count_raw = resolve_op_value(op, "count", 2)
             out = op_array(out, int(count_raw), tuple(map(float, offset)))
         elif name == "radial_array":
-            count_raw = op.get("count", 6)
-            radius_raw = op.get("radius", 1.0)
-            if isinstance(count_raw, str):
-                count_raw = eval_mixed_value(count_raw, env, obn)
-            if isinstance(radius_raw, str):
-                radius_raw = eval_mixed_value(radius_raw, env, obn)
+            count_raw = resolve_op_value(op, "count", 6)
+            radius_raw = resolve_op_value(op, "radius", 1.0)
             out = op_radial_array(
                 out,
                 int(count_raw),
@@ -2313,12 +2312,8 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         elif name == "tread":
             out = op_tread(out, op)
         elif name == "bevel":
-            amount_raw = op.get("amount", 0.05)
-            segments_raw = op.get("segments", 1)
-            if isinstance(amount_raw, str):
-                amount_raw = eval_mixed_value(amount_raw, env, obn)
-            if isinstance(segments_raw, str):
-                segments_raw = eval_mixed_value(segments_raw, env, obn)
+            amount_raw = resolve_op_value(op, "amount", 0.05)
+            segments_raw = resolve_op_value(op, "segments", 1)
             out = op_bevel(
                 out,
                 float(amount_raw),
@@ -2327,19 +2322,13 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         elif name == "subdivide":
             out = op_subdivide(out, int(op.get("level", 1)))
         elif name == "taper":
-            amount_raw = op.get("amount", 0.0)
-            if isinstance(amount_raw, str):
-                amount_raw = eval_mixed_value(amount_raw, env, obn)
+            amount_raw = resolve_op_value(op, "amount", 0.0)
             out = op_taper(out, str(op.get("axis", "z")), float(amount_raw))
         elif name == "twist":
-            angle_raw = op.get("angle", 0.0)
-            if isinstance(angle_raw, str):
-                angle_raw = eval_mixed_value(angle_raw, env, obn)
+            angle_raw = resolve_op_value(op, "angle", 0.0)
             out = op_twist(out, str(op.get("axis", "z")), float(angle_raw))
         elif name == "bend":
-            angle_raw = op.get("angle", 0.0)
-            if isinstance(angle_raw, str):
-                angle_raw = eval_mixed_value(angle_raw, env, obn)
+            angle_raw = resolve_op_value(op, "angle", 0.0)
             out = op_bend(out, str(op.get("axis", "x")), float(angle_raw))
         elif name == "simplify":
             out = op_simplify(out, float(op.get("ratio", 1.0)))
