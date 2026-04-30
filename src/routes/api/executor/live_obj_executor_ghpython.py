@@ -142,6 +142,12 @@ def parse_live_obj(text):
                             anchors = {}
                         anchors[k.strip()] = _parse_scalar(v.strip())
                         current.meta["anchors"] = anchors
+                elif current_block == "sdf":
+                    sdf_ops = current.meta.get("sdf_ops")
+                    if not isinstance(sdf_ops, list):
+                        sdf_ops = []
+                    sdf_ops.append(_parse_op_line(item))
+                    current.meta["sdf_ops"] = sdf_ops
                 else:
                     current.ops.append(_parse_op_line(item))
                 continue
@@ -158,6 +164,9 @@ def parse_live_obj(text):
                 elif key == "anchors":
                     current.meta["anchors"] = {}
                     current_block = "anchors"
+                elif key == "sdf":
+                    current.meta["sdf_ops"] = []
+                    current_block = "sdf"
                 else:
                     current.meta[key] = _parse_scalar(value)
                     current_block = None
@@ -740,10 +749,12 @@ def apply_native_ops(geom, ops, warnings):
 
 
 def validate_compat(obj, warnings):
-    supported_sources = {"procedural", "simulation", "llm_mesh", "assembly", ""}
+    supported_sources = {"procedural", "simulation", "llm_mesh", "assembly", "sdf", ""}
     supported_types = {"box", "sphere", "cylinder", "polyline", "extrude", "loft", "sweep", ""}
     supported_sims = {"boids", "differential_growth", "cellular_automata", ""}
     supported_deformers = {"twist", "taper", "wave", "bend", ""}
+
+    supported_sdf_ops = {"sphere", "box", "cylinder", "capsule", "torus", "union", "subtract", "intersect", "smooth_union", "repeat", "twist", "bend", "displace", "mesh_from_sdf", ""}
     supported_ops = {
         "move", "scale", "rotate", "mirror",
         "array", "array_linear", "radial_array",
@@ -772,6 +783,11 @@ def validate_compat(obj, warnings):
         opname = str(op.get("op", "")).lower()
         if opname not in supported_ops:
             warnings.append("compat: unsupported op on '%s': %s" % (obj.name, opname))
+
+    for sdfop in obj.meta.get("sdf_ops", []):
+        opname = str(sdfop.get("op", "")).lower()
+        if opname not in supported_sdf_ops:
+            warnings.append("compat: unsupported sdf op on '%s': %s" % (obj.name, opname))
 
 
 def _looks_like_obj_text(s):
