@@ -7,6 +7,29 @@
 		{ value: 'gpt-4o', label: 'GPT-4o' }
 	] as const;
 
+	const PROMPT_EXAMPLES = [
+		{ text: 'Create a simple box at position [0,0,0] with size [1,1,1]', category: 'Primitives' },
+		{ text: 'Create a cylinder with radius 0.5, height 2, centered at origin', category: 'Primitives' },
+		{ text: 'Create a sphere with radius 0.8 at position [1,0,0]', category: 'Primitives' },
+		{ text: 'Extrude a rectangular profile to create a wall', category: 'Profile' },
+		{ text: 'Revolve a profile around the z-axis to create a vase', category: 'Profile' },
+		{ text: 'Create a loft between two profiles of different sizes', category: 'Profile' },
+		{ text: 'Subtract a cylinder from a box to create a hole', category: 'Boolean' },
+		{ text: 'Union two spheres to create a merged shape', category: 'Boolean' },
+		{ text: 'Create a smooth union between two boxes', category: 'Boolean' },
+		{ text: 'Scale the object by factor 2.0', category: 'Transform' },
+		{ text: 'Rotate the object 45 degrees around the z-axis', category: 'Transform' },
+		{ text: 'Move the object to position [1,2,3]', category: 'Transform' },
+		{ text: 'Create an array of 5 copies offset by 0.5 units', category: 'Transform' },
+		{ text: 'Apply a taper deformation along the z-axis', category: 'Deformation' },
+		{ text: 'Twist the object 30 degrees along the z-axis', category: 'Deformation' },
+		{ text: 'Add a bevel with 0.05 distance to all edges', category: 'Modifiers' },
+		{ text: 'Create a hollow shell with 0.02 thickness', category: 'Modifiers' },
+		{ text: 'Generate a cellular automata coral structure', category: 'Simulation' },
+		{ text: 'Create a differential growth pattern', category: 'Simulation' },
+		{ text: 'Generate a boids flocking simulation', category: 'Simulation' }
+	];
+
 	let {
 		msgs = [],
 		busy = false,
@@ -54,6 +77,10 @@
 	}
 
 	let canSend = $derived(Boolean((input.trim() || attachedDataUrl) && !busy));
+
+	function usePrompt(example: { text: string; category: string }) {
+		input = example.text;
+	}
 </script>
 
 <div class="planner-chat-shell">
@@ -64,6 +91,23 @@
 					Describe a scene or ask for edits like “add a lamp”, “remove the sphere”, or “make the table red”. You can
 					attach a reference image instead of or in addition to text.
 				</p>
+				<div class="planner-prompt-examples">
+					<h3 class="planner-prompt-examples-title">Quick Prompts</h3>
+					<div class="planner-prompt-grid">
+						{#each PROMPT_EXAMPLES as example (example.text)}
+							<button
+								type="button"
+								class="planner-prompt-chip"
+								class:disabled={busy}
+								disabled={busy}
+								onclick={() => usePrompt(example)}
+							>
+								<span class="planner-prompt-chip-category">{example.category}</span>
+								<span class="planner-prompt-chip-text">{example.text}</span>
+							</button>
+						{/each}
+					</div>
+				</div>
 			</div>
 		{:else}
 			{#each msgs as m}
@@ -279,5 +323,67 @@
 
 	.planner-chat-attach-label:hover {
 		background: rgba(0, 0, 0, 0.06);
+	}
+
+	.planner-prompt-examples {
+		margin-top: 20px;
+		padding-top: 20px;
+		border-top: 1px solid rgba(0, 0, 0, 0.08);
+	}
+
+	.planner-prompt-examples-title {
+		margin: 0 0 12px;
+		font-size: 13px;
+		font-weight: 600;
+		color: #333;
+	}
+
+	.planner-prompt-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+		gap: 8px;
+	}
+
+	.planner-prompt-chip {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		padding: 10px 12px;
+		background: rgba(0, 0, 235, 0.03);
+		border: 1px solid rgba(0, 0, 235, 0.12);
+		border-radius: 8px;
+		cursor: pointer;
+		text-align: left;
+		transition: all 0.15s;
+	}
+
+	.planner-prompt-chip:hover:not(.disabled) {
+		background: rgba(0, 0, 235, 0.08);
+		border-color: rgba(0, 0, 235, 0.2);
+		transform: translateY(-1px);
+	}
+
+	.planner-prompt-chip:active:not(.disabled) {
+		transform: translateY(0);
+	}
+
+	.planner-prompt-chip.disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.planner-prompt-chip-category {
+		font-size: 10px;
+		font-weight: 600;
+		color: #0000eb;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		margin-bottom: 4px;
+	}
+
+	.planner-prompt-chip-text {
+		font-size: 12px;
+		color: #334155;
+		line-height: 1.4;
 	}
 </style>

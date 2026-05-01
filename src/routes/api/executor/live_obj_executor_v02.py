@@ -1053,11 +1053,36 @@ def cadquery_profile_mesh(
         x_vals = [float(p[0]) if len(p) > 0 else 0.0 for p in profile_points]
         y_vals = [float(p[1]) if len(p) > 1 else 0.0 for p in profile_points]
         z_vals = [float(p[2]) if len(p) > 2 else 0.0 for p in profile_points]
-        
+
         x_range = max(x_vals) - min(x_vals)
         y_range = max(y_vals) - min(y_vals)
         z_range = max(z_vals) - min(z_vals)
-        
+
+        # For simple rectangular profiles, generate mesh manually to avoid CadQuery tessellation issues
+        if len(profile_points) == 4:
+            # Check if it's a rectangle in XZ plane (y constant)
+            if y_range == 0:
+                # Generate box mesh manually
+                x0, x1 = min(x_vals), max(x_vals)
+                z0, z1 = min(z_vals), max(z_vals)
+                y0, y1 = min(y_vals), min(y_vals) + height
+                vertices = [
+                    [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0],  # bottom face
+                    [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1],  # top face
+                ]
+                # Add center offset
+                vertices = [[v[0] + center[0], v[1] + center[1], v[2] + center[2]] for v in vertices]
+                faces = [
+                    [1, 2, 3], [1, 3, 4],  # bottom
+                    [5, 6, 7], [5, 7, 8],  # top
+                    [1, 5, 8], [1, 8, 4],  # left
+                    [2, 6, 5], [2, 5, 1],  # front
+                    [3, 7, 6], [3, 6, 2],  # right
+                    [4, 8, 7], [4, 7, 3],  # back
+                ]
+                return Mesh(vertices, faces)
+
+        # Fallback to CadQuery for complex profiles
         # If y has the smallest range or z is constant (2D profile), use X-Z plane (vertical wall)
         if y_range <= x_range and y_range <= z_range:
             profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[2]) if len(p) > 2 else 0.0) for p in profile_points]
@@ -1065,7 +1090,7 @@ def cadquery_profile_mesh(
         else:
             profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[1]) if len(p) > 1 else 0.0) for p in profile_points]
             wp = cq.Workplane("XY")
-        
+
         try:
             # Use moveTo/lineTo instead of polyline for better robustness
             wp.moveTo(profile_2d[0][0], profile_2d[0][1])
@@ -1075,6 +1100,8 @@ def cadquery_profile_mesh(
             solid = wp.extrude(float(height))
             if solid is None:
                 return None
+            # Convert solid to mesh - need to call .val() to get the actual solid
+            return cadquery_tessellated_mesh(solid.val(), center, segments)
         except Exception as e:
             return None
     elif mode in {"revolve", "lathe"}:
@@ -1181,7 +1208,9 @@ def cadquery_loft_mesh(center: Vec3, sections: List[List[List[float]]], segments
 
 
 def cadquery_tessellated_mesh(shape: Any, center: Vec3, segments: int) -> Mesh:
-    tri = shape.tessellate(1.0 / max(8, int(segments)))
+    # Use smaller tolerance for higher quality tessellation
+    tolerance = 1.0 / max(16, int(segments) * 2)
+    tri = shape.tessellate(tolerance)
     vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
     faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
     return Mesh(vertices, faces)
@@ -1232,8 +1261,39 @@ def cadquery_solid_from_params(typ: str, params: Dict[str, Any]) -> Optional[Any
         height = float(params.get("height", params.get("depth", 1.0)))
         if len(profile_points) < 3:
             return None
-        wp = cq.Workplane("XY").polyline([(float(p[0]), float(p[1])) for p in profile_points]).close()
-        return wp.extrude(float(height)).val()
+
+        # For simple rectangular profiles, use box primitive for better solid generation
+        x_vals = [float(p[0]) if len(p) > 0 else 0.0 for p in profile_points]
+        y_vals = [float(p[1]) if len(p) > 1 else 0.0 for p in profile_points]
+        z_vals = [float(p[2]) if len(p) > 2 else 0.0 for p in profile_points]
+
+        x_range = max(x_vals) - min(x_vals)
+        y_range = max(y_vals) - min(y_vals)
+        z_range = max(z_vals) - min(z_vals)
+
+        # If profile is a rectangle in XZ plane (y constant), use box primitive
+        if y_range == 0 and len(profile_points) == 4:
+            size = [x_range, height, z_range]
+            # Create box at origin then translate to correct position
+            solid = cq.Workplane("XY").box(size[0], size[1], size[2], centered=False)
+            solid = solid.translate((min(x_vals), min(y_vals), min(z_vals)))
+            return solid.val()
+
+        # Otherwise use standard extrude
+        profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[1]) if len(p) > 1 else 0.0) for p in profile_points]
+        wp = cq.Workplane("XY")
+
+        try:
+            wp.moveTo(profile_2d[0][0], profile_2d[0][1])
+            for x, y in profile_2d[1:]:
+                wp.lineTo(x, y)
+            wp.close()
+            solid = wp.extrude(float(height))
+            if solid is None:
+                return None
+            return solid.val()
+        except Exception as e:
+            return None
     return None
 
 
@@ -2774,6 +2834,13 @@ def op_bevel(mesh: Mesh, amount: float = 0.05, segments: int = 1) -> Mesh:
 
 def _resolve_kernel_center(obj: LiveObject, params: Dict[str, Any], env: Dict[str, Any]) -> Vec3:
     """Resolve a kernel op's `center`/`position`, degrading to origin on unresolvable refs."""
+    # First check for transform position
+    transform = obj.meta.get("transform")
+    if isinstance(transform, dict):
+        position = transform.get("position")
+        if isinstance(position, (list, tuple)) and len(position) >= 3:
+            return _as_float3(position, (0.0, 0.0, 0.0))
+    # Then check params center/position
     center_raw = params.get("center", params.get("position", [0, 0, 0]))
     if isinstance(center_raw, str):
         try:
@@ -2814,14 +2881,14 @@ def kernel_op_cadquery_solid(obj: LiveObject, env: Dict[str, Any]) -> Optional[T
     if solid is None:
         return None
     segments = int(params.get("segments", 24))
-    # Apply transform to the solid if present
-    transform = obj.meta.get("transform")
-    if isinstance(transform, dict):
-        position = transform.get("position", [0, 0, 0])
-        if isinstance(position, (list, tuple)) and len(position) >= 3:
-            # Move the solid to the transformed position
-            solid = solid.translate(float(position[0]), float(position[1]), float(position[2]))
-    return (solid, center, segments)
+    # For primitives created at origin, translate to center
+    if typ in {"box", "cylinder", "sphere", "cone"}:
+        cx, cy, cz = center
+        solid = solid.translate((cx, cy, cz))
+        return (solid, (0.0, 0.0, 0.0), segments)
+    # For profile-based ops (extrude, revolve, sweep, loft), the solid is already
+    # translated to world position in cadquery_solid_from_params, so use origin for tessellation
+    return (solid, (0.0, 0.0, 0.0), segments)
 
 
 def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
@@ -2911,6 +2978,8 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
                 solid_a, center_a, seg_a = cur
                 solid_b, _, _ = tgt
                 try:
+                    # Use center_a for tessellation - primitives return (0,0,0) after translation,
+                    # profile ops return actual center for offset
                     if name == "union":
                         record_kernel_event(obj, "op:union")
                         out = cadquery_tessellated_mesh(solid_a.fuse(solid_b), center_a, seg_a)
@@ -3087,6 +3156,20 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
             if ker_mesh is not None:
                 record_kernel_event(obj, f"generate:{typ}")
                 return ker_mesh
+        # Non-kernel path: use cadquery_profile_mesh for extrude/revolve/lathe
+        if typ == "extrude":
+            profile_points = params.get("profile", [])
+            if isinstance(profile_points, list) and len(profile_points) >= 3:
+                height = float(params.get("height", params.get("depth", 1.0)))
+                segments = int(params.get("segments", 24))
+                return cadquery_profile_mesh("extrude", center, profile_points, height, segments)
+        elif typ in {"revolve", "lathe"}:
+            profile_points = params.get("profile", [])
+            if isinstance(profile_points, list) and len(profile_points) >= 2:
+                angle = float(params.get("angle", 360.0))
+                axis = str(params.get("axis", "y"))
+                segments = int(params.get("segments", 24))
+                return cadquery_profile_mesh(typ, center, profile_points, segments, angle, axis)
         return obj.mesh.copy()
     if typ == "loft":
         if kernel:
@@ -3339,6 +3422,10 @@ def serialize_scene(scene: Scene) -> str:
     global_index = 1
 
     for obj in scene.objects:
+        # Skip helper objects (used only as boolean operands)
+        if obj.meta.get("helper") or obj.meta.get("hidden"):
+            continue
+
         lines.append("")
         lines.append(f"{obj.declaration} {obj.name}")
         lines.extend(obj.meta_lines)
@@ -3368,10 +3455,12 @@ def main() -> None:
     execute_scene(scene)
     output.write_text(serialize_scene(scene), encoding="utf-8")
 
+    # Count only non-helper objects for output stats
+    visible_objects = [o for o in scene.objects if not (o.meta.get("helper") or o.meta.get("hidden"))]
     print(f"Wrote {output}")
-    print(f"Objects: {len(scene.objects)}")
-    print(f"Vertices: {sum(len(o.mesh.vertices) for o in scene.objects)}")
-    print(f"Faces: {sum(len(o.mesh.faces) for o in scene.objects)}")
+    print(f"Objects: {len(visible_objects)}")
+    print(f"Vertices: {sum(len(o.mesh.vertices) for o in visible_objects)}")
+    print(f"Faces: {sum(len(o.mesh.faces) for o in visible_objects)}")
 
 
 if __name__ == "__main__":

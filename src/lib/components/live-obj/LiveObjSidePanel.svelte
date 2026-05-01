@@ -2,12 +2,13 @@
 	import '$lib/styles/planner-panel.css';
 	import LiveObjChatTab from './LiveObjChatTab.svelte';
 	import LiveObjAdjustTab from './LiveObjAdjustTab.svelte';
+	import LiveObjToolsTab from './LiveObjToolsTab.svelte';
 	import LiveObjSceneTab from './LiveObjSceneTab.svelte';
 	import LiveObjRenderTab from './LiveObjRenderTab.svelte';
 	import type { SourceTab } from './LiveObjOutputTab.svelte';
 
 	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
-	type PanelTab = 'chat' | 'adjust' | 'scene' | 'render';
+	type PanelTab = 'chat' | 'adjust' | 'tools' | 'scene' | 'render';
 
 	let {
 		showPanel = $bindable(true),
@@ -106,6 +107,7 @@
 			<div class="planner-tabs" role="tablist" aria-label="Panel tabs">
 				<button type="button" class:active={activeTab === 'chat'} onclick={() => (activeTab = 'chat')}>Chat</button>
 				<button type="button" class:active={activeTab === 'adjust'} onclick={() => (activeTab = 'adjust')}>Adjust</button>
+				<button type="button" class:active={activeTab === 'tools'} onclick={() => (activeTab = 'tools')}>Tools</button>
 				<button type="button" class:active={activeTab === 'scene'} onclick={() => (activeTab = 'scene')}>Scene</button>
 				<button type="button" class:active={activeTab === 'render'} onclick={() => (activeTab = 'render')}>Render</button>
 			</div>
@@ -133,6 +135,8 @@
 					onLiveObjMetadataChange={onLiveObjMetadataChange}
 					onApplyEditedSource={onApplyEditedSource}
 				/>
+			{:else if activeTab === 'tools'}
+				<LiveObjToolsTab />
 			{:else}
 				{#if activeTab === 'scene'}
 				<LiveObjSceneTab
