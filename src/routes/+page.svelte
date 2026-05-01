@@ -16,6 +16,10 @@
 				No complex software. No technical skills needed. Just type what you want to build.
 			</p>
 
+			<a class="github-link" href="https://github.com/StepanKukharskiy/live-obj" target="_blank" rel="noopener noreferrer">
+				GitHub
+			</a>
+
 			<div class="video-placeholder">
 				<div class="video-placeholder-content">
 					<div class="play-icon">▶</div>
@@ -46,11 +50,18 @@
 	</main>
 
 	<footer class="landing-footer">
-		<p>&copy; 2026 Spellshape. AI-native 3D authoring.</p>
+	<p>&copy; 2026 Spellshape. AI-native 3D.</p>
+		<img class="landing-logo-bottom" src="/images/spellshape_text_logo.svg" alt="Spellshape" />
+		
 	</footer>
 </div>
 
 <style>
+	:global(body) {
+		margin: 0;
+		padding: 0;
+	}
+
 	.landing {
 		min-height: 100vh;
 		display: flex;
@@ -60,14 +71,29 @@
 	}
 
 	.landing-header {
-		padding: 24px 48px;
+		padding: 0;
 		display: flex;
 		align-items: center;
+		position: relative;
+		margin-top: -40px;
 	}
 
 	.landing-logo {
-		height: 32px;
-		width: auto;
+		width: 100%;
+		height: auto;
+	}
+
+	.github-link {
+		color: #0000eb;
+		text-decoration: none;
+		font-weight: 600;
+		font-size: 16px;
+		margin-bottom: 24px;
+		display: inline-block;
+	}
+
+	.github-link:hover {
+		text-decoration: underline;
 	}
 
 	.landing-main {
@@ -183,9 +209,17 @@
 
 	.landing-footer {
 		text-align: center;
-		padding: 32px;
+		padding: 0;
 		color: #888;
 		font-size: 14px;
+		position: relative;
+		overflow: hidden;
+	}
+
+	.landing-logo-bottom {
+		width: 100%;
+		height: auto;
+		margin-bottom: -40px;
 	}
 
 	@media (max-width: 768px) {
