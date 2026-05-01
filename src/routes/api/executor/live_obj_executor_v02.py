@@ -2931,6 +2931,43 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
     return obj.mesh.copy()
 
 
+def _infer_sdf_bounds(sdf_ops: List[Dict[str, Any]], default: List[List[float]]) -> List[List[float]]:
+    mins = [math.inf, math.inf, math.inf]
+    maxs = [-math.inf, -math.inf, -math.inf]
+
+    def include_box(center: Vec3, half: Vec3) -> None:
+        for i in range(3):
+            mins[i] = min(mins[i], center[i] - half[i])
+            maxs[i] = max(maxs[i], center[i] + half[i])
+
+    for cmd in sdf_ops:
+        name = str(cmd.get("cmd", "")).lower()
+        center = _as_float3(cmd.get("center", [0.0, 0.0, 0.0]), (0.0, 0.0, 0.0))
+        if name == "sphere":
+            r = max(1e-6, float(cmd.get("radius", 0.5)))
+            include_box(center, (r, r, r))
+        elif name == "box":
+            sx, sy, sz = _as_float3(cmd.get("size", [1.0, 1.0, 1.0]), (1.0, 1.0, 1.0))
+            include_box(center, (max(1e-6, sx * 0.5), max(1e-6, sy * 0.5), max(1e-6, sz * 0.5)))
+        elif name == "cylinder":
+            r = max(1e-6, float(cmd.get("radius", 0.5)))
+            h = max(1e-6, float(cmd.get("height", cmd.get("depth", 1.0))))
+            axis = str(cmd.get("axis", "z")).lower()
+            if axis == "x":
+                include_box(center, (h * 0.5, r, r))
+            elif axis == "y":
+                include_box(center, (r, h * 0.5, r))
+            else:
+                include_box(center, (r, r, h * 0.5))
+
+    if not math.isfinite(mins[0]):
+        return default
+
+    span = [maxs[i] - mins[i] for i in range(3)]
+    margin = max(0.02, max(span) * 0.15)
+    return [[mins[0] - margin, mins[1] - margin, mins[2] - margin], [maxs[0] + margin, maxs[1] + margin, maxs[2] + margin]]
+
+
 def generate_sdf(obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     params = obj.meta.get("params", {}) or {}
     env = get_effective_params(obj, obn)
@@ -2941,7 +2978,10 @@ def generate_sdf(obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     expr = build_sdf(resolved_ops)
     if expr is None:
         return obj.mesh.copy()
+    has_explicit_bounds = "bounds" in params
     bounds = params.get("bounds", [[-2,-2,-2],[2,2,2]])
+    if not has_explicit_bounds:
+        bounds = _infer_sdf_bounds(resolved_ops, bounds)
     resolution = float(params.get("resolution", 0.15))
     method = "voxel"
     for cmd in resolved_ops:
