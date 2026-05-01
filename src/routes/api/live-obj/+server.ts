@@ -45,7 +45,7 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 	const unknown = new Set<string>();
 	// Track which `#@` block the current `#@ - …` line belongs to so SDF ops
 	// don't get flagged as if they were top-level mesh ops.
-	let block: 'ops' | 'sdf' | 'other' = 'other';
+	let block: 'ops' | 'sdf' | 'anchors' | 'params' | 'placement' | 'other' = 'other';
 	for (const rawLine of liveObj.split('\n')) {
 		const line = rawLine.trim();
 		if (!line.startsWith('#@')) {
@@ -57,7 +57,11 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 		const body = line.slice(2).trim();
 		if (body.startsWith('ops:')) { block = 'ops'; continue; }
 		if (body.startsWith('sdf:')) { block = 'sdf'; continue; }
+		if (body.startsWith('anchors:')) { block = 'anchors'; continue; }
+		if (body.startsWith('params:')) { block = 'params'; continue; }
+		if (body.startsWith('placement:')) { block = 'placement'; continue; }
 		if (body.startsWith('-')) {
+			if (block === 'anchors' || block === 'params' || block === 'placement') continue;
 			const opToken = body.slice(1).trim().split(/\s+/)[0] ?? '';
 			if (!opToken) continue;
 			const op = opToken.toLowerCase();
