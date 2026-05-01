@@ -30,22 +30,14 @@
 			<button class="cta-button" onclick={goToApp}>Try It Free</button>
 		</section>
 
-		<section class="problem-solution">
-			<div class="problem">
-				<h2>The Problem</h2>
-				<p>
-					Traditional 3D modeling requires expensive software, months of training, and deep technical knowledge.
-					It's slow, frustrating, and out of reach for most people.
-				</p>
-			</div>
-
-			<div class="solution">
-				<h2>The Solution</h2>
-				<p>
-					Spellshape lets you create 3D models simply by describing what you want in plain English.
-					Our AI understands your description and generates the model instantly. Edit, refine, and export—all in one place.
-				</p>
-			</div>
+		<section class="platforms">
+			<p class="platforms-text">
+				<span class="platform-item">Web <span class="platform-status beta">(Beta)</span></span>
+				<span class="platform-separator">•</span>
+				<span class="platform-item">Grasshopper <span class="platform-status beta">(Beta)</span></span>
+				<span class="platform-separator">•</span>
+				<span class="platform-item">Blender <span class="platform-status coming-soon">(Coming Soon)</span></span>
+			</p>
 		</section>
 	</main>
 
@@ -175,36 +167,44 @@
 		box-shadow: 0 6px 16px rgba(0, 0, 235, 0.4);
 	}
 
-	.problem-solution {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 48px;
+	.platforms {
+		text-align: center;
+		margin-bottom: 80px;
 		width: 100%;
 		max-width: 900px;
 	}
 
-	.problem,
-	.solution {
-		padding: 32px;
-		background: white;
-		border-radius: 16px;
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-	}
-
-	.problem h2,
-	.solution h2 {
-		font-size: 24px;
-		font-weight: 600;
-		color: #1a1a1a;
-		margin: 0 0 16px 0;
-	}
-
-	.problem p,
-	.solution p {
-		font-size: 16px;
+	.platforms-text {
+		font-size: 18px;
 		color: #555;
-		line-height: 1.6;
 		margin: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-wrap: wrap;
+		gap: 16px;
+	}
+
+	.platform-item {
+		font-weight: 500;
+	}
+
+	.platform-separator {
+		color: #888;
+	}
+
+	.platform-status {
+		font-size: 14px;
+		font-weight: 500;
+		color: #22c55e;
+	}
+
+	.platform-status.beta {
+		color: #f59e0b;
+	}
+
+	.platform-status.coming-soon {
+		color: #888;
 	}
 
 	.landing-footer {
@@ -231,9 +231,14 @@
 			font-size: 16px;
 		}
 
-		.problem-solution {
-			grid-template-columns: 1fr;
-			gap: 24px;
+		.platforms-text {
+			font-size: 16px;
+			flex-direction: column;
+			gap: 8px;
+		}
+
+		.platform-separator {
+			display: none;
 		}
 
 		.landing-header {

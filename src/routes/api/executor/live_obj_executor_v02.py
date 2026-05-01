@@ -1033,6 +1033,7 @@ def cadquery_profile_mesh(
     height: float,
     segments: int,
     angle_degrees: float = 360.0,
+    axis: str = "y",
 ) -> Optional[Mesh]:
     if len(profile_points) < 3:
         return None
@@ -1040,19 +1041,100 @@ def cadquery_profile_mesh(
     if importlib.util.find_spec("cadquery") is None:
         return None
     import cadquery as cq
+    import math
 
-    wp = cq.Workplane("XY").polyline([(float(p[0]), float(p[1])) for p in profile_points]).close()
+    axis = axis.lower()
     if mode == "extrude":
-        solid = wp.extrude(float(height))
+        # Handle 3D profile points by extracting 2D coordinates
+        # For vertical walls: profile is in X-Z plane (p[0], p[2]), extrude along Y
+        # For horizontal surfaces: profile is in X-Y plane (p[0], p[1]), extrude along Z
+        # Detect which plane to use based on which coordinates vary
+        # Handle both 2D and 3D profile points
+        x_vals = [float(p[0]) if len(p) > 0 else 0.0 for p in profile_points]
+        y_vals = [float(p[1]) if len(p) > 1 else 0.0 for p in profile_points]
+        z_vals = [float(p[2]) if len(p) > 2 else 0.0 for p in profile_points]
+        
+        x_range = max(x_vals) - min(x_vals)
+        y_range = max(y_vals) - min(y_vals)
+        z_range = max(z_vals) - min(z_vals)
+        
+        # If y has the smallest range or z is constant (2D profile), use X-Z plane (vertical wall)
+        if y_range <= x_range and y_range <= z_range:
+            profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[2]) if len(p) > 2 else 0.0) for p in profile_points]
+            wp = cq.Workplane("XZ")
+        else:
+            profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[1]) if len(p) > 1 else 0.0) for p in profile_points]
+            wp = cq.Workplane("XY")
+        
+        try:
+            # Use moveTo/lineTo instead of polyline for better robustness
+            wp.moveTo(profile_2d[0][0], profile_2d[0][1])
+            for x, y in profile_2d[1:]:
+                wp.lineTo(x, y)
+            wp.close()
+            solid = wp.extrude(float(height))
+            if solid is None:
+                return None
+        except Exception as e:
+            return None
     elif mode in {"revolve", "lathe"}:
-        solid = wp.revolve(float(angle_degrees), (0, 0, 0), (0, 1, 0))
+        # Manual revolve: generate mesh directly without CadQuery's revolve
+        # This avoids CadQuery's confusing coordinate system issues
+        import math
+        
+        # Generate vertices by revolving profile points around axis
+        vertices = []
+        faces = []
+        
+        # Number of segments around the revolve
+        revolve_segments = max(8, int(segments))
+        angle_rad = math.radians(angle_degrees)
+        
+        # For each profile point, create a circle of vertices
+        for i, p in enumerate(profile_points):
+            radius = float(p[0]) if axis == "z" or axis == "y" else float(p[1])
+            height_val = float(p[2]) if axis == "z" or axis == "x" else (float(p[1]) if axis == "y" else float(p[2]))
+            
+            # Create circle of vertices at this height
+            for j in range(revolve_segments):
+                angle = (j / revolve_segments) * angle_rad
+                if axis == "z":
+                    # Revolve around Z: x = radius*cos, y = radius*sin, z = height
+                    x = radius * math.cos(angle)
+                    y = radius * math.sin(angle)
+                    z = height_val
+                elif axis == "x":
+                    # Revolve around X: x = height, y = radius*cos, z = radius*sin
+                    x = height_val
+                    y = radius * math.cos(angle)
+                    z = radius * math.sin(angle)
+                else:  # axis == "y"
+                    # Revolve around Y: x = radius*cos, y = height, z = radius*sin
+                    x = radius * math.cos(angle)
+                    y = height_val
+                    z = radius * math.sin(angle)
+                
+                vertices.append([x + center[0], y + center[1], z + center[2]])
+        
+        # Generate faces connecting the circles
+        for i in range(len(profile_points) - 1):
+            for j in range(revolve_segments):
+                # Current circle index
+                curr = i * revolve_segments + j
+                # Next circle index
+                next_circle = (i + 1) * revolve_segments + j
+                # Next vertex in current circle
+                next_curr = i * revolve_segments + ((j + 1) % revolve_segments)
+                # Next vertex in next circle
+                next_next = (i + 1) * revolve_segments + ((j + 1) % revolve_segments)
+                
+                # Two triangles per quad
+                faces.append([curr + 1, next_circle + 1, next_curr + 1])
+                faces.append([next_circle + 1, next_next + 1, next_curr + 1])
+        
+        return Mesh(vertices, faces)
     else:
         return None
-    shape = solid.val()
-    tri = shape.tessellate(1.0 / max(8, int(segments)))
-    vertices = [(float(v.x) + center[0], float(v.y) + center[1], float(v.z) + center[2]) for v in tri[0]]
-    faces = [[int(f[0]) + 1, int(f[1]) + 1, int(f[2]) + 1] for f in tri[1]]
-    return Mesh(vertices, faces)
 
 
 def cadquery_sweep_mesh(
@@ -1118,11 +1200,21 @@ def cadquery_solid_from_params(typ: str, params: Dict[str, Any]) -> Optional[Any
         return cq.Workplane("XY").box(sx, sy, sz).val()
     if typ == "cylinder":
         axis = str(params.get("axis", "z")).lower()
-        if axis != "z":
-            return None
         depth = float(params.get("depth", params.get("height", params.get("width", 1))))
         radius = float(params.get("radius", 0.5))
-        return cq.Workplane("XY").cylinder(depth, radius).val()
+        if axis == "x":
+            # Cylinder aligned with X axis: create in XY plane and rotate
+            solid = cq.Workplane("XY").cylinder(depth, radius).val()
+            solid = solid.rotate((0, 0, 0), (0, 1, 0), 90)
+            return solid
+        elif axis == "y":
+            # Cylinder aligned with Y axis: create in XY plane and rotate
+            solid = cq.Workplane("XY").cylinder(depth, radius).val()
+            solid = solid.rotate((0, 0, 0), (1, 0, 0), 90)
+            return solid
+        else:
+            # Default to Z axis
+            return cq.Workplane("XY").cylinder(depth, radius).val()
     if typ == "cone":
         axis = str(params.get("axis", "z")).lower()
         if axis != "z":
@@ -1133,6 +1225,15 @@ def cadquery_solid_from_params(typ: str, params: Dict[str, Any]) -> Optional[Any
     if typ == "sphere":
         radius = float(params.get("radius", 0.5))
         return cq.Workplane("XY").sphere(radius).val()
+    if typ == "extrude":
+        profile_points = params.get("profile", [])
+        if not isinstance(profile_points, list):
+            return None
+        height = float(params.get("height", params.get("depth", 1.0)))
+        if len(profile_points) < 3:
+            return None
+        wp = cq.Workplane("XY").polyline([(float(p[0]), float(p[1])) for p in profile_points]).close()
+        return wp.extrude(float(height)).val()
     return None
 
 
@@ -1148,7 +1249,8 @@ def kernel_mesh_profile_op(kernel: str, typ: str, params: Dict[str, Any], center
         return cadquery_profile_mesh("extrude", center, profile_points, height, segments)
     if typ in {"revolve", "lathe"}:
         angle = float(params.get("angle", 360.0))
-        return cadquery_profile_mesh(typ, center, profile_points, 0.0, segments, angle)
+        axis = str(params.get("axis", "y"))
+        return cadquery_profile_mesh(typ, center, profile_points, 0.0, segments, angle, axis)
     if typ == "sweep":
         path_points = params.get("path", [])
         if not isinstance(path_points, list):
@@ -1312,6 +1414,30 @@ class SDFCylinderZ(SDFExpr):
         dz = abs(p[2]-self.c[2]) - self.h
         return min(max(dx, dz), 0.0) + length3((max(dx,0), max(dz,0), 0))
 
+class SDFCylinderX(SDFExpr):
+    def __init__(self, center: Vec3, radius: float, height: float):
+        self.c = center
+        self.r = radius
+        self.h = height / 2
+
+    def dist(self, p: Vec3) -> float:
+        # Cylinder aligned with X axis: circular cross-section in Y-Z plane
+        dy = math.sqrt((p[1]-self.c[1])**2 + (p[2]-self.c[2])**2) - self.r
+        dx = abs(p[0]-self.c[0]) - self.h
+        return min(max(dx, dy), 0.0) + length3((max(dx,0), max(dy,0), 0))
+
+class SDFCylinderY(SDFExpr):
+    def __init__(self, center: Vec3, radius: float, height: float):
+        self.c = center
+        self.r = radius
+        self.h = height / 2
+
+    def dist(self, p: Vec3) -> float:
+        # Cylinder aligned with Y axis: circular cross-section in X-Z plane
+        dx = math.sqrt((p[0]-self.c[0])**2 + (p[2]-self.c[2])**2) - self.r
+        dy = abs(p[1]-self.c[1]) - self.h
+        return min(max(dx, dy), 0.0) + length3((max(dx,0), max(dy,0), 0))
+
 
 class SDFUnion(SDFExpr):
     def __init__(self, a: SDFExpr, b: SDFExpr): self.a, self.b = a, b
@@ -1394,7 +1520,19 @@ def build_sdf(sdf_ops: List[Dict[str, Any]]) -> Optional[SDFExpr]:
             center = tuple(cmd.get("center", [0,0,0]))
             radius = float(cmd.get("radius", 1))
             height = float(cmd.get("height", 1))
-            registry[sid] = SDFCylinderZ(tuple(map(float, center)), radius, height)
+            axis_param = cmd.get("axis", "z")
+            # Parse axis parameter - might be a string or list
+            if isinstance(axis_param, list):
+                axis = str(axis_param[0]).lower() if axis_param else "z"
+            else:
+                axis = str(axis_param).lower()
+            # Select appropriate cylinder class based on axis
+            if axis == "x":
+                registry[sid] = SDFCylinderX(tuple(map(float, center)), radius, height)
+            elif axis == "y":
+                registry[sid] = SDFCylinderY(tuple(map(float, center)), radius, height)
+            else:
+                registry[sid] = SDFCylinderZ(tuple(map(float, center)), radius, height)
             current = registry[sid]
         elif c in {"union", "subtract", "intersect", "smooth_union"}:
             args = cmd.get("args", [])
@@ -1475,6 +1613,93 @@ def sdf_to_voxel_mesh(expr: SDFExpr, bounds: List[List[float]], resolution: floa
                 if expr.dist(p) <= 0:
                     occupied.add((i,j,k))
     return mesh_from_voxels(occupied, origin, resolution)
+
+
+def sdf_to_marching_cubes_mesh(expr: SDFExpr, bounds: List[List[float]], resolution: float, iso: float = 0.0) -> Mesh:
+    """Dependency-free marching cubes using tetrahedral decomposition (portable across adapters)."""
+    mn, mx = bounds
+    nx = max(2, int((mx[0] - mn[0]) / resolution))
+    ny = max(2, int((mx[1] - mn[1]) / resolution))
+    nz = max(2, int((mx[2] - mn[2]) / resolution))
+    ox, oy, oz = float(mn[0]), float(mn[1]), float(mn[2])
+
+    # Safeguard: limit total voxels to prevent freezing
+    max_voxels = 1000000  # 1 million voxels max
+    total_voxels = nx * ny * nz
+    if total_voxels > max_voxels:
+        print("sdf: resolution %s produces %s voxels, exceeding limit of %s. Using safer resolution." % (resolution, total_voxels, max_voxels))
+        # Recalculate resolution to stay within limit
+        target_voxels = max_voxels
+        scale_factor = (target_voxels / total_voxels) ** (1/3)
+        resolution = resolution / scale_factor
+        nx = max(2, int((mx[0] - mn[0]) / resolution))
+        ny = max(2, int((mx[1] - mn[1]) / resolution))
+        nz = max(2, int((mx[2] - mn[2]) / resolution))
+        print("sdf: adjusted resolution to %s (%s voxels)" % (resolution, nx * ny * nz))
+
+    def p(i: int, j: int, k: int) -> Vec3:
+        return (ox + i*resolution, oy + j*resolution, oz + k*resolution)
+
+    vals = {}
+    for i in range(nx + 1):
+        for j in range(ny + 1):
+            for k in range(nz + 1):
+                pt = p(i, j, k)
+                vals[(i, j, k)] = expr.dist(pt)
+
+    cube_tets = [
+        (0, 5, 1, 6),
+        (0, 1, 2, 6),
+        (0, 2, 3, 6),
+        (0, 3, 7, 6),
+        (0, 7, 4, 6),
+        (0, 4, 5, 6),
+    ]
+    cverts = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]
+
+    mesh = Mesh()
+
+    def lerp(a: Vec3, b: Vec3, va: float, vb: float) -> Vec3:
+        d = (vb - va)
+        if abs(d) < 1e-12:
+            t = 0.5
+        else:
+            t = (iso - va) / d
+        t = max(0.0, min(1.0, t))
+        return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
+
+    tet_edges = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
+                cps = [p(i + dx, j + dy, k + dz) for (dx, dy, dz) in cverts]
+                cvs = [vals[(i + dx, j + dy, k + dz)] for (dx, dy, dz) in cverts]
+                for a, b, c, d in cube_tets:
+                    tps = [cps[a], cps[b], cps[c], cps[d]]
+                    tvs = [cvs[a], cvs[b], cvs[c], cvs[d]]
+                    inside = [idx for idx, v in enumerate(tvs) if v <= iso]
+                    if len(inside) == 0 or len(inside) == 4:
+                        continue
+                    points = []
+                    for e0, e1 in tet_edges:
+                        v0, v1 = tvs[e0], tvs[e1]
+                        if (v0 <= iso and v1 > iso) or (v1 <= iso and v0 > iso):
+                            points.append(lerp(tps[e0], tps[e1], v0, v1))
+                    if len(points) == 3:
+                        base = len(mesh.vertices) + 1
+                        mesh.vertices.extend(points)
+                        mesh.faces.append([base, base + 1, base + 2])
+                    elif len(points) == 4:
+                        base = len(mesh.vertices) + 1
+                        mesh.vertices.extend(points)
+                        # Triangulate correctly using a true diagonal (0 to 3)
+                        mesh.faces.append([base, base + 1, base + 3])
+                        mesh.faces.append([base, base + 3, base + 2])
+
+    if mesh.vertices:
+        mesh = weld_vertices(mesh, epsilon=resolution * 0.1)
+    return mesh
 
 
 # ----------------------------
@@ -2589,6 +2814,13 @@ def kernel_op_cadquery_solid(obj: LiveObject, env: Dict[str, Any]) -> Optional[T
     if solid is None:
         return None
     segments = int(params.get("segments", 24))
+    # Apply transform to the solid if present
+    transform = obj.meta.get("transform")
+    if isinstance(transform, dict):
+        position = transform.get("position", [0, 0, 0])
+        if isinstance(position, (list, tuple)) and len(position) >= 3:
+            # Move the solid to the transformed position
+            solid = solid.translate(float(position[0]), float(position[1]), float(position[2]))
     return (solid, center, segments)
 
 
@@ -2688,7 +2920,7 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
                     else:
                         record_kernel_event(obj, "op:intersect")
                         out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
-                except Exception:
+                except Exception as e:
                     pass
         elif name == "chamfer":
             amount = float(resolve_op_value(op, "amount", op.get("distance", 0.02)))
@@ -2993,15 +3225,12 @@ def generate_sdf(obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             method = str(cmd.get("method", method)).lower()
         if str(cmd.get("cmd", "")).lower() == "mesh_from_sdf" and cmd.get("resolution") is not None:
             resolution = float(cmd["resolution"])
-    base = sdf_to_voxel_mesh(expr, bounds, resolution)
     if method in {"marching_cubes", "marching", "mc"}:
-        # Lightweight marching-cubes approximation for stdlib executor:
-        # densify + smooth voxel shell to remove blockiness.
-        base = weld_vertices(base, epsilon=resolution * 0.2)
-        base = op_subdivide(base, 2)
-        base = weld_vertices(base, epsilon=resolution * 0.08)
-        base = op_smooth(base, iterations=4, strength=0.5)
-        base = weld_vertices(base, epsilon=resolution * 0.06)
+        base = sdf_to_marching_cubes_mesh(expr, bounds, resolution)
+    elif method == "voxel":
+        base = sdf_to_voxel_mesh(expr, bounds, resolution)
+    else:
+        base = sdf_to_voxel_mesh(expr, bounds, resolution)
     return base
 
 
