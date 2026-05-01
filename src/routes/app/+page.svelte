@@ -242,8 +242,8 @@
 		return `#@kernel_default: cadquery\n${raw}\n`;
 	}
 
-	async function sendPrompt(payload: { text: string; model: string; imageDataUrl?: string }) {
-		const { text, model, imageDataUrl } = payload;
+	async function sendPrompt(payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) {
+		const { text, model, useProcedural = true, imageDataUrl } = payload;
 		if ((!text.trim() && !imageDataUrl) || busy) return;
 		statusLine = null;
 		busy = true;
@@ -277,6 +277,7 @@
 					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
 					history,
 					model,
+					useProcedural,
 					kernelDefault
 				})
 			});

@@ -1,6 +1,6 @@
 import type { ChatCompletionMessage, ChatContentPart, ChatMessageContent } from './chat';
 import { requestChatCompletion } from './chat';
-import { LIVE_OBJ_SYSTEM_PROMPT } from './liveObjSystemPrompt';
+import { LIVE_OBJ_SYSTEM_PROMPT, LLM_ONLY_SYSTEM_PROMPT } from './liveObjSystemPrompt';
 
 const DEFAULT_LIVE_OBJ_MODEL = 'gpt-5.5';
 
@@ -25,10 +25,12 @@ export async function requestLiveObjFromLlm(
 	userMessage: string,
 	history: ChatCompletionMessage[],
 	model: string = DEFAULT_LIVE_OBJ_MODEL,
-	options?: { imageDataUrl?: string }
+	options?: { imageDataUrl?: string; useProcedural?: boolean }
 ): Promise<string> {
+	const useProcedural = options?.useProcedural !== false;
+	const systemPrompt = useProcedural ? LIVE_OBJ_SYSTEM_PROMPT : LLM_ONLY_SYSTEM_PROMPT;
 	const messages: ChatCompletionMessage[] = [
-		{ role: 'system', content: LIVE_OBJ_SYSTEM_PROMPT },
+		{ role: 'system', content: systemPrompt },
 		...history,
 		{ role: 'user', content: userMessageContent(userMessage, options?.imageDataUrl) }
 	];

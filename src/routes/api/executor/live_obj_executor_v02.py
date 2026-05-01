@@ -1083,23 +1083,38 @@ def cadquery_profile_mesh(
                 return Mesh(vertices, faces)
 
         # Fallback to CadQuery for complex profiles
-        # If y has the smallest range or z is constant (2D profile), use X-Z plane (vertical wall)
-        if y_range <= x_range and y_range <= z_range:
+        # For XZ plane profiles (y constant), use XZ workplane and negate height to get positive Y extrusion
+        if y_range == 0:
             profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[2]) if len(p) > 2 else 0.0) for p in profile_points]
+            # Normalize profile to start from 0,0 for CadQuery
+            min_x_2d = min(p[0] for p in profile_2d)
+            min_z_2d = min(p[1] for p in profile_2d)
+            profile_2d = [(p[0] - min_x_2d, p[1] - min_z_2d) for p in profile_2d]
             wp = cq.Workplane("XZ")
-        else:
+            extrude_height = -float(height)  # Negate to get positive Y extrusion
+            translate_offset = (min(x_vals), min(y_vals), min(z_vals))
+        elif z_range == 0:
             profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[1]) if len(p) > 1 else 0.0) for p in profile_points]
             wp = cq.Workplane("XY")
+            extrude_height = float(height)
+            translate_offset = None
+        else:
+            # 3D profile, default to XY plane
+            profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[1]) if len(p) > 1 else 0.0) for p in profile_points]
+            wp = cq.Workplane("XY")
+            extrude_height = float(height)
+            translate_offset = None
 
         try:
-            # Use moveTo/lineTo instead of polyline for better robustness
-            wp.moveTo(profile_2d[0][0], profile_2d[0][1])
-            for x, y in profile_2d[1:]:
-                wp.lineTo(x, y)
+            # Use polyline to draw the profile
+            wp.polyline(profile_2d)
             wp.close()
-            solid = wp.extrude(float(height))
+            solid = wp.extrude(extrude_height)
             if solid is None:
                 return None
+            # Translate to correct position for XZ plane profiles
+            if translate_offset is not None:
+                solid = solid.translate(translate_offset)
             # Convert solid to mesh - need to call .val() to get the actual solid
             return cadquery_tessellated_mesh(solid.val(), center, segments)
         except Exception as e:
@@ -1279,21 +1294,60 @@ def cadquery_solid_from_params(typ: str, params: Dict[str, Any]) -> Optional[Any
             solid = solid.translate((min(x_vals), min(y_vals), min(z_vals)))
             return solid.val()
 
-        # Otherwise use standard extrude
-        profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[1]) if len(p) > 1 else 0.0) for p in profile_points]
-        wp = cq.Workplane("XY")
-
-        try:
-            wp.moveTo(profile_2d[0][0], profile_2d[0][1])
-            for x, y in profile_2d[1:]:
-                wp.lineTo(x, y)
-            wp.close()
-            solid = wp.extrude(float(height))
-            if solid is None:
+        # For any XZ plane profile (y constant), use XZ workplane and negate height to get positive Y extrusion
+        if y_range == 0:
+            profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[2]) if len(p) > 2 else 0.0) for p in profile_points]
+            # Normalize profile to start from 0,0 for CadQuery
+            min_x_2d = min(p[0] for p in profile_2d)
+            min_z_2d = min(p[1] for p in profile_2d)
+            profile_2d = [(p[0] - min_x_2d, p[1] - min_z_2d) for p in profile_2d]
+            wp = cq.Workplane("XZ")
+            try:
+                wp.moveTo(profile_2d[0][0], profile_2d[0][1])
+                for x, y in profile_2d[1:]:
+                    wp.lineTo(x, y)
+                wp.close()
+                # Negate height to get positive Y extrusion (XZ workplane extrudes in negative Y by default)
+                solid = wp.extrude(-float(height))
+                if solid is None:
+                    return None
+                # Translate to correct position
+                solid = solid.translate((min(x_vals), min(y_vals), min(z_vals)))
+                return solid.val()
+            except Exception as e:
                 return None
-            return solid.val()
-        except Exception as e:
-            return None
+
+        # Otherwise use standard extrude for XY plane or 3D profiles
+        elif z_range == 0:
+            # Profile is in XY plane, extract (x, y)
+            profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[1]) if len(p) > 1 else 0.0) for p in profile_points]
+            wp = cq.Workplane("XY")
+            try:
+                wp.moveTo(profile_2d[0][0], profile_2d[0][1])
+                for x, y in profile_2d[1:]:
+                    wp.lineTo(x, y)
+                wp.close()
+                solid = wp.extrude(float(height))
+                if solid is None:
+                    return None
+                return solid.val()
+            except Exception as e:
+                return None
+        else:
+            # Profile is in 3D, default to XY plane
+            profile_2d = [(float(p[0]) if len(p) > 0 else 0.0, float(p[1]) if len(p) > 1 else 0.0) for p in profile_points]
+            wp = cq.Workplane("XY")
+            try:
+                wp.moveTo(profile_2d[0][0], profile_2d[0][1])
+                for x, y in profile_2d[1:]:
+                    wp.lineTo(x, y)
+                wp.close()
+                solid = wp.extrude(float(height))
+                if solid is None:
+                    return None
+                return solid.val()
+            except Exception as e:
+                return None
     return None
 
 
@@ -2017,6 +2071,7 @@ def differential_growth_mesh(params: Dict[str, Any]) -> Mesh:
 def boids_mesh(params: Dict[str, Any]) -> Mesh:
     agents = int(params.get("agents", 30))
     steps = int(params.get("steps", 120))
+    step_size = float(params.get("step_size", 0.05))
     bounds = params.get("bounds", [6,4,4])
     bx, by, bz = map(float, bounds)
     seed = int(params.get("seed", 1))
@@ -2039,32 +2094,292 @@ def boids_mesh(params: Dict[str, Any]) -> Mesh:
                     continue
                 dx,dy,dz = q[0]-p[0], q[1]-p[1], q[2]-p[2]
                 d = math.sqrt(dx*dx+dy*dy+dz*dz)
-                if d < 1.2:
+                # Perception radius for cohesion and alignment
+                if d < 1.5:
                     center[0]+=q[0]; center[1]+=q[1]; center[2]+=q[2]
                     align[0]+=vel[j][0]; align[1]+=vel[j][1]; align[2]+=vel[j][2]
                     count += 1
-                if d < 0.35 and d > 1e-6:
+                # Separation radius (smaller)
+                if d < 0.4 and d > 1e-6:
                     sep[0]-=dx/d; sep[1]-=dy/d; sep[2]-=dz/d
             if count:
                 center = [c/count for c in center]
                 align = [a/count for a in align]
-                vx += (center[0]-p[0])*0.0008 + align[0]*0.03 + sep[0]*0.012
-                vy += (center[1]-p[1])*0.0008 + align[1]*0.03 + sep[1]*0.012
-                vz += (center[2]-p[2])*0.0008 + align[2]*0.03 + sep[2]*0.012
-            # attract upward/center
-            vx += -p[0]*0.0005
-            vy += -p[1]*0.0005
-            vz += (bz*0.5-p[2])*0.0004
+                # Cohesion: steer towards average position of neighbors
+                vx += (center[0]-p[0])*0.01
+                vy += (center[1]-p[1])*0.01
+                vz += (center[2]-p[2])*0.01
+                # Alignment: steer towards average heading of neighbors
+                vx += align[0]*0.02
+                vy += align[1]*0.02
+                vz += align[2]*0.02
+            # Separation: avoid crowding
+            vx += sep[0]*0.05
+            vy += sep[1]*0.05
+            vz += sep[2]*0.05
+            # Boundary repulsion (keep within bounds)
+            margin = 0.5
+            if p[0] < -bx/2 + margin: vx += 0.02
+            if p[0] > bx/2 - margin: vx -= 0.02
+            if p[1] < -by/2 + margin: vy += 0.02
+            if p[1] > by/2 - margin: vy -= 0.02
+            if p[2] < margin: vz += 0.02
+            if p[2] > bz - margin: vz -= 0.02
+            # Speed limit
             speed = math.sqrt(vx*vx+vy*vy+vz*vz) + 1e-6
             max_speed = 0.08
+            min_speed = 0.02
             if speed > max_speed:
                 vx,vy,vz = vx/speed*max_speed, vy/speed*max_speed, vz/speed*max_speed
-            np = (max(-bx/2,min(bx/2,p[0]+vx)), max(-by/2,min(by/2,p[1]+vy)), max(0,min(bz,p[2]+vz)))
+            elif speed < min_speed:
+                vx,vy,vz = vx/speed*min_speed, vy/speed*min_speed, vz/speed*min_speed
+            np = (max(-bx/2,min(bx/2,p[0]+vx*step_size)), max(-by/2,min(by/2,p[1]+vy*step_size)), max(0,min(bz,p[2]+vz*step_size)))
             new_pos.append(np); new_vel.append((vx,vy,vz))
         pos, vel = new_pos, new_vel
         for i,p in enumerate(pos):
             if _ % 3 == 0:
                 paths[i].append(p)
+
+    mesh = Mesh()
+    for path in paths:
+        for a,b in zip(path, path[1:]):
+            mesh.extend(tube_between(a,b,radius,6))
+    return mesh
+
+
+def noise3d(x: float, y: float, z: float, seed: int) -> float:
+    """3D Simplex noise implementation."""
+    # Permutation table with seed
+    p = list(range(256))
+    rng = random.Random(seed)
+    rng.shuffle(p)
+    p = p + p  # Duplicate for overflow
+    
+    # Skewing and unskewing factors for 3D
+    F3 = 1.0 / 3.0
+    G3 = 1.0 / 6.0
+    
+    # Skew the input space to determine which simplex cell we're in
+    s = (x + y + z) * F3
+    i = int(x + s)
+    j = int(y + s)
+    k = int(z + s)
+    
+    t = (i + j + k) * G3
+    X0 = i - t
+    Y0 = j - t
+    Z0 = k - t
+    x0 = x - X0
+    y0 = y - Y0
+    z0 = z - Z0
+    
+    # Determine which simplex we're in
+    i1, j1, k1, i2, j2, k2 = 0, 0, 0, 0, 0, 0
+    if x0 >= y0:
+        if y0 >= z0:
+            i1, j1, k1 = 1, 0, 0
+            i2, j2, k2 = 1, 1, 0
+        elif x0 >= z0:
+            i1, j1, k1 = 1, 0, 0
+            i2, j2, k2 = 1, 0, 1
+        else:
+            i1, j1, k1 = 0, 0, 1
+            i2, j2, k2 = 1, 0, 1
+    else:
+        if y0 < z0:
+            i1, j1, k1 = 0, 0, 1
+            i2, j2, k2 = 0, 1, 1
+        elif x0 < z0:
+            i1, j1, k1 = 0, 1, 0
+            i2, j2, k2 = 0, 1, 1
+        else:
+            i1, j1, k1 = 0, 1, 0
+            i2, j2, k2 = 1, 1, 0
+    
+    # Offsets for corners
+    x1 = x0 - i1 + G3
+    y1 = y0 - j1 + G3
+    z1 = z0 - k1 + G3
+    x2 = x0 - i2 + 2.0 * G3
+    y2 = y0 - j2 + 2.0 * G3
+    z2 = z0 - k2 + 2.0 * G3
+    x3 = x0 - 1.0 + 3.0 * G3
+    y3 = y0 - 1.0 + 3.0 * G3
+    z3 = z0 - 1.0 + 3.0 * G3
+    
+    # Calculate contribution from each corner
+    def grad(hash_val, x, y, z):
+        # Convert hash to one of 12 gradients
+        h = hash_val & 15
+        u = x if h < 8 else y
+        v = y if h < 4 else (x if h == 12 or h == 14 else z)
+        return (u if (h & 1) == 0 else -u) + (v if (h & 2) == 0 else -v)
+    
+    n0, n1, n2, n3 = 0.0, 0.0, 0.0, 0.0
+    
+    # Corner 0
+    t0 = 0.6 - x0*x0 - y0*y0 - z0*z0
+    if t0 >= 0:
+        t0 *= t0
+        n0 = t0 * t0 * grad(p[(i + p[(j + p[k & 255]) & 255]) & 255], x0, y0, z0)
+    
+    # Corner 1
+    t1 = 0.6 - x1*x1 - y1*y1 - z1*z1
+    if t1 >= 0:
+        t1 *= t1
+        n1 = t1 * t1 * grad(p[(i + i1 + p[(j + j1 + p[(k + k1) & 255]) & 255]) & 255], x1, y1, z1)
+    
+    # Corner 2
+    t2 = 0.6 - x2*x2 - y2*y2 - z2*z2
+    if t2 >= 0:
+        t2 *= t2
+        n2 = t2 * t2 * grad(p[(i + i2 + p[(j + j2 + p[(k + k2) & 255]) & 255]) & 255], x2, y2, z2)
+    
+    # Corner 3
+    t3 = 0.6 - x3*x3 - y3*y3 - z3*z3
+    if t3 >= 0:
+        t3 *= t3
+        n3 = t3 * t3 * grad(p[(i + 1 + p[(j + 1 + p[(k + 1) & 255]) & 255]) & 255], x3, y3, z3)
+    
+    # Scale and return
+    return 32.0 * (n0 + n1 + n2 + n3)
+
+
+def flow_field_mesh(params: Dict[str, Any]) -> Mesh:
+    agents = int(params.get("agents", 50))
+    steps = int(params.get("steps", 200))
+    step_size = float(params.get("step_size", 0.1))
+    bounds = params.get("bounds", [10,10,10])
+    bx, by, bz = map(float, bounds)
+    mode = str(params.get("mode", "curl-noise")).lower()
+    frequency = float(params.get("frequency", 1.0))
+    octaves = int(params.get("octaves", 3))
+    strength = float(params.get("strength", 1.0))
+    scale = float(params.get("scale", 0.1))
+    time_scale = float(params.get("time_scale", 0.01))
+    damping = float(params.get("damping", 0.0))
+    seed = int(params.get("seed", 1))
+    radius = float(params.get("trace_radius", 0.025))
+    rng = random.Random(seed)
+
+    # Initialize particle positions randomly within bounds
+    pos = [(rng.uniform(-bx/2,bx/2), rng.uniform(-by/2,by/2), rng.uniform(-bz/2,bz/2)) for _ in range(agents)]
+    # Initialize velocities randomly
+    vel = [(rng.uniform(-0.01,0.01), rng.uniform(-0.01,0.01), rng.uniform(-0.01,0.01)) for _ in range(agents)]
+    paths = [[p] for p in pos]
+
+    # Define field function based on mode
+    def field_fn(x: float, y: float, z: float, time: float) -> Tuple[float, float, float]:
+        if mode == "curl-noise":
+            # 3D CURL NOISE matching JS implementation
+            s = frequency
+            eps = 0.01
+            t = int(time * 100)
+            
+            # Calculate curl using JS formula
+            # vx = dBzdY - dBydZ
+            dBzdY = (noise3d(s * x, s * (y + eps), s * z, t) - noise3d(s * x, s * (y - eps), s * z, t)) / (2 * eps)
+            dBydZ = (noise3d(s * x, s * y, s * (z + eps), t) - noise3d(s * x, s * y, s * (z - eps), t)) / (2 * eps)
+            vx = dBzdY - dBydZ
+            
+            # vy = dBxdZ - dBzdX
+            dBxdZ = (noise3d(s * x + 100, s * y, s * (z + eps), t) - noise3d(s * x + 100, s * y, s * (z - eps), t)) / (2 * eps)
+            dBzdX = (noise3d(s * (x + eps), s * y, s * z, t) - noise3d(s * (x - eps), s * y, s * z, t)) / (2 * eps)
+            vy = dBxdZ - dBzdX
+            
+            # vz = dBydX - dBxdY
+            dBydX = (noise3d(s * (x + eps) + 100, s * y, s * z, t) - noise3d(s * (x - eps) + 100, s * y, s * z, t)) / (2 * eps)
+            dBxdY = (noise3d(s * x + 100, s * (y + eps), s * z, t) - noise3d(s * x + 100, s * (y - eps), s * z, t)) / (2 * eps)
+            vz = dBydX - dBxdY
+            
+            # Normalize direction
+            mag = math.sqrt(vx*vx + vy*vy + vz*vz) + 1e-6
+            return vx/mag, vy/mag, vz/mag
+        
+        elif mode == "turbulence":
+            # Multi-octave noise
+            vx, vy, vz = 0.0, 0.0, 0.0
+            amp = 1.0
+            freq = frequency
+            t = int(time * 100)
+            
+            for _ in range(octaves):
+                vx += noise3d(x * freq, y * freq, z * freq, t) * amp
+                vy += noise3d(x * freq + 1000, y * freq + 1000, z * freq, t) * amp
+                vz += noise3d(x * freq + 2000, y * freq, z * freq + 2000, t) * amp
+                freq *= 2
+                amp *= 0.5
+            
+            return vx, vy, vz
+        
+        elif mode == "attractor":
+            # Single attractor at center
+            dist = math.sqrt(x*x + y*y + z*z) + 1e-6
+            vx, vy, vz = -x/dist, -y/dist, -z/dist
+            return vx, vy, vz
+        
+        elif mode == "wave":
+            # Expanding/contracting waves
+            dist = math.sqrt(x*x + y*y + z*z)
+            wave = math.sin(dist * frequency - time)
+            if dist > 1e-6:
+                return x/dist * wave, y/dist * wave, z/dist * wave
+            return 0.0, 0.0, 0.0
+        
+        elif mode == "laminar":
+            # Simple linear flow along X
+            return 1.0, 0.0, 0.0
+        
+        else:
+            return 0.0, 0.0, 0.0
+
+    for step in range(steps):
+        time = step * time_scale
+        new_pos, new_vel = [], []
+        for i, p in enumerate(pos):
+            # Get field direction at current position
+            nx, ny, nz = field_fn(p[0], p[1], p[2], time)
+            
+            # Apply strength and scale
+            nx, ny, nz = nx * strength * scale, ny * strength * scale, nz * strength * scale
+            
+            # Apply damping
+            if damping > 0:
+                dist = math.sqrt(p[0]*p[0] + p[1]*p[1] + p[2]*p[2])
+                damp = math.exp(-damping * dist)
+                nx, ny, nz = nx * damp, ny * damp, nz * damp
+            
+            # Lerp velocity toward field direction (matching JS approach)
+            vx, vy, vz = vel[i]
+            vx = vx * 0.7 + nx * 0.3
+            vy = vy * 0.7 + ny * 0.3
+            vz = vz * 0.7 + nz * 0.3
+            
+            # Normalize velocity
+            vmag = math.sqrt(vx*vx + vy*vy + vz*vz) + 1e-6
+            vx, vy, vz = vx/vmag, vy/vmag, vz/vmag
+            
+            # Move particle in direction of velocity
+            np = (
+                p[0] + vx * step_size,
+                p[1] + vy * step_size,
+                p[2] + vz * step_size
+            )
+            
+            # Keep within bounds (wrap around)
+            np = (
+                np[0] if np[0] > -bx/2 and np[0] < bx/2 else (-bx/2 if np[0] <= -bx/2 else bx/2),
+                np[1] if np[1] > -by/2 and np[1] < by/2 else (-by/2 if np[1] <= -by/2 else by/2),
+                np[2] if np[2] > -bz/2 and np[2] < bz/2 else (-bz/2 if np[2] <= -bz/2 else bz/2)
+            )
+            
+            new_pos.append(np)
+            new_vel.append((vx, vy, vz))
+            
+            # Record path every step for smoother curves
+            paths[i].append(np)
+        
+        pos, vel = new_pos, new_vel
 
     mesh = Mesh()
     for path in paths:
@@ -2991,6 +3306,29 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
                         out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
                 except Exception as e:
                     pass
+        elif name == "boolean":
+            # Support boolean operation with mode parameter: #@op: boolean mode=subtract target=arch_cutout
+            mode = str(op.get("mode", "")).lower()
+            if mode in {"union", "subtract", "intersect"}:
+                target_name = str(op.get("with", op.get("target", "")))
+                target_obj = obn.get(target_name) if target_name else None
+                cur = kernel_op_cadquery_solid(obj, env)
+                tgt = kernel_op_cadquery_solid(target_obj, env) if target_obj is not None else None
+                if cur is not None and tgt is not None:
+                    solid_a, center_a, seg_a = cur
+                    solid_b, _, _ = tgt
+                    try:
+                        if mode == "union":
+                            record_kernel_event(obj, "op:boolean:union")
+                            out = cadquery_tessellated_mesh(solid_a.fuse(solid_b), center_a, seg_a)
+                        elif mode == "subtract":
+                            record_kernel_event(obj, "op:boolean:subtract")
+                            out = cadquery_tessellated_mesh(solid_a.cut(solid_b), center_a, seg_a)
+                        else:
+                            record_kernel_event(obj, "op:boolean:intersect")
+                            out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
+                    except Exception as e:
+                        pass
         elif name == "chamfer":
             amount = float(resolve_op_value(op, "amount", op.get("distance", 0.02)))
             cur = kernel_op_cadquery_solid(obj, env)
@@ -3365,6 +3703,8 @@ def generate_simulation(obj: LiveObject) -> Mesh:
         return differential_growth_mesh(params)
     if sim == "boids":
         return boids_mesh(params)
+    if sim == "flow_field":
+        return flow_field_mesh(params)
 
     return obj.mesh.copy()
 
@@ -3419,21 +3759,31 @@ def execute_scene(scene: Scene) -> Scene:
 def serialize_scene(scene: Scene) -> str:
     lines: List[str] = []
     lines.extend(scene.header_lines)
+    # Remove trailing empty lines from header
+    while lines and not lines[-1].strip():
+        lines.pop()
     global_index = 1
+    first_object = True
 
     for obj in scene.objects:
         # Skip helper objects (used only as boolean operands)
         if obj.meta.get("helper") or obj.meta.get("hidden"):
             continue
 
-        lines.append("")
+        # Only add empty line before object if it's not the first object
+        if not first_object:
+            lines.append("")
+        first_object = False
+
         lines.append(f"{obj.declaration} {obj.name}")
-        lines.extend(obj.meta_lines)
+        # Filter out old runtime debug messages
+        lines.extend([l for l in obj.meta_lines if not l.strip().startswith("#@runtime:")])
         events = obj.meta.get("_kernel_events", [])
         if isinstance(events, list) and events:
             lines.append(f"#@runtime: kernel_used=true, events={events}")
+        # Filter out old runtime debug messages from raw lines as well
         for l in obj.raw_nonlive_lines:
-            if l.strip():
+            if l.strip() and not l.strip().startswith("#@runtime:"):
                 lines.append(l)
         for x,y,z in obj.mesh.vertices:
             lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")

@@ -2421,18 +2421,347 @@ def build_simulation_geometry(obj, p, warnings):
     if sim == "boids":
         agents = max(1, int(p.get("agents", 24)))
         steps = max(2, int(p.get("steps", 60)))
+        step_size = float(p.get("step_size", 0.05))
         bx, by, bz = _vec3(p, "bounds", (10.0, 10.0, 10.0))
         curves = []
+        
+        # Initialize positions and velocities
+        pos = []
+        vel = []
         for _ in range(agents):
+            x = rnd.uniform(-bx / 2, bx / 2)
+            y = rnd.uniform(-by / 2, by / 2)
+            z = rnd.uniform(0, bz)
+            pos.append([x, y, z])
+            vel.append([rnd.uniform(-0.04, 0.04), rnd.uniform(-0.04, 0.04), rnd.uniform(-0.02, 0.04)])
+        
+        # Boids simulation
+        for _ in range(steps):
+            new_pos, new_vel = [], []
+            for i, p in enumerate(pos):
+                vx, vy, vz = vel[i]
+                center = [0.0, 0.0, 0.0]
+                count = 0
+                sep = [0.0, 0.0, 0.0]
+                align = [0.0, 0.0, 0.0]
+                
+                for j, q in enumerate(pos):
+                    if i == j:
+                        continue
+                    dx, dy, dz = q[0] - p[0], q[1] - p[1], q[2] - p[2]
+                    d = math.sqrt(dx * dx + dy * dy + dz * dz)
+                    
+                    # Perception radius for cohesion and alignment
+                    if d < 1.5:
+                        center[0] += q[0]
+                        center[1] += q[1]
+                        center[2] += q[2]
+                        align[0] += vel[j][0]
+                        align[1] += vel[j][1]
+                        align[2] += vel[j][2]
+                        count += 1
+                    # Separation radius (smaller)
+                    if d < 0.4 and d > 1e-6:
+                        sep[0] -= dx / d
+                        sep[1] -= dy / d
+                        sep[2] -= dz / d
+                
+                if count:
+                    center = [c / count for c in center]
+                    align = [a / count for a in align]
+                    # Cohesion: steer towards average position of neighbors
+                    vx += (center[0] - p[0]) * 0.01
+                    vy += (center[1] - p[1]) * 0.01
+                    vz += (center[2] - p[2]) * 0.01
+                    # Alignment: steer towards average heading of neighbors
+                    vx += align[0] * 0.02
+                    vy += align[1] * 0.02
+                    vz += align[2] * 0.02
+                
+                # Separation: avoid crowding
+                vx += sep[0] * 0.05
+                vy += sep[1] * 0.05
+                vz += sep[2] * 0.05
+                
+                # Boundary repulsion (keep within bounds)
+                margin = 0.5
+                if p[0] < -bx / 2 + margin:
+                    vx += 0.02
+                if p[0] > bx / 2 - margin:
+                    vx -= 0.02
+                if p[1] < -by / 2 + margin:
+                    vy += 0.02
+                if p[1] > by / 2 - margin:
+                    vy -= 0.02
+                if p[2] < margin:
+                    vz += 0.02
+                if p[2] > bz - margin:
+                    vz -= 0.02
+                
+                # Speed limit
+                speed = math.sqrt(vx * vx + vy * vy + vz * vz) + 1e-6
+                max_speed = 0.08
+                min_speed = 0.02
+                if speed > max_speed:
+                    vx, vy, vz = vx / speed * max_speed, vy / speed * max_speed, vz / speed * max_speed
+                elif speed < min_speed:
+                    vx, vy, vz = vx / speed * min_speed, vy / speed * min_speed, vz / speed * min_speed
+                
+                np = [
+                    max(-bx / 2, min(bx / 2, p[0] + vx * step_size)),
+                    max(-by / 2, min(by / 2, p[1] + vy * step_size)),
+                    max(0, min(bz, p[2] + vz * step_size))
+                ]
+                new_pos.append(np)
+                new_vel.append([vx, vy, vz])
+            
+            pos, vel = new_pos, new_vel
+        
+        # Create curves from paths
+        for i in range(agents):
+            pts = [rg.Point3d(pos[0][0], pos[0][1], pos[0][2])]
+            for step in range(steps):
+                if step % 3 == 0 and step < len(pos):
+                    pts.append(rg.Point3d(pos[step][0], pos[step][1], pos[step][2]))
+            if len(pts) > 1:
+                curves.append(rg.Polyline(pts).ToNurbsCurve())
+        
+        return curves
+
+    if sim == "flow_field":
+        agents = max(1, int(p.get("agents", 50)))
+        steps = max(2, int(p.get("steps", 200)))
+        step_size = float(p.get("step_size", 0.1))
+        bx, by, bz = _vec3(p, "bounds", (10.0, 10.0, 10.0))
+        mode = str(p.get("mode", "curl-noise")).lower()
+        frequency = float(p.get("frequency", 1.0))
+        octaves = int(p.get("octaves", 3))
+        strength = float(p.get("strength", 1.0))
+        scale = float(p.get("scale", 0.1))
+        time_scale = float(p.get("time_scale", 0.01))
+        damping = float(p.get("damping", 0.0))
+        curves = []
+        
+        # Initialize particle positions randomly within bounds
+        pos = []
+        vel = []
+        for _ in range(agents):
+            x = rnd.uniform(-bx / 2, bx / 2)
+            y = rnd.uniform(-by / 2, by / 2)
+            z = rnd.uniform(-bz / 2, bz / 2)
+            pos.append([x, y, z])
+            vel.append([rnd.uniform(-0.01, 0.01), rnd.uniform(-0.01, 0.01), rnd.uniform(-0.01, 0.01)])
+        
+        # 3D Simplex noise implementation
+        def noise3d(x, y, z, seed_offset):
+            # Permutation table with seed
+            p = list(range(256))
+            rng = random.Random(seed + seed_offset)
+            rng.shuffle(p)
+            p = p + p  # Duplicate for overflow
+            
+            # Skewing and unskewing factors for 3D
+            F3 = 1.0 / 3.0
+            G3 = 1.0 / 6.0
+            
+            # Skew the input space to determine which simplex cell we're in
+            s = (x + y + z) * F3
+            i = int(x + s)
+            j = int(y + s)
+            k = int(z + s)
+            
+            t = (i + j + k) * G3
+            X0 = i - t
+            Y0 = j - t
+            Z0 = k - t
+            x0 = x - X0
+            y0 = y - Y0
+            z0 = z - Z0
+            
+            # Determine which simplex we're in
+            i1, j1, k1, i2, j2, k2 = 0, 0, 0, 0, 0, 0
+            if x0 >= y0:
+                if y0 >= z0:
+                    i1, j1, k1 = 1, 0, 0
+                    i2, j2, k2 = 1, 1, 0
+                elif x0 >= z0:
+                    i1, j1, k1 = 1, 0, 0
+                    i2, j2, k2 = 1, 0, 1
+                else:
+                    i1, j1, k1 = 0, 0, 1
+                    i2, j2, k2 = 1, 0, 1
+            else:
+                if y0 < z0:
+                    i1, j1, k1 = 0, 0, 1
+                    i2, j2, k2 = 0, 1, 1
+                elif x0 < z0:
+                    i1, j1, k1 = 0, 1, 0
+                    i2, j2, k2 = 0, 1, 1
+                else:
+                    i1, j1, k1 = 0, 1, 0
+                    i2, j2, k2 = 1, 1, 0
+            
+            # Offsets for corners
+            x1 = x0 - i1 + G3
+            y1 = y0 - j1 + G3
+            z1 = z0 - k1 + G3
+            x2 = x0 - i2 + 2.0 * G3
+            y2 = y0 - j2 + 2.0 * G3
+            z2 = z0 - k2 + 2.0 * G3
+            x3 = x0 - 1.0 + 3.0 * G3
+            y3 = y0 - 1.0 + 3.0 * G3
+            z3 = z0 - 1.0 + 3.0 * G3
+            
+            # Calculate contribution from each corner
+            def grad(hash_val, x, y, z):
+                # Convert hash to one of 12 gradients
+                h = hash_val & 15
+                u = x if h < 8 else y
+                v = y if h < 4 else (x if h == 12 or h == 14 else z)
+                return (u if (h & 1) == 0 else -u) + (v if (h & 2) == 0 else -v)
+            
+            n0, n1, n2, n3 = 0.0, 0.0, 0.0, 0.0
+            
+            # Corner 0
+            t0 = 0.6 - x0*x0 - y0*y0 - z0*z0
+            if t0 >= 0:
+                t0 *= t0
+                n0 = t0 * t0 * grad(p[(i + p[(j + p[k & 255]) & 255]) & 255], x0, y0, z0)
+            
+            # Corner 1
+            t1 = 0.6 - x1*x1 - y1*y1 - z1*z1
+            if t1 >= 0:
+                t1 *= t1
+                n1 = t1 * t1 * grad(p[(i + i1 + p[(j + j1 + p[(k + k1) & 255]) & 255]) & 255], x1, y1, z1)
+            
+            # Corner 2
+            t2 = 0.6 - x2*x2 - y2*y2 - z2*z2
+            if t2 >= 0:
+                t2 *= t2
+                n2 = t2 * t2 * grad(p[(i + i2 + p[(j + j2 + p[(k + k2) & 255]) & 255]) & 255], x2, y2, z2)
+            
+            # Corner 3
+            t3 = 0.6 - x3*x3 - y3*y3 - z3*z3
+            if t3 >= 0:
+                t3 *= t3
+                n3 = t3 * t3 * grad(p[(i + 1 + p[(j + 1 + p[(k + 1) & 255]) & 255]) & 255], x3, y3, z3)
+            
+            # Scale and return
+            return 32.0 * (n0 + n1 + n2 + n3)
+        
+        # Define field function based on mode
+        def field_fn(x, y, z, time):
+            if mode == "curl-noise":
+                # 3D CURL NOISE matching JS implementation
+                s = frequency
+                eps = 0.01
+                t = int(time * 100)
+                
+                # Calculate curl using JS formula
+                # vx = dBzdY - dBydZ
+                dBzdY = (noise3d(s * x, s * (y + eps), s * z, t) - noise3d(s * x, s * (y - eps), s * z, t)) / (2 * eps)
+                dBydZ = (noise3d(s * x, s * y, s * (z + eps), t) - noise3d(s * x, s * y, s * (z - eps), t)) / (2 * eps)
+                vx = dBzdY - dBydZ
+                
+                # vy = dBxdZ - dBzdX
+                dBxdZ = (noise3d(s * x + 100, s * y, s * (z + eps), t) - noise3d(s * x + 100, s * y, s * (z - eps), t)) / (2 * eps)
+                dBzdX = (noise3d(s * (x + eps), s * y, s * z, t) - noise3d(s * (x - eps), s * y, s * z, t)) / (2 * eps)
+                vy = dBxdZ - dBzdX
+                
+                # vz = dBydX - dBxdY
+                dBydX = (noise3d(s * (x + eps) + 100, s * y, s * z, t) - noise3d(s * (x - eps) + 100, s * y, s * z, t)) / (2 * eps)
+                dBxdY = (noise3d(s * x + 100, s * (y + eps), s * z, t) - noise3d(s * x + 100, s * (y - eps), s * z, t)) / (2 * eps)
+                vz = dBydX - dBxdY
+                
+                # Normalize direction
+                mag = math.sqrt(vx * vx + vy * vy + vz * vz) + 1e-6
+                return vx / mag, vy / mag, vz / mag
+            
+            elif mode == "turbulence":
+                # Multi-octave noise
+                vx, vy, vz = 0.0, 0.0, 0.0
+                amp = 1.0
+                freq = frequency
+                t = int(time * 100)
+                
+                for _ in range(octaves):
+                    vx += noise3d(x * freq, y * freq, z * freq, t) * amp
+                    vy += noise3d(x * freq + 1000, y * freq + 1000, z * freq, t) * amp
+                    vz += noise3d(x * freq + 2000, y * freq, z * freq + 2000, t) * amp
+                    freq *= 2
+                    amp *= 0.5
+                
+                return vx, vy, vz
+            
+            elif mode == "attractor":
+                # Single attractor at center
+                dist = math.sqrt(x*x + y*y + z*z) + 1e-6
+                return -x/dist, -y/dist, -z/dist
+            
+            elif mode == "wave":
+                # Expanding/contracting waves
+                dist = math.sqrt(x*x + y*y + z*z)
+                wave = math.sin(dist * frequency - time)
+                if dist > 1e-6:
+                    return x/dist * wave, y/dist * wave, z/dist * wave
+                return 0.0, 0.0, 0.0
+            
+            elif mode == "laminar":
+                # Simple linear flow along X
+                return 1.0, 0.0, 0.0
+            
+            else:
+                return 0.0, 0.0, 0.0
+        
+        # Flow field simulation
+        for step in range(steps):
+            time = step * time_scale
+            new_pos, new_vel = [], []
+            for i, p in enumerate(pos):
+                # Get field direction at current position
+                nx, ny, nz = field_fn(p[0], p[1], p[2], time)
+                
+                # Apply strength and scale
+                nx, ny, nz = nx * strength * scale, ny * strength * scale, nz * strength * scale
+                
+                # Apply damping
+                if damping > 0:
+                    dist = math.sqrt(p[0]*p[0] + p[1]*p[1] + p[2]*p[2])
+                    damp = math.exp(-damping * dist)
+                    nx, ny, nz = nx * damp, ny * damp, nz * damp
+                
+                # Lerp velocity toward field direction (matching JS approach)
+                vx, vy, vz = vel[i]
+                vx = vx * 0.7 + nx * 0.3
+                vy = vy * 0.7 + ny * 0.3
+                vz = vz * 0.7 + nz * 0.3
+                
+                # Normalize velocity
+                vmag = math.sqrt(vx * vx + vy * vy + vz * vz) + 1e-6
+                vx, vy, vz = vx / vmag, vy / vmag, vz / vmag
+                
+                # Move particle in direction of velocity
+                np = [p[0] + vx * step_size, p[1] + vy * step_size, p[2] + vz * step_size]
+                
+                # Keep within bounds (wrap around)
+                np[0] = np[0] if np[0] > -bx / 2 and np[0] < bx / 2 else (-bx / 2 if np[0] <= -bx / 2 else bx / 2)
+                np[1] = np[1] if np[1] > -by / 2 and np[1] < by / 2 else (-by / 2 if np[1] <= -by / 2 else by / 2)
+                np[2] = np[2] if np[2] > -bz / 2 and np[2] < bz / 2 else (-bz / 2 if np[2] <= -bz / 2 else bz / 2)
+                
+                new_pos.append(np)
+                new_vel.append([vx, vy, vz])
+            
+            pos, vel = new_pos, new_vel
+        
+        # Create curves from paths (record every step for smooth curves)
+        for i in range(agents):
             pts = []
-            x, y, z = rnd.uniform(-bx / 2, bx / 2), rnd.uniform(-by / 2, by / 2), rnd.uniform(-bz / 2, bz / 2)
-            for _ in range(steps):
-                x += rnd.uniform(-0.25, 0.25)
-                y += rnd.uniform(-0.25, 0.25)
-                z += rnd.uniform(-0.25, 0.25)
-                x, y, z = max(-bx / 2, min(bx / 2, x)), max(-by / 2, min(by / 2, y)), max(-bz / 2, min(bz / 2, z))
-                pts.append(rg.Point3d(x, y, z))
-            curves.append(rg.Polyline(pts).ToNurbsCurve())
+            for step in range(steps + 1):
+                if step < len(pos):
+                    pts.append(rg.Point3d(pos[step][0], pos[step][1], pos[step][2]))
+            if len(pts) > 1:
+                curves.append(rg.Polyline(pts).ToNurbsCurve())
+        
         return curves
 
     if sim == "differential_growth":
@@ -2813,7 +3142,7 @@ def validate_compat(obj, warnings):
         "extrude", "loft", "sweep", "revolve", "lathe",
         "surface_grid", "heightfield", "mesh", "curve", "",
     }
-    supported_sims = {"boids", "differential_growth", "cellular_automata", ""}
+    supported_sims = {"boids", "differential_growth", "cellular_automata", "flow_field", ""}
     supported_deformers = {"twist", "taper", "wave", "bend", ""}
 
     supported_sdf_ops = {

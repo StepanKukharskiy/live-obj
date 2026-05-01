@@ -12,6 +12,7 @@
 		description: string;
 		params: OpParam[];
 		example?: string;
+		examples?: { label: string; code: string }[];
 	}
 
 	interface Category {
@@ -30,6 +31,7 @@
 					category: 'Profile operations',
 					description: 'Extrude 2D profile to 3D',
 					params: [
+						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery (v02) or auto', default: 'auto' },
 						{ name: 'profile', type: 'list', description: 'List of 2D/3D points defining the profile' },
 						{ name: 'height', type: 'float', description: 'Extrusion height', default: '1.0' },
 						{ name: 'axis', type: 'string', description: 'Extrusion axis (x, y, or z)', default: 'z' }
@@ -41,15 +43,17 @@
 					category: 'Profile operations',
 					description: 'Loft between multiple profiles',
 					params: [
+						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery (v02) or auto', default: 'auto' },
 						{ name: 'sections', type: 'list', description: 'List of profile sections' }
 					],
-					example: 'o lofted_shape\n#@source: procedural\n#@type: loft\n#@params: sections=[[[0,0,0],[1,0,0],[1,1,0],[0,1,0]], [[0,0,2],[1.5,0,2],[1.5,1.5,2],[0,1.5,2]]]'
+					example: 'o lofted_shape\n#@source: procedural\n#@type: loft\n#@params: kernel=cadquery, sections=[[[0,0,0],[1,0,0],[1,1,0],[0,1,0]], [[0,0,2],[1.5,0,2],[1.5,1.5,2],[0,1.5,2]]]'
 				},
 				{
 					name: 'sweep',
 					category: 'Profile operations',
 					description: 'Sweep profile along curve',
 					params: [
+						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery (v02) or auto', default: 'auto' },
 						{ name: 'rail', type: 'list', description: 'Rail curve points' },
 						{ name: 'profile', type: 'list', description: 'Profile curve points' }
 					],
@@ -60,6 +64,7 @@
 					category: 'Profile operations',
 					description: 'Revolve profile around axis',
 					params: [
+						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery (v02) or auto', default: 'auto' },
 						{ name: 'profile', type: 'list', description: 'Profile points' },
 						{ name: 'axis', type: 'string', description: 'Rotation axis (x, y, or z)', default: 'y' },
 						{ name: 'angle', type: 'float', description: 'Rotation angle in degrees', default: '360' }
@@ -159,34 +164,65 @@
 					category: 'Boolean operations',
 					description: 'Combine objects (A ∪ B)',
 					params: [
-						{ name: 'target', type: 'string', description: 'Target object name for boolean' },
+						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery or sdf', default: 'sdf' },
+						{ name: 'target', type: 'string', description: 'Target object name (kernel)' },
 						{ name: 'ids', type: 'string', description: 'Comma-separated object IDs (SDF)' }
 					],
-					example: '#@sdf:\n#@ - box id=a center=[0,0,0] size=[1,1,1]\n#@ - sphere id=b center=[0.5,0.5,0.5] radius=0.5\n#@ - union a b'
+					examples: [
+						{
+							label: 'SDF',
+							code: '#@sdf:\n#@ - box id=a center=[0,0,0] size=[1,1,1]\n#@ - box id=b center=[0.5,0,0] size=[1,1,1]\n#@ - union a b'
+						},
+						{
+							label: 'Kernel (CADQuery)',
+							code: 'o box_a\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0,0,0], size=[1,1,1]\n#@op:\n#@ - boolean op=union target=box_a ids=box_b\n\no box_b\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0.5,0,0], size=[1,1,1]'
+						}
+					]
 				},
 				{
 					name: 'subtract',
 					category: 'Boolean operations',
 					description: 'Subtract B from A (A - B)',
 					params: [
-						{ name: 'target', type: 'string', description: 'Target object to subtract from' },
+						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery or sdf', default: 'sdf' },
+						{ name: 'target', type: 'string', description: 'Target object to subtract from (kernel)' },
 						{ name: 'ids', type: 'string', description: 'Comma-separated object IDs (SDF)' }
 					],
-					example: '#@sdf:\n#@ - box id=base center=[0,0,0] size=[2,2,2]\n#@ - sphere id=cut center=[0.6,0.6,0.6] radius=0.8\n#@ - subtract base cut'
+					examples: [
+						{
+							label: 'SDF',
+							code: '#@sdf:\n#@ - box id=base center=[0,0,0] size=[2,2,2]\n#@ - box id=cut center=[0.6,0.6,0] size=[1,1,1]\n#@ - subtract base cut'
+						},
+						{
+							label: 'Kernel (CADQuery)',
+							code: 'o box_base\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0,0,0], size=[2,2,2]\n#@op:\n#@ - boolean op=subtract target=box_base ids=box_cut\n\no box_cut\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0.6,0.6,0], size=[1,1,1]'
+						}
+					]
 				},
 				{
 					name: 'intersect',
 					category: 'Boolean operations',
 					description: 'Intersection of objects (A ∩ B)',
 					params: [
+						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery or sdf', default: 'sdf' },
+						{ name: 'target', type: 'string', description: 'Target object (kernel)' },
 						{ name: 'ids', type: 'string', description: 'Comma-separated object IDs (SDF)' }
 					],
-					example: '#@sdf:\n#@ - box id=a center=[0,0,0] size=[1,1,1]\n#@ - sphere id=b center=[0,0,0] radius=0.6\n#@ - intersect a b'
+					examples: [
+						{
+							label: 'SDF',
+							code: '#@sdf:\n#@ - box id=a center=[0,0,0] size=[1,1,1]\n#@ - box id=b center=[0.3,0.3,0] size=[1,1,1]\n#@ - intersect a b'
+						},
+						{
+							label: 'Kernel (CADQuery)',
+							code: 'o box_a\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0,0,0], size=[1,1,1]\n#@op:\n#@ - boolean op=intersect target=box_a ids=box_b\n\no box_b\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0.3,0.3,0], size=[1,1,1]'
+						}
+					]
 				},
 				{
 					name: 'smooth_union',
 					category: 'Boolean operations',
-					description: 'Smooth blend between objects (SDF)',
+					description: 'Smooth blend between objects (SDF only)',
 					params: [
 						{ name: 'radius', type: 'float', description: 'Blend radius', default: '0.1' },
 						{ name: 'ids', type: 'string', description: 'Comma-separated object IDs' }
@@ -563,11 +599,33 @@
 					params: [
 						{ name: 'agents', type: 'int', description: 'Number of boids', default: '40' },
 						{ name: 'steps', type: 'int', description: 'Simulation steps', default: '160' },
+						{ name: 'step_size', type: 'float', description: 'Step size per agent', default: '0.05' },
 						{ name: 'bounds', type: 'vec3', description: 'Simulation bounds', default: '[8,5,5]' },
 						{ name: 'seed', type: 'int', description: 'Random seed', default: '4' },
 						{ name: 'trace_radius', type: 'float', description: 'Path trace tube radius', default: '0.035' }
 					],
-					example: 'o boids_sim\n#@source: simulation\n#@sim: boids\n#@params: agents=40, steps=160, bounds=[8,5,5], seed=4, trace_radius=0.035'
+					example: 'o boids_sim\n#@source: simulation\n#@sim: boids\n#@params: agents=40, steps=160, step_size=0.05, bounds=[8,5,5], seed=4, trace_radius=0.035'
+				},
+				{
+					name: 'flow_field',
+					category: 'Simulations',
+					description: '3D noise flow field simulation',
+					params: [
+						{ name: 'agents', type: 'int', description: 'Number of particles', default: '50' },
+						{ name: 'steps', type: 'int', description: 'Simulation steps', default: '200' },
+						{ name: 'step_size', type: 'float', description: 'Step size per particle', default: '0.1' },
+						{ name: 'bounds', type: 'vec3', description: 'Simulation bounds', default: '[10,10,10]' },
+						{ name: 'mode', type: 'string', description: 'Flow mode: curl-noise, turbulence, attractor, wave, laminar', default: 'curl-noise' },
+						{ name: 'frequency', type: 'float', description: 'Noise frequency', default: '1.0' },
+						{ name: 'octaves', type: 'int', description: 'Fractal octaves for turbulence', default: '3' },
+						{ name: 'strength', type: 'float', description: 'Field strength', default: '1.0' },
+						{ name: 'scale', type: 'float', description: 'Movement scale', default: '0.1' },
+						{ name: 'time_scale', type: 'float', description: 'Time evolution speed', default: '0.01' },
+						{ name: 'damping', type: 'float', description: 'Velocity damping (0-1)', default: '0.0' },
+						{ name: 'seed', type: 'int', description: 'Random seed', default: '1' },
+						{ name: 'trace_radius', type: 'float', description: 'Path trace tube radius', default: '0.025' }
+					],
+					example: 'o flow_field_sim\n#@source: simulation\n#@sim: flow_field\n#@params: agents=50, steps=200, step_size=0.1, bounds=[10,10,10], mode=curl-noise, frequency=1.0, octaves=3, strength=1.0, scale=0.1, time_scale=0.01, damping=0.0, seed=1, trace_radius=0.025'
 				}
 			]
 		}
@@ -643,7 +701,28 @@
 										{/each}
 									</div>
 								{/if}
-								{#if op.example}
+								{#if op.examples && op.examples.length > 0}
+									{#each op.examples as ex (ex.label)}
+										<div class="tools-example">
+											<div class="tools-example-header">
+												<h4 class="tools-example-title">{ex.label}:</h4>
+												<button
+													type="button"
+													class="tools-copy-btn"
+													onclick={() => copyToClipboard(ex.code)}
+													title="Copy to clipboard"
+												>
+													<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+														<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+														<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+													</svg>
+												</button>
+											</div>
+											<pre class="tools-example-code">{ex.code}</pre>
+										</div>
+									{/each}
+								{/if}
+								{#if op.example && !op.examples}
 									<div class="tools-example">
 										<div class="tools-example-header">
 											<h4 class="tools-example-title">Example:</h4>

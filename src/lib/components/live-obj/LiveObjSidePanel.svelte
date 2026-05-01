@@ -77,7 +77,7 @@
 		toneMappingExposure?: number;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
-		onSend?: (payload: { text: string; model: string; imageDataUrl?: string }) => void;
+		onSend?: (payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
 		onCaptureSceneScreenshot?: () => string;
 		kernelDefault?: 'auto' | 'cadquery';
 	} = $props();

@@ -7,27 +7,34 @@
 		{ value: 'gpt-4o', label: 'GPT-4o' }
 	] as const;
 
-	const PROMPT_EXAMPLES = [
-		{ text: 'Create a simple box at position [0,0,0] with size [1,1,1]', category: 'Primitives' },
-		{ text: 'Create a cylinder with radius 0.5, height 2, centered at origin', category: 'Primitives' },
-		{ text: 'Create a sphere with radius 0.8 at position [1,0,0]', category: 'Primitives' },
+	const PROCEDURAL_EXAMPLES = [
+		{ text: 'Create a box at position [0,0,0] with size [1,1,1]', category: 'Primitives' },
+		{ text: 'Create a sphere with radius 0.5 at origin', category: 'Primitives' },
 		{ text: 'Extrude a rectangular profile to create a wall', category: 'Profile' },
 		{ text: 'Revolve a profile around the z-axis to create a vase', category: 'Profile' },
-		{ text: 'Create a loft between two profiles of different sizes', category: 'Profile' },
 		{ text: 'Subtract a cylinder from a box to create a hole', category: 'Boolean' },
 		{ text: 'Union two spheres to create a merged shape', category: 'Boolean' },
-		{ text: 'Create a smooth union between two boxes', category: 'Boolean' },
 		{ text: 'Scale the object by factor 2.0', category: 'Transform' },
 		{ text: 'Rotate the object 45 degrees around the z-axis', category: 'Transform' },
-		{ text: 'Move the object to position [1,2,3]', category: 'Transform' },
-		{ text: 'Create an array of 5 copies offset by 0.5 units', category: 'Transform' },
 		{ text: 'Apply a taper deformation along the z-axis', category: 'Deformation' },
-		{ text: 'Twist the object 30 degrees along the z-axis', category: 'Deformation' },
 		{ text: 'Add a bevel with 0.05 distance to all edges', category: 'Modifiers' },
-		{ text: 'Create a hollow shell with 0.02 thickness', category: 'Modifiers' },
 		{ text: 'Generate a cellular automata coral structure', category: 'Simulation' },
-		{ text: 'Create a differential growth pattern', category: 'Simulation' },
-		{ text: 'Generate a boids flocking simulation', category: 'Simulation' }
+		{ text: 'Create a differential growth pattern', category: 'Simulation' }
+	];
+
+	const LLM_ONLY_EXAMPLES = [
+		{ text: 'Create a simple cube with 8 vertices and 12 triangular faces', category: 'Basic Shapes' },
+		{ text: 'Create a pyramid with a square base and triangular sides', category: 'Basic Shapes' },
+		{ text: 'Create a low-poly sphere with approximately 100 vertices', category: 'Basic Shapes' },
+		{ text: 'Create a torus (donut shape) with tube radius 0.2 and ring radius 1.0', category: 'Basic Shapes' },
+		{ text: 'Create a simple chair with seat, back, and 4 legs', category: 'Objects' },
+		{ text: 'Create a table with a rectangular top and 4 cylindrical legs', category: 'Objects' },
+		{ text: 'Create a simple lamp with a base, stem, and shade', category: 'Objects' },
+		{ text: 'Create a low-poly tree trunk and foliage', category: 'Organic' },
+		{ text: 'Create a simple flower with petals and stem', category: 'Organic' },
+		{ text: 'Create a simple house with walls, roof, and door', category: 'Architecture' },
+		{ text: 'Create a simple car body with wheels', category: 'Objects' },
+		{ text: 'Create a rock formation with irregular geometry', category: 'Organic' }
 	];
 
 	let {
@@ -39,11 +46,12 @@
 		msgs?: ChatMsg[];
 		busy?: boolean;
 		statusLine?: string | null;
-		onSend?: (payload: { text: string; model: string; imageDataUrl?: string }) => void;
+		onSend?: (payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
 	} = $props();
 
 	let input = $state('');
 	let selectedModel = $state<string>('gpt-5.5');
+	let useProcedural = $state<boolean>(true);
 	let attachedDataUrl = $state<string | undefined>(undefined);
 	let fileInputEl: HTMLInputElement | undefined = $state();
 
@@ -71,12 +79,13 @@
 		const text = input.trim();
 		const img = attachedDataUrl;
 		if ((!text && !img) || busy) return;
-		onSend?.({ text, model: selectedModel, imageDataUrl: img });
+		onSend?.({ text, model: selectedModel, useProcedural, imageDataUrl: img });
 		input = '';
 		clearAttachment();
 	}
 
 	let canSend = $derived(Boolean((input.trim() || attachedDataUrl) && !busy));
+	let promptExamples = $derived(useProcedural ? PROCEDURAL_EXAMPLES : LLM_ONLY_EXAMPLES);
 
 	function usePrompt(example: { text: string; category: string }) {
 		input = example.text;
@@ -94,7 +103,7 @@
 				<div class="planner-prompt-examples">
 					<h3 class="planner-prompt-examples-title">Quick Prompts</h3>
 					<div class="planner-prompt-grid">
-						{#each PROMPT_EXAMPLES as example (example.text)}
+						{#each promptExamples as example (example.text)}
 							<button
 								type="button"
 								class="planner-prompt-chip"
@@ -110,7 +119,7 @@
 				</div>
 			</div>
 		{:else}
-			{#each msgs as m}
+			{#each msgs as m (m)}
 				<div
 					class="planner-chat-row"
 					class:assistant={m.role === 'assistant'}
@@ -171,10 +180,19 @@
 				<label class="planner-chat-model-label">
 					<span class="visually-hidden">Model</span>
 					<select bind:value={selectedModel} disabled={busy} class="planner-chat-model-select">
-						{#each MODEL_OPTIONS as opt}
+						{#each MODEL_OPTIONS as opt (opt.value)}
 							<option value={opt.value}>{opt.label}</option>
 						{/each}
 					</select>
+				</label>
+				<label class="planner-chat-procedural-label">
+					<input
+						type="checkbox"
+						bind:checked={useProcedural}
+						disabled={busy}
+						class="planner-chat-procedural-checkbox"
+					/>
+					<span class="planner-chat-procedural-text">Use tools</span>
 				</label>
 				<input
 					bind:this={fileInputEl}
@@ -301,6 +319,33 @@
 	.planner-chat-model-select:disabled {
 		opacity: 0.55;
 		cursor: not-allowed;
+	}
+
+	.planner-chat-procedural-label {
+		margin: 0;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12px;
+		font-weight: 600;
+		color: #333;
+		cursor: pointer;
+		user-select: none;
+	}
+
+	.planner-chat-procedural-checkbox {
+		width: 16px;
+		height: 16px;
+		accent-color: #0000eb;
+		cursor: pointer;
+	}
+
+	.planner-chat-procedural-checkbox:disabled {
+		cursor: not-allowed;
+	}
+
+	.planner-chat-procedural-text {
+		line-height: 1;
 	}
 
 	.planner-chat-attach-label {

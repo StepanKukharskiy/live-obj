@@ -15,6 +15,7 @@ type Body = {
 	imageUrl?: string;
 	history?: WireHistoryItem[];
 	model?: string;
+	useProcedural?: boolean;
 	kernelDefault?: 'auto' | 'cadquery';
 };
 
@@ -159,13 +160,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const model = (body.model?.trim() || DEFAULT_LIVE_OBJ_MODEL) as string;
+	const useProcedural = body.useProcedural !== false;
 	const kernelDefault = body.kernelDefault === 'cadquery' ? 'cadquery' : 'auto';
 	const rawHistory = body.history ?? [];
 	const history: ChatCompletionMessage[] = wireHistoryToMessages(rawHistory);
 
 	let rawLlm: string;
 	try {
-		rawLlm = await requestLiveObjFromLlm(userMessage, history, model, { imageDataUrl: imageUrl });
+		rawLlm = await requestLiveObjFromLlm(userMessage, history, model, { imageDataUrl: imageUrl, useProcedural });
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		throw error(502, `LLM failed: ${message}`);
