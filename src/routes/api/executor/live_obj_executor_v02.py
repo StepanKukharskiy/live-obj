@@ -1418,6 +1418,10 @@ def build_sdf(sdf_ops: List[Dict[str, Any]]) -> Optional[SDFExpr]:
                     current = SDFIntersect(a, b)
                 else:
                     current = SDFSmoothUnion(a, b, float(cmd.get("radius", 0.1)))
+                # Chain-friendly semantics: update lhs id in-place so later ops like
+                # `subtract outer inner` then `subtract outer top_cut` operate on the
+                # previously modified `outer`, not the original primitive.
+                registry[a_id] = current
                 registry["result"] = current
         elif c == "noise_displace" and current is not None:
             current = SDFNoiseDisplace(
