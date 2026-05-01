@@ -2983,21 +2983,21 @@ def generate_sdf(obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
     if not has_explicit_bounds:
         bounds = _infer_sdf_bounds(resolved_ops, bounds)
     resolution = float(params.get("resolution", 0.15))
-    method = "voxel"
+    method = str(params.get("method", "marching_cubes")).lower()
     for cmd in resolved_ops:
-        if str(cmd.get("cmd", "")).lower() == "mesh_from_sdf":
+        if cmd.get("method") is not None:
             method = str(cmd.get("method", method)).lower()
-            if cmd.get("resolution") is not None:
-                resolution = float(cmd["resolution"])
+        if str(cmd.get("cmd", "")).lower() == "mesh_from_sdf" and cmd.get("resolution") is not None:
+            resolution = float(cmd["resolution"])
     base = sdf_to_voxel_mesh(expr, bounds, resolution)
     if method in {"marching_cubes", "marching", "mc"}:
         # Lightweight marching-cubes approximation for stdlib executor:
         # densify + smooth voxel shell to remove blockiness.
         base = weld_vertices(base, epsilon=resolution * 0.2)
-        base = op_subdivide(base, 1)
-        base = weld_vertices(base, epsilon=resolution * 0.1)
-        base = op_smooth(base, iterations=2, strength=0.45)
+        base = op_subdivide(base, 2)
         base = weld_vertices(base, epsilon=resolution * 0.08)
+        base = op_smooth(base, iterations=4, strength=0.5)
+        base = weld_vertices(base, epsilon=resolution * 0.06)
     return base
 
 
