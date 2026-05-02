@@ -2,7 +2,7 @@ FROM node:20-slim
 
 # Install Python 3.11
 RUN apt-get update \
-    && apt-get install -y python3.11 python3-pip \
+    && apt-get install -y python3.11 python3-pip libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install optional CAD kernel dependencies used by live_obj_executor_v02.py
