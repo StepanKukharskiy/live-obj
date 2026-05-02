@@ -37,16 +37,34 @@
 		{ text: 'Create a rock formation with irregular geometry', category: 'Organic' }
 	];
 
+	const OBJ_EXAMPLES = [
+		{
+			name: 'Wall Arch with Hole',
+			liveObj: `#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@kernel_default: cadquery
+
+o wall_arch_profile_hole
+#@source: procedural
+#@type: extrude
+#@params: kernel=cadquery, profile=[[0,0,0],[4.0,0,0],[4.0,0,3.0],[0,0,3.0],[0,0,0],None,[1.0,0,0],[3.0,0,0],[3.0,0,1.8],[2.97,0,2.0],[2.88,0,2.2],[2.75,0,2.37],[2.57,0,2.55],[2.4,0,2.68],[2.2,0,2.77],[2.0,0,2.8],[1.8,0,2.77],[1.6,0,2.68],[1.43,0,2.55],[1.25,0,2.37],[1.12,0,2.2],[1.03,0,2.0],[1.0,0,1.8],[1.0,0,0]], height=0.25, segments=32`
+		}
+	];
+
 	let {
 		msgs = [],
 		busy = false,
 		statusLine = null,
-		onSend
+		onSend,
+		onLaunchObjExample
 	}: {
 		msgs?: ChatMsg[];
 		busy?: boolean;
 		statusLine?: string | null;
 		onSend?: (payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
+		onLaunchObjExample?: (liveObj: string) => void;
 	} = $props();
 
 	let input = $state('');
@@ -90,6 +108,10 @@
 	function usePrompt(example: { text: string; category: string }) {
 		input = example.text;
 	}
+
+	function launchObjExample(example: { name: string; liveObj: string }) {
+		onLaunchObjExample?.(example.liveObj);
+	}
 </script>
 
 <div class="planner-chat-shell">
@@ -97,9 +119,28 @@
 		{#if msgs.length === 0}
 			<div class="planner-chat-welcome">
 				<p class="planner-chat-guide-copy">
-					Describe a scene or ask for edits like “add a lamp”, “remove the sphere”, or “make the table red”. You can
+					Describe a scene or ask for edits like "add a lamp", "remove the sphere", or "make the table red". You can
 					attach a reference image instead of or in addition to text.
 				</p>
+				{#if OBJ_EXAMPLES.length > 0}
+					<div class="planner-obj-examples">
+						<h3 class="planner-obj-examples-title">Launch OBJ Examples</h3>
+						<div class="planner-obj-grid">
+							{#each OBJ_EXAMPLES as example (example.name)}
+								<button
+									type="button"
+									class="planner-obj-chip"
+									class:disabled={busy}
+									disabled={busy}
+									onclick={() => launchObjExample(example)}
+								>
+									<span class="planner-obj-chip-icon">📦</span>
+									<span class="planner-obj-chip-name">{example.name}</span>
+								</button>
+							{/each}
+						</div>
+					</div>
+				{/if}
 				<div class="planner-prompt-examples">
 					<h3 class="planner-prompt-examples-title">Quick Prompts</h3>
 					<div class="planner-prompt-grid">
@@ -429,6 +470,65 @@
 	.planner-prompt-chip-text {
 		font-size: 12px;
 		color: #334155;
+		line-height: 1.4;
+	}
+
+	.planner-obj-examples {
+		margin-top: 20px;
+		padding-top: 20px;
+		border-top: 1px solid rgba(0, 0, 0, 0.08);
+	}
+
+	.planner-obj-examples-title {
+		margin: 0 0 12px;
+		font-size: 13px;
+		font-weight: 600;
+		color: #333;
+	}
+
+	.planner-obj-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+		gap: 8px;
+	}
+
+	.planner-obj-chip {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 10px 12px;
+		background: rgba(0, 0, 235, 0.03);
+		border: 1px solid rgba(0, 0, 235, 0.12);
+		border-radius: 8px;
+		cursor: pointer;
+		text-align: left;
+		transition: all 0.15s;
+	}
+
+	.planner-obj-chip:hover:not(.disabled) {
+		background: rgba(0, 0, 235, 0.08);
+		border-color: rgba(0, 0, 235, 0.2);
+		transform: translateY(-1px);
+	}
+
+	.planner-obj-chip:active:not(.disabled) {
+		transform: translateY(0);
+	}
+
+	.planner-obj-chip.disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.planner-obj-chip-icon {
+		font-size: 16px;
+		line-height: 1;
+	}
+
+	.planner-obj-chip-name {
+		font-size: 12px;
+		font-weight: 600;
+		color: #0000eb;
 		line-height: 1.4;
 	}
 </style>

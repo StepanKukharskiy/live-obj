@@ -5,8 +5,8 @@ RUN apt-get update \
     && apt-get install -y python3.11 python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install optional CAD kernel dependency used by live_obj_executor_v02.py
-RUN python3.11 -m pip install --no-cache-dir --break-system-packages cadquery
+# Install optional CAD kernel dependencies used by live_obj_executor_v02.py
+RUN python3.11 -m pip install --no-cache-dir --break-system-packages cadquery trimesh shapely manifold3d
 
 WORKDIR /app
 

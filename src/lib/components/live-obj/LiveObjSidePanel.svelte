@@ -44,6 +44,7 @@
 		onApplyEditedSource,
 		onSend,
 		onCaptureSceneScreenshot,
+		onLaunchObjExample,
 		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery')
 	}: {
 		showPanel?: boolean;
@@ -79,6 +80,7 @@
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
 		onSend?: (payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
 		onCaptureSceneScreenshot?: () => string;
+		onLaunchObjExample?: (liveObj: string) => void;
 		kernelDefault?: 'auto' | 'cadquery';
 	} = $props();
 
@@ -117,7 +119,7 @@
 			class:chat-panel={activeTab === 'chat'}
 		>
 			{#if activeTab === 'chat'}
-				<LiveObjChatTab {msgs} {busy} {statusLine} {onSend} />
+				<LiveObjChatTab {msgs} {busy} {statusLine} {onSend} {onLaunchObjExample} />
 			{:else if activeTab === 'adjust'}
 				<LiveObjAdjustTab
 					bind:sourceTab

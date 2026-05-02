@@ -242,6 +242,11 @@
 		return `#@kernel_default: cadquery\n${raw}\n`;
 	}
 
+	async function launchObjExample(liveObj: string) {
+		if (!liveObj.trim()) return;
+		await regenerateFromMetadata(liveObj);
+	}
+
 	async function sendPrompt(payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) {
 		const { text, model, useProcedural = true, imageDataUrl } = payload;
 		if ((!text.trim() && !imageDataUrl) || busy) return;
@@ -405,6 +410,7 @@
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
 		onSend={(p) => void sendPrompt(p)}
 		onCaptureSceneScreenshot={captureSceneScreenshot}
+		onLaunchObjExample={launchObjExample}
 		bind:kernelDefault
 	/>
 </div>
