@@ -142,7 +142,7 @@
 		font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
 		font-size: 14px;
 		line-height: 1.4;
-		color: rgba(0, 0, 235, 0.15);
+		color: rgba(0, 0, 235, 0.25);
 		padding: 0;
 		overflow: hidden;
 		word-wrap: break-word;

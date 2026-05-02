@@ -3312,23 +3312,33 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             if mode in {"union", "subtract", "intersect"}:
                 target_name = str(op.get("with", op.get("target", "")))
                 target_obj = obn.get(target_name) if target_name else None
-                cur = kernel_op_cadquery_solid(obj, env)
-                tgt = kernel_op_cadquery_solid(target_obj, env) if target_obj is not None else None
-                if cur is not None and tgt is not None:
-                    solid_a, center_a, seg_a = cur
-                    solid_b, _, _ = tgt
-                    try:
-                        if mode == "union":
-                            record_kernel_event(obj, "op:boolean:union")
-                            out = cadquery_tessellated_mesh(solid_a.fuse(solid_b), center_a, seg_a)
-                        elif mode == "subtract":
-                            record_kernel_event(obj, "op:boolean:subtract")
-                            out = cadquery_tessellated_mesh(solid_a.cut(solid_b), center_a, seg_a)
-                        else:
-                            record_kernel_event(obj, "op:boolean:intersect")
-                            out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
-                    except Exception as e:
-                        pass
+
+                # Try trimesh-based boolean first (better for complex profiles)
+                if mesh is not None and target_obj is not None and target_obj.mesh is not None:
+                    trimesh_result = trimesh_boolean(mesh, target_obj.mesh, mode)
+                    if trimesh_result is not None:
+                        record_kernel_event(obj, f"op:boolean:{mode}")
+                        out = trimesh_result
+
+                # Fallback to CadQuery kernel boolean
+                if out is None:
+                    cur = kernel_op_cadquery_solid(obj, env)
+                    tgt = kernel_op_cadquery_solid(target_obj, env) if target_obj is not None else None
+                    if cur is not None and tgt is not None:
+                        solid_a, center_a, seg_a = cur
+                        solid_b, _, _ = tgt
+                        try:
+                            if mode == "union":
+                                record_kernel_event(obj, "op:boolean:union")
+                                out = cadquery_tessellated_mesh(solid_a.fuse(solid_b), center_a, seg_a)
+                            elif mode == "subtract":
+                                record_kernel_event(obj, "op:boolean:subtract")
+                                out = cadquery_tessellated_mesh(solid_a.cut(solid_b), center_a, seg_a)
+                            else:
+                                record_kernel_event(obj, "op:boolean:intersect")
+                                out = cadquery_tessellated_mesh(solid_a.intersect(solid_b), center_a, seg_a)
+                        except Exception as e:
+                            pass
         elif name == "chamfer":
             amount = float(resolve_op_value(op, "amount", op.get("distance", 0.02)))
             cur = kernel_op_cadquery_solid(obj, env)
