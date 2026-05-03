@@ -43,7 +43,7 @@
 		toneMappingExposure = $bindable(1),
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
-		providerSettings = $bindable({ provider: 'openai', apiKey: '', apiUrl: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5' }),
+		providerSettings = $bindable({ provider: 'openai', apiKey: '', apiUrl: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }),
 	onSend,
 		onCaptureSceneScreenshot,
 		onLaunchObjExample,
@@ -80,7 +80,7 @@
 		toneMappingExposure?: number;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
-		providerSettings?: { provider: string; apiKey: string; apiUrl: string; textModel: string; imageModel: string };
+		providerSettings?: { provider: string; apiKey: string; apiUrl: string; textModel: string; imageModel: string; rememberMe: boolean };
 	onSend?: (payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
 		onCaptureSceneScreenshot?: () => string;
 		onLaunchObjExample?: (liveObj: string) => void;

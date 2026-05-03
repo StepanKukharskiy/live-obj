@@ -4,6 +4,8 @@
 	import Canvas3D from '$lib/components/Canvas3D.svelte';
 	import LiveObjSidePanel from '$lib/components/live-obj/LiveObjSidePanel.svelte';
 	import type { SourceTab } from '$lib/components/live-obj/LiveObjOutputTab.svelte';
+	import { browser } from '$app/environment';
+	import { onMount } from 'svelte';
 
 	type ChatMsg = {
 		role: 'user' | 'assistant';
@@ -247,7 +249,27 @@
 		await regenerateFromMetadata(liveObj);
 	}
 
-	let providerSettings = $state({ provider: 'openai', apiKey: '', apiUrl: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5' });
+	const PROVIDER_SETTINGS_KEY = 'live-obj-provider-settings-v1';
+	let providerSettings = $state({ provider: 'openai', apiKey: '', apiUrl: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false });
+
+	onMount(() => {
+		if (!browser) return;
+		try {
+			const raw = localStorage.getItem(PROVIDER_SETTINGS_KEY);
+			if (!raw) return;
+			const parsed = JSON.parse(raw) as typeof providerSettings;
+			providerSettings = { ...providerSettings, ...parsed, rememberMe: true };
+		} catch {}
+	});
+
+	$effect(() => {
+		if (!browser) return;
+		if (providerSettings.rememberMe) {
+			localStorage.setItem(PROVIDER_SETTINGS_KEY, JSON.stringify(providerSettings));
+		} else {
+			localStorage.removeItem(PROVIDER_SETTINGS_KEY);
+		}
+	});
 
 	async function sendPrompt(payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) {
 		const { text, useProcedural = true, imageDataUrl } = payload;
@@ -285,6 +307,8 @@
 					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
 					history,
 					model,
+					apiKey: providerSettings.apiKey?.trim() || undefined,
+					apiUrl: providerSettings.apiUrl?.trim() || undefined,
 					useProcedural,
 					kernelDefault
 				})
