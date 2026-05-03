@@ -250,7 +250,7 @@
 	}
 
 	const PROVIDER_SETTINGS_KEY = 'live-obj-provider-settings-v1';
-	let providerSettings = $state({ provider: 'openai', apiKey: '', apiUrl: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false });
+	let providerSettings = $state({ provider: 'openai', apiKey: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false });
 
 	onMount(() => {
 		if (!browser) return;
@@ -307,8 +307,8 @@
 					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
 					history,
 					model,
+					provider: providerSettings.provider,
 					apiKey: providerSettings.apiKey?.trim() || undefined,
-					apiUrl: providerSettings.apiUrl?.trim() || undefined,
 					useProcedural,
 					kernelDefault
 				})

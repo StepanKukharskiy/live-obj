@@ -2,7 +2,6 @@
 	type ProviderSettings = {
 		provider: string;
 		apiKey: string;
-		apiUrl: string;
 		textModel: string;
 		imageModel: string;
 		rememberMe: boolean;
@@ -10,7 +9,7 @@
 	const TEXT_MODELS = ['gpt-5.5', 'gpt-5.4-mini'];
 	const IMAGE_MODELS = ['gpt-image-1.5'];
 	const CUSTOM = '__custom__';
-	let { settings = $bindable<ProviderSettings>({ provider: 'openai', apiKey: '', apiUrl: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }), busy = false }: { settings?: ProviderSettings; busy?: boolean } = $props();
+	let { settings = $bindable<ProviderSettings>({ provider: 'openai', apiKey: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }), busy = false }: { settings?: ProviderSettings; busy?: boolean } = $props();
 
 	let textModelChoice = $derived(TEXT_MODELS.includes(settings.textModel) ? settings.textModel : CUSTOM);
 	let imageModelChoice = $derived(IMAGE_MODELS.includes(settings.imageModel) ? settings.imageModel : CUSTOM);
@@ -28,7 +27,8 @@
 	<label>Provider
 		<select bind:value={settings.provider} disabled={busy}>
 			<option value="openai">OpenAI</option>
-			<option value="custom">Custom (OpenAI-compatible)</option>
+			<option value="together">Together</option>
+			<option value="google">Google</option>
 		</select>
 	</label>
 	<label class="provider-remember">
@@ -37,9 +37,6 @@
 	</label>
 	<label>API Key
 		<input type="password" bind:value={settings.apiKey} autocomplete="off" placeholder="sk-..." disabled={busy} />
-	</label>
-	<label>API URL (optional)
-		<input type="text" bind:value={settings.apiUrl} placeholder="https://.../v1/chat/completions" disabled={busy} />
 	</label>
 
 	<label>Text Model

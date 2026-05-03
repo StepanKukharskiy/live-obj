@@ -17,7 +17,7 @@ type Body = {
 	history?: WireHistoryItem[];
 	model?: string;
 	apiKey?: string;
-	apiUrl?: string;
+	provider?: string;
 	useProcedural?: boolean;
 	kernelDefault?: 'auto' | 'cadquery';
 };
@@ -120,6 +120,15 @@ function unknownMetaValues(liveObj: string): { badSources: string[]; badTypes: s
 	};
 }
 
+
+async function resolveProviderApiUrl(providerRaw?: string): Promise<string | undefined> {
+	const provider = (providerRaw || 'openai').toLowerCase();
+	const { env } = await import('$env/dynamic/private');
+	if (provider === 'together') return process.env.TOGETHER_API_URL || env.TOGETHER_API_URL || undefined;
+	if (provider === 'google') return process.env.GOOGLE_API_URL || env.GOOGLE_API_URL || undefined;
+	return process.env.OPENAI_API_URL || env.OPENAI_API_URL || undefined;
+}
+
 function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[] {
 	return items
 		.filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -170,7 +179,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	let rawLlm: string;
 	const reqApiKey = body.apiKey?.trim() || undefined;
-	const reqApiUrl = body.apiUrl?.trim() || undefined;
+	const reqApiUrl = await resolveProviderApiUrl(body.provider);
 	try {
 		rawLlm = await withLlmRequestOverrides(
 			reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,

@@ -62,9 +62,9 @@ function deriveImagesApiUrl(
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; apiKey?: string; apiUrl?: string; imageModel?: string };
+	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; imageModel?: string };
 	try {
-		body = (await request.json()) as { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; apiKey?: string; apiUrl?: string; imageModel?: string };
+		body = (await request.json()) as { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; imageModel?: string };
 	} catch {
 		throw error(400, 'Invalid JSON');
 	}
@@ -78,12 +78,17 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const { env } = await import('$env/dynamic/private');
 	const requestApiKey = body.apiKey?.trim() ?? '';
-	const requestApiUrl = body.apiUrl?.trim() ?? '';
+	const provider = (body.provider?.trim() || 'openai').toLowerCase();
 	const imageModel = body.imageModel?.trim() || OPENAI_IMAGE_MODEL;
 	const apiKey = pickString(requestApiKey, process.env.OPENAI_API_KEY, env.OPENAI_API_KEY, process.env.DEFAULT_OPENAI_API_KEY, env.DEFAULT_OPENAI_API_KEY);
+	const providerBaseUrl = provider === 'together'
+		? pickString(process.env.TOGETHER_API_URL, env.TOGETHER_API_URL)
+		: provider === 'google'
+			? pickString(process.env.GOOGLE_API_URL, env.GOOGLE_API_URL)
+			: pickString(process.env.OPENAI_API_URL, env.OPENAI_API_URL);
 	const imagesApiUrl = deriveImagesApiUrl(
 		pickString(process.env.OPENAI_IMAGES_API_URL, env.OPENAI_IMAGES_API_URL),
-		pickString(requestApiUrl, process.env.OPENAI_API_URL, env.OPENAI_API_URL)
+		providerBaseUrl
 	);
 	if (!apiKey) throw error(500, 'OPENAI_API_KEY is not configured');
 
