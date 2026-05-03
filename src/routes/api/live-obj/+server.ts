@@ -268,7 +268,7 @@ function buildCorrectionPrompt(issues: string[]): string {
 	return [
 		'Rewrite the previous Live OBJ so the executor runs cleanly. Preserve intent, object IDs, and dimensions.',
 		'Fix every issue listed below in a single revision. Do not introduce new objects unless required to resolve an issue.',
-		'Use only supported ops. Use #@op: or #@ops: (never #@op_experimental).',
+		'Use only supported ops. Use #@ops: (never #@op: or #@op_experimental).',
 		'If a missing anchor is reported, either add a valid #@anchors block on the referenced assembly or replace the anchor() reference with concrete coordinates.',
 		'If unsupported ops are reported, replace them with supported equivalents.',
 		'',

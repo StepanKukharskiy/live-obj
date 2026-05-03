@@ -152,6 +152,7 @@ class LiveObject:
 class Scene:
     header_lines: List[str] = field(default_factory=list)
     objects: List[LiveObject] = field(default_factory=list)
+    materials: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def record_kernel_event(obj: LiveObject, event: str) -> None:
@@ -3344,11 +3345,13 @@ def _resolve_kernel_center(obj: LiveObject, params: Dict[str, Any], env: Dict[st
     return _as_float3(center_raw, (0.0, 0.0, 0.0))
 
 
-def kernel_op_bevel(obj: LiveObject, env: Dict[str, Any], amount: float, segments: int) -> Optional[Mesh]:
+def kernel_op_bevel(obj: LiveObject, env: Dict[str, Any], amount: float, segments: int, kernel_default: str = "") -> Optional[Mesh]:
     params = dict(obj.meta.get("params", {}) or {})
     params["bevel_radius"] = amount
     params["segments"] = segments
     kernel = str(params.get("kernel", "")).lower()
+    if not kernel:
+        kernel = kernel_default
     if not kernel:
         return None
     center = _resolve_kernel_center(obj, params, env)
@@ -3379,7 +3382,7 @@ def kernel_op_cadquery_solid(obj: LiveObject, env: Dict[str, Any]) -> Optional[T
     return (solid, (0.0, 0.0, 0.0), segments)
 
 
-def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
+def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject], kernel_default: str = "") -> Mesh:
     out = mesh
     env = get_effective_params(obj, obn)
     def resolve_op_value(op: Dict[str, Any], key: str, default: Any) -> Any:
@@ -3451,7 +3454,7 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
         elif name == "bevel":
             amount = float(resolve_op_value(op, "amount", 0.05))
             seg = int(resolve_op_value(op, "segments", 1))
-            ker_mesh = kernel_op_bevel(obj, env, amount, seg)
+            ker_mesh = kernel_op_bevel(obj, env, amount, seg, kernel_default)
             if ker_mesh is not None:
                 record_kernel_event(obj, "op:bevel")
                 out = ker_mesh
@@ -3566,6 +3569,11 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject]) -> Mesh:
             # In this stdlib executor, volume conversion is approximated by keeping
             # current mesh output from previous ops (e.g., voxelize/sdf_tubes).
             pass
+        elif name == "material":
+            # Material operation: apply material preset to object
+            material_name = str(op.get("name", ""))
+            if material_name:
+                obj.meta["material"] = material_name
     return out
 
 
@@ -3900,6 +3908,13 @@ def execute_scene(scene: Scene) -> Scene:
         if t.startswith("#@kernel_default:"):
             kernel_default = t.split(":", 1)[1].strip().lower()
             break
+        elif t.startswith("#@material_preset:"):
+            preset_line = t.split(":", 1)[1].strip()
+            parts = preset_line.split()
+            if parts:
+                name = parts[0]
+                params = parse_key_values(" ".join(parts[1:]))
+                scene.materials[name] = params
     normalize_misplaced_assembly_anchors(scene)
     order = topological_objects(scene.objects, obn)
     for obj in order:
@@ -3932,7 +3947,7 @@ def execute_scene(scene: Scene) -> Scene:
         else:
             base = obj.mesh.copy()
 
-        obj.mesh = apply_ops(base, obj, obn)
+        obj.mesh = apply_ops(base, obj, obn, kernel_default)
 
     apply_attach_constraints(scene)
 
@@ -3945,6 +3960,10 @@ def serialize_scene(scene: Scene) -> str:
     # Remove trailing empty lines from header
     while lines and not lines[-1].strip():
         lines.pop()
+    # Output material presets
+    for name, params in scene.materials.items():
+        param_str = " ".join([f"{k}={v}" for k, v in params.items()])
+        lines.append(f"#@material_preset: {name} {param_str}")
     global_index = 1
     first_object = True
 
@@ -3961,6 +3980,10 @@ def serialize_scene(scene: Scene) -> str:
         lines.append(f"{obj.declaration} {obj.name}")
         # Filter out old runtime debug messages
         lines.extend([l for l in obj.meta_lines if not l.strip().startswith("#@runtime:")])
+        # Add material metadata if present
+        material_name = obj.meta.get("material")
+        if material_name and material_name in scene.materials:
+            lines.append(f"#@material: {material_name}")
         events = obj.meta.get("_kernel_events", [])
         if isinstance(events, list) and events:
             lines.append(f"#@runtime: kernel_used=true, events={events}")

@@ -523,7 +523,12 @@ f 90 81 161 170`
 	</div>
 
 	{#if statusLine}
-		<div class="planner-status" role="status">{statusLine}</div>
+		<details class="planner-status" open>
+			<summary class="planner-status-header">
+				<span class="planner-status-label">Executor Status</span>
+			</summary>
+			<div class="planner-status-content">{statusLine}</div>
+		</details>
 	{/if}
 
 	<div class="planner-chat-input-shell">
@@ -616,6 +621,60 @@ f 90 81 161 170`
 	}
 
 	.planner-chat-msg-text {
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.planner-status {
+		max-height: 200px;
+		overflow-y: auto;
+		margin-bottom: 4px;
+		border: 1px solid #e2e8f0;
+		border-radius: 12px;
+		background: white;
+		font-size: 12px;
+		line-height: 1.4;
+		width: 100%;
+		box-sizing: border-box;
+	}
+
+	.planner-status-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		box-sizing: border-box;
+		padding: 10px 12px;
+		border: none;
+		background: white;
+		cursor: pointer;
+		font-size: 12px;
+		font-weight: 600;
+		color: #334155;
+		transition: background 0.15s;
+		list-style: none;
+	}
+
+	.planner-status-header:hover {
+		background: #f8fafc;
+	}
+
+	.planner-status[open] .planner-status-header {
+		background: #f1f5f9;
+		border-bottom: 1px solid #e2e8f0;
+		border-radius: 6px 6px 0 0;
+	}
+
+	.planner-status-header::-webkit-details-marker {
+		display: none;
+	}
+
+	.planner-status-label {
+		text-transform: capitalize;
+	}
+
+	.planner-status-content {
+		padding: 8px 12px 12px;
 		white-space: pre-wrap;
 		word-break: break-word;
 	}

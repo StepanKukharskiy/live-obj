@@ -158,7 +158,7 @@
 		});
 		group.traverse((o: THREE.Object3D) => {
 			if (!(o instanceof THREE.Mesh)) return;
-			if (!hasPerObjectMaterials && !hasMultipleNamedObjects) {
+			if (!hasPerObjectMaterials && !hasMultipleNamedObjects && !hasMetadataMaterialTags) {
 				o.material = fallbackMat;
 				return;
 			}
@@ -406,7 +406,15 @@
 		bind:fogColor
 		bind:cameraFov
 		bind:toneMappingExposure
-		onLiveObjMetadataChange={(updatedText) => void regenerateFromMetadata(updatedText)}
+		onLiveObjMetadataChange={async (updatedText) => {
+			sourceApplyBusy = true;
+			statusLine = null;
+			try {
+				await regenerateFromMetadata(updatedText);
+			} finally {
+				sourceApplyBusy = false;
+			}
+		}}
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
 		onSend={(p) => void sendPrompt(p)}
 		onCaptureSceneScreenshot={captureSceneScreenshot}

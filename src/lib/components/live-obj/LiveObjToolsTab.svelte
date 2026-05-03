@@ -631,16 +631,6 @@
 		}
 	];
 
-	function toggleCategory(categoryName: string) {
-		const newSet = new Set(expandedCategories);
-		if (newSet.has(categoryName)) {
-			newSet.delete(categoryName);
-		} else {
-			newSet.add(categoryName);
-		}
-		expandedCategories = newSet;
-	}
-
 	function expandAll() {
 		expandedCategories = new Set(categories.map((c) => c.name));
 	}
@@ -669,67 +659,48 @@
 
 	<div class="tools-categories">
 		{#each categories as category (category.name)}
-			<div class="tools-category">
-				<button
-					type="button"
-					class="tools-category-header"
-					class:expanded={expandedCategories.has(category.name)}
-					onclick={() => toggleCategory(category.name)}
-				>
+			<details class="tools-category" open={expandedCategories.has(category.name)} ontoggle={(e) => {
+				const details = e.currentTarget as HTMLDetailsElement;
+				if (details.open) {
+					expandedCategories = new Set([...expandedCategories, category.name]);
+				} else {
+					expandedCategories = new Set([...expandedCategories].filter(n => n !== category.name));
+				}
+			}}>
+				<summary class="tools-category-header">
 					<span class="tools-category-title">{category.name}</span>
-					<span class="tools-category-toggle">{expandedCategories.has(category.name) ? '▼' : '▶'}</span>
-				</button>
+					<span class="tools-category-toggle">▶</span>
+				</summary>
 
-				{#if expandedCategories.has(category.name)}
-					<div class="tools-category-content">
-						{#each category.operations as op (op.name)}
-							<div class="tools-operation">
-								<h3 class="tools-operation-name">{op.name}</h3>
-								<p class="tools-operation-description">{op.description}</p>
-								{#if op.params.length > 0}
-									<div class="tools-params">
-										<h4 class="tools-params-title">Parameters:</h4>
-										{#each op.params as param (param.name)}
-											<div class="tools-param">
-												<code class="tools-param-name">{param.name}</code>
-												<span class="tools-param-type">({param.type})</span>
-												<span class="tools-param-desc">: {param.description}</span>
-												{#if param.default}
-													<span class="tools-param-default"> = {param.default}</span>
-												{/if}
-											</div>
-										{/each}
-									</div>
-								{/if}
-								{#if op.examples && op.examples.length > 0}
-									{#each op.examples as ex (ex.label)}
-										<div class="tools-example">
-											<div class="tools-example-header">
-												<h4 class="tools-example-title">{ex.label}:</h4>
-												<button
-													type="button"
-													class="tools-copy-btn"
-													onclick={() => copyToClipboard(ex.code)}
-													title="Copy to clipboard"
-												>
-													<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-														<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-														<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-													</svg>
-												</button>
-											</div>
-											<pre class="tools-example-code">{ex.code}</pre>
+				<div class="tools-category-content">
+					{#each category.operations as op (op.name)}
+						<div class="tools-operation">
+							<h3 class="tools-operation-name">{op.name}</h3>
+							<p class="tools-operation-description">{op.description}</p>
+							{#if op.params.length > 0}
+								<div class="tools-params">
+									<h4 class="tools-params-title">Parameters:</h4>
+									{#each op.params as param (param.name)}
+										<div class="tools-param">
+											<code class="tools-param-name">{param.name}</code>
+											<span class="tools-param-type">({param.type})</span>
+											<span class="tools-param-desc">: {param.description}</span>
+											{#if param.default}
+												<span class="tools-param-default"> = {param.default}</span>
+											{/if}
 										</div>
 									{/each}
-								{/if}
-								{#if op.example && !op.examples}
+								</div>
+							{/if}
+							{#if op.examples && op.examples.length > 0}
+								{#each op.examples as ex (ex.label)}
 									<div class="tools-example">
 										<div class="tools-example-header">
-											<h4 class="tools-example-title">Example:</h4>
+											<h4 class="tools-example-title">{ex.label}:</h4>
 											<button
 												type="button"
 												class="tools-copy-btn"
-												onclick={() => copyToClipboard(op.example || '')}
+												onclick={() => copyToClipboard(ex.code)}
 												title="Copy to clipboard"
 											>
 												<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -738,14 +709,33 @@
 												</svg>
 											</button>
 										</div>
+										<pre class="tools-example-code">{ex.code}</pre>
+									</div>
+								{/each}
+							{/if}
+							{#if op.example && !op.examples}
+								<div class="tools-example">
+									<div class="tools-example-header">
+										<h4 class="tools-example-title">Example:</h4>
+										<button
+											type="button"
+											class="tools-copy-btn"
+											onclick={() => copyToClipboard(op.example || '')}
+											title="Copy to clipboard"
+										>
+											<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+												<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+												<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+											</svg>
+										</button>
+										</div>
 										<pre class="tools-example-code">{op.example}</pre>
 									</div>
 								{/if}
 							</div>
 						{/each}
 					</div>
-				{/if}
-			</div>
+				</details>
 		{/each}
 	</div>
 </div>
@@ -823,16 +813,22 @@
 		font-weight: 600;
 		color: #334155;
 		transition: background 0.15s;
+		list-style: none;
+		box-sizing: border-box;
 	}
 
 	.tools-category-header:hover {
 		background: #f8fafc;
 	}
 
-	.tools-category-header.expanded {
+	.tools-category[open] .tools-category-header {
 		background: #f1f5f9;
 		border-bottom: 1px solid #e2e8f0;
 		border-radius: 6px 6px 0 0;
+	}
+
+	.tools-category-header::-webkit-details-marker {
+		display: none;
 	}
 
 	.tools-category-title {
