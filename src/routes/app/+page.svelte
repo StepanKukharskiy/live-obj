@@ -247,8 +247,11 @@
 		await regenerateFromMetadata(liveObj);
 	}
 
-	async function sendPrompt(payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) {
-		const { text, model, useProcedural = true, imageDataUrl } = payload;
+	let providerSettings = $state({ provider: 'openai', apiKey: '', apiUrl: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5' });
+
+	async function sendPrompt(payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) {
+		const { text, useProcedural = true, imageDataUrl } = payload;
+		const model = providerSettings.textModel?.trim() || 'gpt-5.5';
 		if ((!text.trim() && !imageDataUrl) || busy) return;
 		statusLine = null;
 		busy = true;
@@ -416,6 +419,7 @@
 			}
 		}}
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
+		bind:providerSettings
 		onSend={(p) => void sendPrompt(p)}
 		onCaptureSceneScreenshot={captureSceneScreenshot}
 		onLaunchObjExample={launchObjExample}

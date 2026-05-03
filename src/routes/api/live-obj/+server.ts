@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import type { ChatCompletionMessage } from '$lib/server/llm/chat';
 import { DEFAULT_LIVE_OBJ_MODEL, requestLiveObjFromLlm } from '$lib/server/llm/liveObjChat';
+import { withLlmRequestOverrides } from '$lib/server/llm/chat';
 import { expandLiveObjWithExecutor, stripCodeFences } from '$lib/server/liveObj/pipeline';
 
 type WireHistoryItem = {
@@ -15,6 +16,8 @@ type Body = {
 	imageUrl?: string;
 	history?: WireHistoryItem[];
 	model?: string;
+	apiKey?: string;
+	apiUrl?: string;
 	useProcedural?: boolean;
 	kernelDefault?: 'auto' | 'cadquery';
 };
@@ -166,8 +169,13 @@ export const POST: RequestHandler = async ({ request }) => {
 	const history: ChatCompletionMessage[] = wireHistoryToMessages(rawHistory);
 
 	let rawLlm: string;
+	const reqApiKey = body.apiKey?.trim() || undefined;
+	const reqApiUrl = body.apiUrl?.trim() || undefined;
 	try {
-		rawLlm = await requestLiveObjFromLlm(userMessage, history, model, { imageDataUrl: imageUrl, useProcedural });
+		rawLlm = await withLlmRequestOverrides(
+			reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
+			() => requestLiveObjFromLlm(userMessage, history, model, { imageDataUrl: imageUrl, useProcedural })
+		);
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		throw error(502, `LLM failed: ${message}`);
@@ -212,10 +220,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (issues.length > 0) {
 		const correctionPrompt = buildCorrectionPrompt(issues);
 		try {
-			const correctedRaw = await requestLiveObjFromLlm(
-				correctionPrompt,
-				[...history, { role: 'assistant', content: correctedLiveObj }],
-				model
+			const correctedRaw = await withLlmRequestOverrides(
+				reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
+				() =>
+					requestLiveObjFromLlm(
+						correctionPrompt,
+						[...history, { role: 'assistant', content: correctedLiveObj }],
+						model
+					)
 			);
 			const retryLiveObj = stripCodeFences(correctedRaw);
 			try {
