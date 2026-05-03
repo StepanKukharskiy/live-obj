@@ -62,9 +62,9 @@ function deriveImagesApiUrl(
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string };
+	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; imageModel?: string };
 	try {
-		body = (await request.json()) as { prompt?: string; screenshotDataUrl?: string; liveObjText?: string };
+		body = (await request.json()) as { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; imageModel?: string };
 	} catch {
 		throw error(400, 'Invalid JSON');
 	}
@@ -77,10 +77,18 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!screenshotDataUrl.startsWith('data:image/')) throw error(400, 'screenshotDataUrl must be an image data URL');
 
 	const { env } = await import('$env/dynamic/private');
-	const apiKey = pickString(process.env.OPENAI_API_KEY, env.OPENAI_API_KEY, process.env.DEFAULT_OPENAI_API_KEY, env.DEFAULT_OPENAI_API_KEY);
+	const requestApiKey = body.apiKey?.trim() ?? '';
+	const provider = (body.provider?.trim() || 'openai').toLowerCase();
+	const imageModel = body.imageModel?.trim() || OPENAI_IMAGE_MODEL;
+	const apiKey = pickString(requestApiKey, process.env.OPENAI_API_KEY, env.OPENAI_API_KEY, process.env.DEFAULT_OPENAI_API_KEY, env.DEFAULT_OPENAI_API_KEY);
+	const providerBaseUrl = provider === 'together'
+		? pickString(process.env.TOGETHER_API_URL, env.TOGETHER_API_URL)
+		: provider === 'google'
+			? pickString(process.env.GOOGLE_API_URL, env.GOOGLE_API_URL)
+			: pickString(process.env.OPENAI_API_URL, env.OPENAI_API_URL);
 	const imagesApiUrl = deriveImagesApiUrl(
 		pickString(process.env.OPENAI_IMAGES_API_URL, env.OPENAI_IMAGES_API_URL),
-		pickString(process.env.OPENAI_API_URL, env.OPENAI_API_URL)
+		providerBaseUrl
 	);
 	if (!apiKey) throw error(500, 'OPENAI_API_KEY is not configured');
 
@@ -88,7 +96,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const fullPrompt = `${prompt}\n\nUse this scene metadata as a hard constraint for objects, materials, and structure:\n${sceneMetadata || '(no #@ metadata found)'}`;
 
 	const form = new FormData();
-	form.append('model', OPENAI_IMAGE_MODEL);
+	form.append('model', imageModel);
 	form.append('prompt', fullPrompt);
 	form.append('image', dataUrlToBlob(screenshotDataUrl), 'scene-screenshot.jpg');
 
@@ -139,7 +147,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					'Content-Type': 'application/json'
 				},
 				body: JSON.stringify({
-					model: OPENAI_IMAGE_MODEL,
+					model: imageModel,
 					prompt: fullPrompt,
 					image: dataUrlToBase64Payload(screenshotDataUrl)
 				})

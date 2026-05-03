@@ -5,10 +5,11 @@
 	import LiveObjToolsTab from './LiveObjToolsTab.svelte';
 	import LiveObjSceneTab from './LiveObjSceneTab.svelte';
 	import LiveObjRenderTab from './LiveObjRenderTab.svelte';
+	import LiveObjProviderTab from './LiveObjProviderTab.svelte';
 	import type { SourceTab } from './LiveObjOutputTab.svelte';
 
 	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
-	type PanelTab = 'chat' | 'adjust' | 'tools' | 'scene' | 'render';
+	type PanelTab = 'chat' | 'provider' | 'adjust' | 'tools' | 'scene' | 'render';
 
 	let {
 		showPanel = $bindable(true),
@@ -42,7 +43,8 @@
 		toneMappingExposure = $bindable(1),
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
-		onSend,
+		providerSettings = $bindable({ provider: 'openai', apiKey: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }),
+	onSend,
 		onCaptureSceneScreenshot,
 		onLaunchObjExample,
 		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery')
@@ -78,7 +80,8 @@
 		toneMappingExposure?: number;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
-		onSend?: (payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
+		providerSettings?: { provider: string; apiKey: string; textModel: string; imageModel: string; rememberMe: boolean };
+	onSend?: (payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
 		onCaptureSceneScreenshot?: () => string;
 		onLaunchObjExample?: (liveObj: string) => void;
 		kernelDefault?: 'auto' | 'cadquery';
@@ -108,6 +111,7 @@
 			</header>
 			<div class="planner-tabs" role="tablist" aria-label="Panel tabs">
 				<button type="button" class:active={activeTab === 'chat'} onclick={() => (activeTab = 'chat')}>Chat</button>
+				<button type="button" class:active={activeTab === 'provider'} onclick={() => (activeTab = 'provider')}>Provider</button>
 				<button type="button" class:active={activeTab === 'adjust'} onclick={() => (activeTab = 'adjust')}>Adjust</button>
 				<button type="button" class:active={activeTab === 'tools'} onclick={() => (activeTab = 'tools')}>Tools</button>
 				<button type="button" class:active={activeTab === 'scene'} onclick={() => (activeTab = 'scene')}>Scene</button>
@@ -120,6 +124,8 @@
 		>
 			{#if activeTab === 'chat'}
 				<LiveObjChatTab {msgs} {busy} {statusLine} {onSend} {onLaunchObjExample} />
+			{:else if activeTab === 'provider'}
+				<LiveObjProviderTab bind:settings={providerSettings} {busy} />
 			{:else if activeTab === 'adjust'}
 				<LiveObjAdjustTab
 					bind:sourceTab

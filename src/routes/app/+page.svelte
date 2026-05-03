@@ -4,6 +4,8 @@
 	import Canvas3D from '$lib/components/Canvas3D.svelte';
 	import LiveObjSidePanel from '$lib/components/live-obj/LiveObjSidePanel.svelte';
 	import type { SourceTab } from '$lib/components/live-obj/LiveObjOutputTab.svelte';
+	import { browser } from '$app/environment';
+	import { onMount } from 'svelte';
 
 	type ChatMsg = {
 		role: 'user' | 'assistant';
@@ -247,8 +249,31 @@
 		await regenerateFromMetadata(liveObj);
 	}
 
-	async function sendPrompt(payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) {
-		const { text, model, useProcedural = true, imageDataUrl } = payload;
+	const PROVIDER_SETTINGS_KEY = 'live-obj-provider-settings-v1';
+	let providerSettings = $state({ provider: 'openai', apiKey: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false });
+
+	onMount(() => {
+		if (!browser) return;
+		try {
+			const raw = localStorage.getItem(PROVIDER_SETTINGS_KEY);
+			if (!raw) return;
+			const parsed = JSON.parse(raw) as typeof providerSettings;
+			providerSettings = { ...providerSettings, ...parsed, rememberMe: true };
+		} catch {}
+	});
+
+	$effect(() => {
+		if (!browser) return;
+		if (providerSettings.rememberMe) {
+			localStorage.setItem(PROVIDER_SETTINGS_KEY, JSON.stringify(providerSettings));
+		} else {
+			localStorage.removeItem(PROVIDER_SETTINGS_KEY);
+		}
+	});
+
+	async function sendPrompt(payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) {
+		const { text, useProcedural = true, imageDataUrl } = payload;
+		const model = providerSettings.textModel?.trim() || 'gpt-5.5';
 		if ((!text.trim() && !imageDataUrl) || busy) return;
 		statusLine = null;
 		busy = true;
@@ -282,6 +307,8 @@
 					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
 					history,
 					model,
+					provider: providerSettings.provider,
+					apiKey: providerSettings.apiKey?.trim() || undefined,
 					useProcedural,
 					kernelDefault
 				})
@@ -416,6 +443,7 @@
 			}
 		}}
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
+		bind:providerSettings
 		onSend={(p) => void sendPrompt(p)}
 		onCaptureSceneScreenshot={captureSceneScreenshot}
 		onLaunchObjExample={launchObjExample}
