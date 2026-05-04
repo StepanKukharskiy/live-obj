@@ -213,6 +213,9 @@ o cube
 		if (!updatedLiveObj.trim()) return;
 		statusLine = null;
 		const sceneWithKernel = applyKernelDefaultHeader(updatedLiveObj);
+		console.log('[regenerateFromMetadata] Calling executor with updated Live OBJ');
+		console.log('[regenerateFromMetadata] Updated Live OBJ length:', updatedLiveObj.length);
+		console.log('[regenerateFromMetadata] Scene with kernel length:', sceneWithKernel.length);
 		try {
 			const res = await fetch('/api/live-obj/execute', {
 				method: 'POST',
@@ -225,11 +228,16 @@ o cube
 				liveObj?: string;
 				executedObj?: string;
 			};
+			console.log('[regenerateFromMetadata] Executor response status:', res.status);
+			console.log('[regenerateFromMetadata] Payload keys:', Object.keys(payload));
 			if (!res.ok) throw new Error(payload.detail || payload.message || res.statusText || 'Metadata regeneration failed');
 			liveObjText = payload.liveObj ?? sceneWithKernel;
 			executedObjText = payload.executedObj ?? '';
 			sourceTab = 'executed';
 			sceneEpoch += 1;
+			console.log('[regenerateFromMetadata] Updated liveObjText length:', liveObjText.length);
+			console.log('[regenerateFromMetadata] Updated executedObjText length:', executedObjText.length);
+			console.log('[regenerateFromMetadata] sceneEpoch incremented to:', sceneEpoch);
 			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? sceneWithKernel);
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
