@@ -14,6 +14,7 @@
 	} = $props();
 
 	const splitTopLevel = (raw: string): string[] => {
+		if (typeof raw !== 'string') return [];
 		const out: string[] = [];
 		let buf = '';
 		let depth = 0;
@@ -85,19 +86,19 @@
 			const objectMatch = line.match(/^o\s+(.+)$/);
 			if (objectMatch) {
 				flushActive();
-				activeObject = objectMatch[1].trim();
+				activeObject = objectMatch[1]?.trim() ?? null;
 				activeParams = null;
 				activeSdfMeshParams = null;
 				continue;
 			}
 			if (!activeObject) continue;
 			const paramsMatch = line.match(/^#@params:\s*(.+)$/);
-			if (paramsMatch) {
+			if (paramsMatch && typeof paramsMatch[1] === 'string') {
 				activeParams = parseParams(paramsMatch[1]);
 				continue;
 			}
 				const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
-				if (sdfMeshMatch) {
+				if (sdfMeshMatch && typeof sdfMeshMatch[1] === 'string') {
 					activeSdfMeshParams = {
 						...(activeSdfMeshParams ?? {}),
 						...parseParams(sdfMeshMatch[1])
@@ -105,7 +106,7 @@
 					continue;
 				}
 				const sdfGenericMatch = line.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
-				if (sdfGenericMatch) {
+				if (sdfGenericMatch && typeof sdfGenericMatch[2] === 'string') {
 					const cmd = sdfGenericMatch[1];
 					const parsed = parseParams(sdfGenericMatch[2]);
 					if (Object.keys(parsed).length > 0) {
@@ -140,7 +141,7 @@
 			if (activeObject !== objectId) continue;
 			if (source === 'params') {
 				const paramsMatch = trimmed.match(/^#@params:\s*(.+)$/);
-				if (!paramsMatch) continue;
+				if (!paramsMatch || typeof paramsMatch[1] !== 'string') continue;
 				const parsed = parseParams(paramsMatch[1]);
 				parsed[key] = value.trim();
 				lines[i] = `#@params: ${serializeParams(parsed)}`;
@@ -148,7 +149,7 @@
 			}
 			if (source === 'sdf_mesh_from_sdf') {
 				const sdfMeshMatch = trimmed.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
-				if (!sdfMeshMatch) continue;
+				if (!sdfMeshMatch || typeof sdfMeshMatch[1] !== 'string') continue;
 				const parsed = parseParams(sdfMeshMatch[1]);
 				parsed[key] = value.trim();
 				lines[i] = `#@ - mesh_from_sdf ${serializeParams(parsed)}`;
@@ -160,7 +161,7 @@
 				const dot = key.indexOf('.');
 				const rawKey = dot > 0 ? key.slice(dot + 1) : key;
 				const sdfCmdMatch = trimmed.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
-				if (!sdfCmdMatch || sdfCmdMatch[1] !== cmd) continue;
+				if (!sdfCmdMatch || sdfCmdMatch[1] !== cmd || typeof sdfCmdMatch[2] !== 'string') continue;
 				const parsed = parseParams(sdfCmdMatch[2]);
 				parsed[rawKey] = value.trim();
 				lines[i] = `#@ - ${cmd} ${serializeParams(parsed)}`;
