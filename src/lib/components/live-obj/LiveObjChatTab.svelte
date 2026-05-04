@@ -159,7 +159,7 @@ o treads
 #@parent: spiral_staircase_01
 #@source: procedural
 #@type: mesh
-#@params: generator=helix_array, count=18, turns=1.5, height=3.2, radius=0.665, base_size=[0.97,0.2089,0.07], center=[0,0,0]
+#@params: generator=helix_array, count=parent.step_count, turns=parent.turns, height=parent.stair_height, radius=(parent.outer_radius+parent.inner_radius)/2, base_size=[parent.outer_radius-parent.inner_radius,(parent.outer_radius+parent.inner_radius)/2*3.14159*parent.turns/parent.step_count,parent.tread_thickness], center=[0,0,0]
 #@ops:
 #@ - material name=warm_oak
 #@ - tag value=structural
@@ -170,7 +170,7 @@ o balusters
 #@parent: spiral_staircase_01
 #@source: procedural
 #@type: mesh
-#@params: generator=spiral_post_array, count=18, turns=1.5, height=3.2, radius=1.15, post_radius=0.025, post_height=0.92, start_z=0.07, center=[0,0,0]
+#@params: generator=spiral_post_array, count=parent.step_count, turns=parent.turns, height=parent.stair_height, radius=parent.outer_radius, post_radius=parent.baluster_radius, post_height=parent.rail_height, start_z=parent.tread_thickness, center=[0,0,0]
 #@ops:
 #@ - bevel amount=0.006 segments=2
 #@ - material name=brushed_steel
@@ -182,7 +182,7 @@ o handrail_curve
 #@parent: spiral_staircase_01
 #@source: procedural
 #@type: curve
-#@params: kind=helix, radius=1.15, height=3.2, turns=1.5, z_offset=0.99, segments=144, center=[0,0,0]
+#@params: kind=helix, radius=parent.outer_radius, height=parent.stair_height, turns=parent.turns, z_offset=parent.rail_height, segments=parent.step_count*8, center=[0,0,0]
 #@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
 #@ops:
 #@ - tag value=structural
@@ -191,7 +191,7 @@ o handrail
 #@parent: spiral_staircase_01
 #@source: procedural
 #@type: sweep
-#@params: profile=circle, radius=0.045, along=handrail_curve, segments=24
+#@params: profile=circle, radius=parent.handrail_radius, along=handrail_curve, segments=24
 #@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
 #@ops:
 #@ - material name=matte_black_steel

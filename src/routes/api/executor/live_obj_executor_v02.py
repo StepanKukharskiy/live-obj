@@ -355,6 +355,20 @@ def _eval_ast_safe(
         if isinstance(w, (int, float)):
             return float(w)
         raise TypeError(f"parameter {node.id!r} is not numeric")
+    if isinstance(node, ast.Attribute):
+        # Support parent.param_name syntax
+        if isinstance(node.value, ast.Name) and node.value.id == "parent":
+            parent_obj = obn.get(env.get("_parent", ""))
+            if parent_obj is None:
+                raise KeyError(f"parent object not found")
+            parent_params = parent_obj.meta.get("params", {})
+            if node.attr not in parent_params:
+                raise KeyError(f"parent parameter {node.attr!r} not found")
+            val = parent_params[node.attr]
+            if isinstance(val, (int, float)):
+                return float(val)
+            raise TypeError(f"parent parameter {node.attr!r} is not numeric")
+        raise ValueError("only parent.param_name attribute references are supported")
     if isinstance(node, ast.UnaryOp):
         v = _eval_ast_safe(node.operand, env, obn)
         if isinstance(node.op, ast.USub):
@@ -588,6 +602,10 @@ def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[st
     for anc in reversed(lineage):
         if str(anc.meta.get("source", "")) == "assembly":
             base = {**base, **assembly_params_eval_env(anc.meta.get("params") or {}, obn)}
+
+    # Add parent reference for child objects to access parent parameters via parent.param_name
+    if obj.meta.get("parent") and str(obj.meta.get("parent")) in obn:
+        base["_parent"] = str(obj.meta.get("parent"))
 
     raw = obj.meta.get("params") or {}
     merged: Dict[str, Any] = {}
