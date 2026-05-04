@@ -161,7 +161,6 @@ o treads
 #@type: mesh
 #@params: generator=spiral_treads, count=18, turns=1.5, height=3.2, inner_radius=0.18, outer_radius=1.15, tread_thickness=0.07, tread_angle=18, tread_depth=0.72, center=[0,0,0]
 #@ops:
-#@ - bevel amount=0.025 segments=3
 #@ - material name=warm_oak
 #@ - tag value=structural
 #@ - collision proxy=mesh
