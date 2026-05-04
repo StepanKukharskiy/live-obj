@@ -1,11 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-const sveltekitPrivateEnvPromise: Promise<Record<string, string | undefined> | null> = import(
-	'$env/dynamic/private'
-)
-	.then(({ env }) => env)
-	.catch(() => null);
-
 /** OpenAI-compatible multimodal parts for chat completions (vision). */
 export type ChatContentPart =
 	| { type: 'text'; text: string }
@@ -158,14 +152,6 @@ function openAiModelRequiresDefaultTemperatureOnly(model: string): boolean {
 	return false;
 }
 
-function parseFallbackModelList(value: string | undefined): string[] {
-	if (!value) return [];
-	return value
-		.split(',')
-		.map((entry) => entry.trim())
-		.filter(Boolean);
-}
-
 function buildCompletionRequestPayload(input: {
 	apiUrl: string;
 	model: string;
@@ -204,37 +190,18 @@ function pickString(...candidates: Array<string | undefined>): string {
 }
 
 async function resolveProviderApiKeys(): Promise<{ togetherApiKey: string; openAiApiKey: string }> {
-	const privateEnv = await sveltekitPrivateEnvPromise;
 	return {
-		togetherApiKey: pickString(process.env.API_KEY, privateEnv?.API_KEY),
-		openAiApiKey: pickString(
-			process.env.OPENAI_API_KEY,
-			privateEnv?.OPENAI_API_KEY,
-			process.env.DEFAULT_OPENAI_API_KEY,
-			privateEnv?.DEFAULT_OPENAI_API_KEY
-		)
+		togetherApiKey: '',
+		openAiApiKey: ''
 	};
 }
 
 async function resolveDefaultLlmConfig(): Promise<Required<LlmRequestOverrides>> {
-	const privateEnv = await sveltekitPrivateEnvPromise;
 	const providerKeys = await resolveProviderApiKeys();
 	return {
 		apiKey: pickString(providerKeys.togetherApiKey, providerKeys.openAiApiKey),
-		apiUrl: pickString(
-			process.env.API_URL,
-			process.env.OPENAI_API_URL,
-			privateEnv?.API_URL,
-			privateEnv?.OPENAI_API_URL,
-			DEFAULT_OPENAI_API_URL
-		),
-		model: pickString(
-			process.env.MODEL,
-			process.env.OPENAI_MODEL,
-			privateEnv?.MODEL,
-			privateEnv?.OPENAI_MODEL,
-			DEFAULT_OPENAI_MODEL
-		)
+		apiUrl: DEFAULT_OPENAI_API_URL,
+		model: DEFAULT_OPENAI_MODEL
 	};
 }
 
@@ -272,16 +239,14 @@ export async function requestChatCompletion({
 			: providerKeys.togetherApiKey || providerKeys.openAiApiKey || defaultConfig.apiKey);
 	const configuredModel = requestOverrides?.model ?? defaultConfig.model;
 	if (!apiKey) {
-		throw new Error(
-			'No LLM API key on server. Set OPENAI_API_KEY (or API_KEY for non-OpenAI URLs) in `.env` with no spaces around `=`, and restart the dev server. For OpenAI, use OPENAI_API_KEY and OPENAI_API_URL (or rely on the default https://api.openai.com/v1/chat/completions).'
-		);
+		throw new Error('No LLM API key provided. Please provide an API key in the provider settings.');
 	}
 	if (!apiUrl) {
-		throw new Error('API URL not configured (OPENAI_API_URL or API_URL)');
+		throw new Error('API URL not configured');
 	}
 
 	const fallbackModels = isOpenAiApiUrl(apiUrl)
-		? parseFallbackModelList(process.env.OPENAI_FALLBACK_MODELS)
+		? []
 		: TOGETHER_FALLBACK_MODELS;
 
 	let lastError: Error | null = null;

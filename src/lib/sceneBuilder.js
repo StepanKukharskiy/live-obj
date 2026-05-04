@@ -43,11 +43,8 @@ export function setupLighting(scene) {
 export function createDefaultObjects(scene) {
 	const gridHelper = new THREE.GridHelper(20, 20, 0x888888, 0xcccccc);
 	const axesHelper = new THREE.AxesHelper(2);
-	const geo = new THREE.BoxGeometry(1, 1, 1);
-	const mat = new THREE.MeshStandardMaterial({ color: 0x4488ff });
-	const cube = new THREE.Mesh(geo, mat);
-	scene.add(gridHelper, axesHelper, cube);
-	return { gridHelper, axesHelper, cube };
+	scene.add(gridHelper, axesHelper);
+	return { gridHelper, axesHelper };
 }
 
 export function setupControls(camera, renderer) {

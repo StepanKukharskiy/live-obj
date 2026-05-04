@@ -432,7 +432,6 @@
 		if (renderObject) {
 			mountedRenderObject = renderObject;
 			scene.add(mountedRenderObject);
-			if (objects?.cube) objects.cube.visible = false;
 			const bounds = new THREE.Box3().setFromObject(mountedRenderObject);
 			if (autoFrameOnObjectChange && !bounds.isEmpty() && framedRenderObject !== renderObject) {
 				const center = bounds.getCenter(new THREE.Vector3());
@@ -451,9 +450,6 @@
 				controls?.update();
 				framedRenderObject = renderObject;
 			}
-		} else if (objects?.cube) {
-			objects.cube.visible = true;
-			framedRenderObject = null;
 		}
 
 		// New mesh must pick up current objectColor / wireframe even if those props did not change.
@@ -687,12 +683,6 @@
 		// Update controls
 		if (controls) {
 			controls.update();
-		}
-
-		// Rotate the default cube for demonstration
-		if (objects?.cube) {
-			objects.cube.rotation.x += 0.01;
-			objects.cube.rotation.y += 0.01;
 		}
 
 		// Update water animations (optimized)

@@ -4,6 +4,8 @@
 	import Canvas3D from '$lib/components/Canvas3D.svelte';
 	import LiveObjSidePanel from '$lib/components/live-obj/LiveObjSidePanel.svelte';
 	import type { SourceTab } from '$lib/components/live-obj/LiveObjOutputTab.svelte';
+	import { browser } from '$app/environment';
+	import { onMount } from 'svelte';
 
 	type ChatMsg = {
 		role: 'user' | 'assistant';
@@ -18,7 +20,13 @@
 	let statusLine = $state<string | null>(null);
 
 	let sourceTab = $state<SourceTab>('executed');
-	let liveObjText = $state('');
+	let liveObjText = $state(`#@live_obj_version: 0.1
+o cube
+#@source: procedural
+#@type: box
+#@params: center=[0,0,0], size=[1,1,1]
+#@transform: rotation=[30,30,0]
+`);
 	let rawLlmText = $state('');
 	let executedObjText = $state('');
 	let sceneEpoch = $state(0);
@@ -199,7 +207,6 @@
 		if (!updatedLiveObj.trim()) return;
 		statusLine = null;
 		const sceneWithKernel = applyKernelDefaultHeader(updatedLiveObj);
-		liveObjText = sceneWithKernel;
 		try {
 			const res = await fetch('/api/live-obj/execute', {
 				method: 'POST',
@@ -221,6 +228,8 @@
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
 			statusLine = `Metadata regenerate failed: ${m}`;
+			// On error, revert to the original edited text
+			liveObjText = sceneWithKernel;
 		}
 	}
 
@@ -247,9 +256,48 @@
 		await regenerateFromMetadata(liveObj);
 	}
 
-	async function sendPrompt(payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) {
-		const { text, model, useProcedural = true, imageDataUrl } = payload;
+	const PROVIDER_SETTINGS_KEY = 'live-obj-provider-settings-v1';
+	let providerSettings = $state({ provider: 'openai', apiKey: '', apiUrl: 'https://api.openai.com/v1/chat/completions', imageUrl: 'https://api.openai.com/v1/images/edits', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false });
+	let initialSceneBuilt = $state(false);
+
+	onMount(() => {
+		if (!browser) return;
+		try {
+			const raw = localStorage.getItem(PROVIDER_SETTINGS_KEY);
+			if (!raw) return;
+			const parsed = JSON.parse(raw) as typeof providerSettings;
+			providerSettings = { ...providerSettings, ...parsed, rememberMe: true };
+		} catch {}
+	});
+
+	// Build initial scene from Live OBJ code when canvas is ready
+	$effect(() => {
+		if (canvasRef && liveObjText && !initialSceneBuilt) {
+			initialSceneBuilt = true;
+			regenerateFromMetadata(liveObjText);
+		}
+	});
+
+	$effect(() => {
+		if (!browser) return;
+		if (providerSettings.rememberMe) {
+			localStorage.setItem(PROVIDER_SETTINGS_KEY, JSON.stringify(providerSettings));
+		} else {
+			localStorage.removeItem(PROVIDER_SETTINGS_KEY);
+		}
+	});
+
+	async function sendPrompt(payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) {
+		const { text, useProcedural = true, imageDataUrl } = payload;
+		const model = providerSettings.textModel?.trim() || 'gpt-5.5';
 		if ((!text.trim() && !imageDataUrl) || busy) return;
+
+		// Validate API key and model before generation
+		if (!providerSettings.apiKey?.trim() && !providerSettings.textModel?.trim()) {
+			statusLine = 'Please provide an API key and select a provider';
+			return;
+		}
+
 		statusLine = null;
 		busy = true;
 
@@ -282,6 +330,9 @@
 					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
 					history,
 					model,
+					provider: providerSettings.provider,
+					apiKey: providerSettings.apiKey?.trim() || undefined,
+					apiUrl: providerSettings.apiUrl?.trim() || undefined,
 					useProcedural,
 					kernelDefault
 				})
@@ -416,6 +467,7 @@
 			}
 		}}
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
+		bind:providerSettings
 		onSend={(p) => void sendPrompt(p)}
 		onCaptureSceneScreenshot={captureSceneScreenshot}
 		onLaunchObjExample={launchObjExample}

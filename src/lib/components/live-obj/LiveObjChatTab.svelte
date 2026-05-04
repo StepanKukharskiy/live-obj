@@ -400,13 +400,12 @@ f 90 81 161 170`
 		msgs?: ChatMsg[];
 		busy?: boolean;
 		statusLine?: string | null;
-		onSend?: (payload: { text: string; model: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
+		onSend?: (payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
 		onLaunchObjExample?: (liveObj: string) => void;
 	} = $props();
 
 	let input = $state('');
-	let selectedModel = $state<string>('gpt-5.5');
-	let useProcedural = $state<boolean>(true);
+		let useProcedural = $state<boolean>(true);
 	let attachedDataUrl = $state<string | undefined>(undefined);
 	let fileInputEl: HTMLInputElement | undefined = $state();
 
@@ -434,7 +433,7 @@ f 90 81 161 170`
 		const text = input.trim();
 		const img = attachedDataUrl;
 		if ((!text && !img) || busy) return;
-		onSend?.({ text, model: selectedModel, useProcedural, imageDataUrl: img });
+		onSend?.({ text, useProcedural, imageDataUrl: img });
 		input = '';
 		clearAttachment();
 	}
@@ -560,14 +559,7 @@ f 90 81 161 170`
 		></textarea>
 		<div class="planner-chat-input-toolbar">
 			<div class="planner-chat-toolbar-left">
-				<label class="planner-chat-model-label">
-					<span class="visually-hidden">Model</span>
-					<select bind:value={selectedModel} disabled={busy} class="planner-chat-model-select">
-						{#each MODEL_OPTIONS as opt (opt.value)}
-							<option value={opt.value}>{opt.label}</option>
-						{/each}
-					</select>
-				</label>
+				
 				<label class="planner-chat-procedural-label">
 					<input
 						type="checkbox"
@@ -733,30 +725,8 @@ f 90 81 161 170`
 		flex: 1;
 	}
 
-	.planner-chat-model-label {
-		margin: 0;
-		min-width: 0;
-	}
 
-	.planner-chat-model-select {
-		box-sizing: border-box;
-		max-width: 140px;
-		height: 32px;
-		font-family: inherit;
-		font-size: 12px;
-		font-weight: 600;
-		color: #333;
-		border: 1px solid rgba(0, 0, 0, 0.12);
-		border-radius: 999px;
-		padding: 0 10px;
-		background: rgba(255, 255, 255, 0.95);
-		cursor: pointer;
-	}
 
-	.planner-chat-model-select:disabled {
-		opacity: 0.55;
-		cursor: not-allowed;
-	}
 
 	.planner-chat-procedural-label {
 		margin: 0;
