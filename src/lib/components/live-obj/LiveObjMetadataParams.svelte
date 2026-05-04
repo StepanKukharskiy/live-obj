@@ -13,6 +13,9 @@
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 	} = $props();
 
+	// Ensure liveObjText is always a string
+	const safeLiveObjText = $derived(String(liveObjText ?? ''));
+
 	const splitTopLevel = (raw: string): string[] => {
 		if (typeof raw !== 'string') return [];
 		const out: string[] = [];
@@ -54,71 +57,76 @@
 
 	const parseObjects = (text: string): MetaObject[] => {
 		if (typeof text !== 'string') return [];
-		const lines = text.split(/\r?\n/);
-		const objects: MetaObject[] = [];
-		let activeObject: string | null = null;
-		let activeParams: Record<string, string> | null = null;
-		let activeSdfMeshParams: Record<string, string> | null = null;
-		const flushActive = () => {
-			if (!activeObject) return;
-			const merged: Record<string, string> = {
-				...(activeSdfMeshParams ?? {}),
-				...(activeParams ?? {})
-			};
-			if (Object.keys(merged).length === 0) return;
-			const sources: Record<string, string> = {};
-			for (const key of Object.keys(activeSdfMeshParams ?? {})) {
-				if (key.includes('.')) {
-					sources[key] = `sdf_op:${key.split('.', 1)[0]}`;
-				} else {
-					sources[key] = 'sdf_mesh_from_sdf';
+		try {
+			const lines = text.split(/\r?\n/);
+			const objects: MetaObject[] = [];
+			let activeObject: string | null = null;
+			let activeParams: Record<string, string> | null = null;
+			let activeSdfMeshParams: Record<string, string> | null = null;
+			const flushActive = () => {
+				if (!activeObject) return;
+				const merged: Record<string, string> = {
+					...(activeSdfMeshParams ?? {}),
+					...(activeParams ?? {})
+				};
+				if (Object.keys(merged).length === 0) return;
+				const sources: Record<string, string> = {};
+				for (const key of Object.keys(activeSdfMeshParams ?? {})) {
+					if (key.includes('.')) {
+						sources[key] = `sdf_op:${key.split('.', 1)[0]}`;
+					} else {
+						sources[key] = 'sdf_mesh_from_sdf';
+					}
 				}
-			}
-			for (const key of Object.keys(activeParams ?? {})) sources[key] = 'params';
-			objects.push({
-				id: activeObject,
-				params: merged,
-				paramSources: sources
-			});
-		};
-		for (let i = 0; i < lines.length; i += 1) {
-			const line = lines[i].trim();
-			const objectMatch = line.match(/^o\s+(.+)$/);
-			if (objectMatch) {
-				flushActive();
-				activeObject = objectMatch[1]?.trim() ?? null;
-				activeParams = null;
-				activeSdfMeshParams = null;
-				continue;
-			}
-			if (!activeObject) continue;
-			const paramsMatch = line.match(/^#@params:\s*(.+)$/);
-			if (paramsMatch && typeof paramsMatch[1] === 'string') {
-				activeParams = parseParams(paramsMatch[1]);
-				continue;
-			}
-				const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
-				if (sdfMeshMatch && typeof sdfMeshMatch[1] === 'string') {
-					activeSdfMeshParams = {
-						...(activeSdfMeshParams ?? {}),
-						...parseParams(sdfMeshMatch[1])
-					};
+				for (const key of Object.keys(activeParams ?? {})) sources[key] = 'params';
+				objects.push({
+					id: activeObject,
+					params: merged,
+					paramSources: sources
+				});
+			};
+			for (let i = 0; i < lines.length; i += 1) {
+				const line = lines[i].trim();
+				const objectMatch = line.match(/^o\s+(.+)$/);
+				if (objectMatch) {
+					flushActive();
+					activeObject = objectMatch[1]?.trim() ?? null;
+					activeParams = null;
+					activeSdfMeshParams = null;
 					continue;
 				}
-				const sdfGenericMatch = line.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
-				if (sdfGenericMatch && typeof sdfGenericMatch[2] === 'string') {
-					const cmd = sdfGenericMatch[1];
-					const parsed = parseParams(sdfGenericMatch[2]);
-					if (Object.keys(parsed).length > 0) {
-						activeSdfMeshParams = { ...(activeSdfMeshParams ?? {}) };
-						for (const [k, v] of Object.entries(parsed)) {
-							activeSdfMeshParams[`${cmd}.${k}`] = v;
+				if (!activeObject) continue;
+				const paramsMatch = line.match(/^#@params:\s*(.+)$/);
+				if (paramsMatch && typeof paramsMatch[1] === 'string') {
+					activeParams = parseParams(paramsMatch[1]);
+					continue;
+				}
+					const sdfMeshMatch = line.match(/^#@\s*-\s*mesh_from_sdf\s+(.+)$/);
+					if (sdfMeshMatch && typeof sdfMeshMatch[1] === 'string') {
+						activeSdfMeshParams = {
+							...(activeSdfMeshParams ?? {}),
+							...parseParams(sdfMeshMatch[1])
+						};
+						continue;
+					}
+					const sdfGenericMatch = line.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
+					if (sdfGenericMatch && typeof sdfGenericMatch[2] === 'string') {
+						const cmd = sdfGenericMatch[1];
+						const parsed = parseParams(sdfGenericMatch[2]);
+						if (Object.keys(parsed).length > 0) {
+							activeSdfMeshParams = { ...(activeSdfMeshParams ?? {}) };
+							for (const [k, v] of Object.entries(parsed)) {
+								activeSdfMeshParams[`${cmd}.${k}`] = v;
+							}
 						}
 					}
 				}
-			}
-		flushActive();
-		return objects;
+			flushActive();
+			return objects;
+		} catch (e) {
+			console.error('parseObjects error:', e);
+			return [];
+		}
 	};
 
 	const rewriteParamInLiveObj = (
@@ -172,7 +180,7 @@
 		return lines.join('\n');
 	};
 
-	const metaObjects = $derived(parseObjects(liveObjText));
+	const metaObjects = $derived(parseObjects(safeLiveObjText));
 	let selectedObjectId = $state<string | null>(null);
 	let draftValues = $state<Record<string, string>>({});
 
@@ -203,12 +211,11 @@
 
 	function commitValue(key: string, fallback: string) {
 		if (!selectedMetaObject) return;
-		if (typeof liveObjText !== 'string') return;
 		const nextValue = fieldValue(key, fallback);
 		if (nextValue === fallback) return;
 		try {
 			const updated = rewriteParamInLiveObj(
-				liveObjText,
+				safeLiveObjText,
 				selectedMetaObject.id,
 				key,
 				nextValue,
