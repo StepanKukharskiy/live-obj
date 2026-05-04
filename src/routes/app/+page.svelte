@@ -32,6 +32,12 @@ o cube
 	let sceneEpoch = $state(0);
 	let sourceApplyBusy = $state(false);
 	let kernelDefault = $state<'auto' | 'cadquery'>('cadquery');
+	let renderingMode = $state<'standard' | 'outline' | 'toon'>('standard');
+	let outlineThickness = $state(1);
+	let outlineDepthSensitivity = $state(1);
+	let outlineNormalSensitivity = $state(1);
+	let toonSteps = $state<2 | 3 | 4 | 5>(3);
+	let toonOutline = $state(true);
 	let renderObject = $state<THREE.Object3D | null>(null);
 
 	let backgroundColor = $state('#e8ebf2');
@@ -253,7 +259,12 @@ o cube
 
 	async function launchObjExample(liveObj: string) {
 		if (!liveObj.trim()) return;
-		await regenerateFromMetadata(liveObj);
+		busy = true;
+		try {
+			await regenerateFromMetadata(liveObj);
+		} finally {
+			busy = false;
+		}
 	}
 
 	const PROVIDER_SETTINGS_KEY = 'live-obj-provider-settings-v1';
@@ -406,6 +417,12 @@ o cube
 			{backgroundColor}
 			{renderObject}
 			{objectColor}
+			renderMode={renderingMode}
+			outlineThickness={outlineThickness}
+			outlineDepthSensitivity={outlineDepthSensitivity}
+			outlineNormalSensitivity={outlineNormalSensitivity}
+			toonSteps={toonSteps}
+			toonOutline={toonOutline}
 			respectObjectMaterials={preserveObjMaterials}
 			{showGrid}
 			{showAxes}
@@ -442,6 +459,12 @@ o cube
 		bind:showGrid
 		bind:showAxes
 		bind:wireframe
+		bind:renderingMode
+		bind:outlineThickness
+		bind:outlineDepthSensitivity
+		bind:outlineNormalSensitivity
+		bind:toonSteps
+		bind:toonOutline
 		bind:objectColor
 		bind:objectScale
 		bind:objectPosX

@@ -10,6 +10,7 @@
 
 	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
 	type PanelTab = 'chat' | 'provider' | 'adjust' | 'tools' | 'scene' | 'render';
+	type RenderingMode = 'standard' | 'outline' | 'toon';
 
 	let {
 		showPanel = $bindable(true),
@@ -41,6 +42,12 @@
 		fogColor = $bindable('#f8fafc'),
 		cameraFov = $bindable(50),
 		toneMappingExposure = $bindable(1),
+		renderingMode = $bindable<RenderingMode>('standard'),
+		outlineThickness = $bindable(1),
+		outlineDepthSensitivity = $bindable(1),
+		outlineNormalSensitivity = $bindable(1),
+		toonSteps = $bindable<2 | 3 | 4 | 5>(3),
+		toonOutline = $bindable(true),
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
 		providerSettings = $bindable({ provider: 'openai', apiKey: '', apiUrl: 'https://api.openai.com/v1/chat/completions', imageUrl: 'https://api.openai.com/v1/images/edits', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }),
@@ -78,13 +85,19 @@
 		fogColor?: string;
 		cameraFov?: number;
 		toneMappingExposure?: number;
+		renderingMode?: RenderingMode;
+		outlineThickness?: number;
+		outlineDepthSensitivity?: number;
+		outlineNormalSensitivity?: number;
+		toonSteps?: 2 | 3 | 4 | 5;
+		toonOutline?: boolean;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
 		providerSettings?: { provider: string; apiKey: string; apiUrl: string; imageUrl: string; textModel: string; imageModel: string; rememberMe: boolean };
 	onSend?: (payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
-		onCaptureSceneScreenshot?: () => string;
-		onLaunchObjExample?: (liveObj: string) => void;
-		kernelDefault?: 'auto' | 'cadquery';
+	onCaptureSceneScreenshot?: () => string;
+	onLaunchObjExample?: (liveObj: string) => void;
+	kernelDefault?: 'auto' | 'cadquery';
 	} = $props();
 
 	let activeTab = $state<PanelTab>('chat');
@@ -162,6 +175,12 @@
 					bind:cameraFov
 					bind:toneMappingExposure
 					bind:kernelDefault
+					bind:renderingMode
+					bind:outlineThickness
+					bind:outlineDepthSensitivity
+					bind:outlineNormalSensitivity
+					bind:toonSteps
+					bind:toonOutline
 					{executedObjText}
 				/>
 				{:else}

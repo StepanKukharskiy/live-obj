@@ -588,10 +588,14 @@
 						{ name: 'cell', type: 'float', description: 'Grid spacing', default: '0.2' },
 						{ name: 'fill', type: 'float', description: 'Initial alive probability (0..1)', default: '0.15' },
 						{ name: 'seed', type: 'int', description: 'Random seed', default: '5' },
-						{ name: 'instance', type: 'string', description: 'Primitive: sphere, box, cylinder', default: 'sphere' },
-						{ name: 'instance_scale', type: 'float', description: 'Primitive scale relative to cell', default: '0.35' }
+						{ name: 'instance', type: 'string', description: 'Primitive: sphere, box, cylinder, or object reference', default: 'sphere' },
+						{ name: 'instance_scale', type: 'float', description: 'Primitive scale relative to cell', default: '0.35' },
+						{ name: 'steps', type: 'int', description: 'CA simulation steps (0 for random fill only)', default: '0' },
+						{ name: 'birth_rules', type: 'string', description: 'Neighbor counts for birth (comma-separated, e.g. "3")', default: '3' },
+						{ name: 'survival_rules', type: 'string', description: 'Neighbor counts for survival (comma-separated, e.g. "2,3")', default: '2,3' },
+						{ name: 'rotation_step', type: 'float', description: 'Rotation per neighbor count (degrees)', default: '90' }
 					],
-					example: 'o ca_instances\n#@source: simulation\n#@sim: cellular_automata_instances\n#@params: grid=[20,20,8], cell=0.2, fill=0.15, seed=5, instance=sphere, instance_scale=0.35'
+					example: 'o ca_instances\n#@source: simulation\n#@sim: cellular_automata_instances\n#@params: grid=[20,20,8], cell=0.2, fill=0.15, seed=5, instance=sphere, instance_scale=0.35, steps=10, birth_rules=3, survival_rules=2,3, rotation_step=90'
 				},
 				{
 					name: 'differential_growth',
