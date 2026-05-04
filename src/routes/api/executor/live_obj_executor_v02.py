@@ -355,6 +355,20 @@ def _eval_ast_safe(
         if isinstance(w, (int, float)):
             return float(w)
         raise TypeError(f"parameter {node.id!r} is not numeric")
+    if isinstance(node, ast.Attribute):
+        # Support parent.param_name syntax
+        if isinstance(node.value, ast.Name) and node.value.id == "parent":
+            parent_obj = obn.get(env.get("_parent", ""))
+            if parent_obj is None:
+                raise KeyError(f"parent object not found")
+            parent_params = parent_obj.meta.get("params", {})
+            if node.attr not in parent_params:
+                raise KeyError(f"parent parameter {node.attr!r} not found")
+            val = parent_params[node.attr]
+            if isinstance(val, (int, float)):
+                return float(val)
+            raise TypeError(f"parent parameter {node.attr!r} is not numeric")
+        raise ValueError("only parent.param_name attribute references are supported")
     if isinstance(node, ast.UnaryOp):
         v = _eval_ast_safe(node.operand, env, obn)
         if isinstance(node.op, ast.USub):
@@ -588,6 +602,10 @@ def get_effective_params(obj: LiveObject, obn: Dict[str, LiveObject]) -> Dict[st
     for anc in reversed(lineage):
         if str(anc.meta.get("source", "")) == "assembly":
             base = {**base, **assembly_params_eval_env(anc.meta.get("params") or {}, obn)}
+
+    # Add parent reference for child objects to access parent parameters via parent.param_name
+    if obj.meta.get("parent") and str(obj.meta.get("parent")) in obn:
+        base["_parent"] = str(obj.meta.get("parent"))
 
     raw = obj.meta.get("params") or {}
     merged: Dict[str, Any] = {}
@@ -1550,6 +1568,29 @@ def kernel_mesh_profile_op(kernel: str, typ: str, params: Dict[str, Any], center
             return None
         return cadquery_loft_mesh(center, sections, segments)
     if typ == "curve":
+        kind = str(params.get("kind", "")).lower()
+        if kind == "helix":
+            path_r = float(params.get("radius", 1.0))
+            height = float(params.get("height", params.get("total_rise", 3.0)))
+            if params.get("turns") is not None:
+                turn = float(params["turns"]) * 2 * math.pi
+            elif params.get("total_turn_degrees") is not None:
+                turn = math.radians(float(params["total_turn_degrees"]))
+            else:
+                turn = math.radians(360.0)
+            start_z = float(params.get("z_offset", params.get("start_z", 0.0)))
+            segs = max(32, int(float(params.get("segments", 48))))
+            cx, cy, cz = center
+            mesh = Mesh()
+            pts: List[Vec3] = []
+            for i in range(segs + 1):
+                t = i / segs
+                th = turn * t
+                zz = cz + start_z + t * height
+                pts.append((cx + path_r * math.cos(th), cy + path_r * math.sin(th), zz))
+            for i in range(len(pts) - 1):
+                mesh.extend(tube_between(pts[i], pts[i + 1], 0.01, 6))
+            return mesh
         path_points = params.get("points", [])
         if not isinstance(path_points, list) or len(path_points) < 2:
             return None
@@ -2341,13 +2382,16 @@ def tube_between(a: Vec3, b: Vec3, radius: float, segments: int = 8) -> Mesh:
 def spiral_treads_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     """Wedge-like tread boxes along a rising helix (LLM spiral stair preset)."""
     count = int(params.get("count", params.get("step_count", 12)))
-    total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
-    total_h = float(params.get("total_height", 3.0))
+    if params.get("turns") is not None:
+        total_turn = float(params["turns"]) * 2 * math.pi
+    else:
+        total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
+    total_h = float(params.get("height", params.get("total_height", 3.0)))
     rise = float(params.get("rise_per_step", total_h / max(1, count)))
     r_in = float(params.get("inner_radius", 0.25))
     r_out = float(params.get("outer_radius", 1.0))
     thick = float(params.get("thickness", params.get("tread_thickness", 0.05)))
-    tread_deg = float(params.get("tread_angle_degrees", 24))
+    tread_deg = float(params.get("tread_angle", params.get("tread_angle_degrees", 24)))
     tread_ang = math.radians(max(1.0, tread_deg))
     cx, cy, cz = center
     mesh = Mesh()
@@ -2364,18 +2408,22 @@ def spiral_treads_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
         py = cy + r_mid * sr
         hx, hy, hz = radial / 2, tangential / 2, thick / 2
         corners: List[Vec3] = []
+        # Generate corners: bottom face (szgn=-1) then top face (szgn=1)
+        # Each face: 4 corners in CCW order from above: (-x,-y), (x,-y), (x,y), (-x,y)
         for szgn in (-1, 1):
             for srgn, stgn in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
                 ox = srgn * hx * cr + stgn * hy * (-sr)
                 oy = srgn * hx * sr + stgn * hy * cr
                 oz = szgn * hz
-                corners.append((px + ox, py + oy, zc + oz))
+                corner = (px + ox, py + oy, zc + oz)
+                corners.append(corner)
         base = len(mesh.vertices)
         mesh.vertices.extend(corners)
 
         def fi(*idx: int) -> Face:
             return [base + i for i in idx]
 
+        # Box faces (matching original implementation)
         mesh.faces.append(fi(0, 1, 2, 3))
         mesh.faces.append(fi(4, 7, 6, 5))
         mesh.faces.append(fi(0, 4, 5, 1))
@@ -2385,23 +2433,75 @@ def spiral_treads_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     return mesh
 
 
+def helix_array_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
+    """Copy a base mesh along a helix path."""
+    count = int(params.get("count", params.get("step_count", 12)))
+    if params.get("turns") is not None:
+        total_turn = float(params["turns"]) * 2 * math.pi
+    else:
+        total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
+    total_h = float(params.get("height", params.get("total_height", 3.0)))
+    rise = total_h / max(1, count)
+    radius = float(params.get("radius", 1.0))
+    cx, cy, cz = center
+    
+    # Get base mesh dimensions from params
+    base_size = params.get("base_size", [1.0, 1.0, 0.05])
+    base_size = [float(v) for v in (base_size if isinstance(base_size, (list, tuple)) else [base_size, base_size, base_size])]
+    
+    # Generate base mesh (simple box)
+    base_mesh = box_mesh((0, 0, 0), base_size)
+    
+    mesh = Mesh()
+    for i in range(count):
+        frac = i / max(1, count - 1) if count > 1 else 0
+        theta = total_turn * frac
+        z = cz + i * rise
+        
+        # Position on helix
+        px = cx + radius * math.cos(theta)
+        py = cy + radius * math.sin(theta)
+        pz = z
+        
+        # Rotation around Z axis (tangent to helix)
+        rot_z = theta
+        
+        # Transform: position, rotation
+        transform = {
+            "position": [px, py, pz],
+            "rotation": [0, 0, math.degrees(rot_z)],
+            "scale": [1, 1, 1]
+        }
+        
+        transformed = apply_transform(base_mesh, transform)
+        base_idx = len(mesh.vertices)
+        mesh.vertices.extend(transformed.vertices)
+        mesh.faces.extend([[base_idx + f for f in face] for face in transformed.faces])
+    
+    return mesh
+
+
 def spiral_post_array_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     """Vertical cylinders along the stair spiral at outer radius."""
     count = int(params.get("count", params.get("step_count", 12)))
-    total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
-    total_h = float(params.get("total_height", 3.0))
-    rise = float(params.get("rise_per_step", total_h / max(1, count)))
+    if params.get("turns") is not None:
+        total_turn = float(params["turns"]) * 2 * math.pi
+    else:
+        total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
+    total_h = float(params.get("height", params.get("total_height", 3.0)))
+    rise = total_h / max(1, count)
     r = float(params.get("radius", 1.0))
     post_r = float(params.get("post_radius", 0.025))
     ph = float(params.get("post_height", 0.9))
+    start_z = float(params.get("start_z", 0.0))
     cx, cy, cz = center
     mesh = Mesh()
     for i in range(count):
-        frac = (i * rise) / max(total_h, 1e-6)
+        frac = i / max(1, count - 1) if count > 1 else 0
         theta = total_turn * frac
         px = cx + r * math.cos(theta)
         py = cy + r * math.sin(theta)
-        pz = cz + i * rise
+        pz = cz + start_z + i * rise
         mesh.extend(cylinder_mesh("z", (px, py, pz + ph / 2), post_r, ph, 12))
     return mesh
 
@@ -2445,6 +2545,15 @@ def helix_sweep_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
 
     segs = max(8, int(float(params.get("segments", 48))))
     tube_seg = max(6, min(12, max(4, segs // 12)))
+    
+    # If count is provided (from spiral staircase), match the tread angle distribution
+    # Treads use frac = (i * rise) / total_h, so last tread is at (count-1)/count of turn
+    count = params.get("count")
+    if count is not None:
+        count = int(count)
+        if count > 1:
+            turn = turn * (count - 1) / count
+    
     mesh = Mesh()
     pts: List[Vec3] = []
     for i in range(segs + 1):
@@ -3920,6 +4029,8 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
             return spiral_treads_mesh(params, center)
         if gen == "spiral_post_array":
             return spiral_post_array_mesh(params, center)
+        if gen == "helix_array":
+            return helix_array_mesh(params, center)
         return obj.mesh.copy()
 
     if typ == "sweep":

@@ -210,31 +210,26 @@ o cube
 
 
 	async function regenerateFromMetadata(updatedLiveObj: string) {
-		if (!updatedLiveObj.trim()) return;
+		const text = String(updatedLiveObj ?? '');
+		if (!text.trim()) return;
 		statusLine = null;
-		const sceneWithKernel = applyKernelDefaultHeader(updatedLiveObj);
+		const sceneWithKernel = applyKernelDefaultHeader(text);
 		try {
 			const res = await fetch('/api/live-obj/execute', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ liveObj: sceneWithKernel })
 			});
-			const payload = (await res.json().catch(() => ({}))) as {
-				message?: string;
-				detail?: string;
-				liveObj?: string;
-				executedObj?: string;
-			};
+			const payload = await res.json();
 			if (!res.ok) throw new Error(payload.detail || payload.message || res.statusText || 'Metadata regeneration failed');
-			liveObjText = payload.liveObj ?? sceneWithKernel;
-			executedObjText = payload.executedObj ?? '';
+			liveObjText = String(payload.liveObj ?? sceneWithKernel);
+			executedObjText = typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.executedObj ?? '');
 			sourceTab = 'executed';
 			sceneEpoch += 1;
-			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? sceneWithKernel);
+			if (payload.executedObj) applyObjString(typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.executedObj), String(payload.liveObj ?? sceneWithKernel));
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
 			statusLine = `Metadata regenerate failed: ${m}`;
-			// On error, revert to the original edited text
 			liveObjText = sceneWithKernel;
 		}
 	}
@@ -357,10 +352,10 @@ o cube
 			};
 			if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
 
-			liveObjText = payload.liveObj ?? '';
-			rawLlmText = payload.rawLlm ?? '';
-			executedObjText = payload.executedObj ?? '';
-			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? payload.executedObj);
+			liveObjText = String(payload.liveObj ?? '');
+			rawLlmText = String(payload.rawLlm ?? '');
+			executedObjText = typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.executedObj ?? '');
+			if (payload.executedObj) applyObjString(typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.executedObj), String(payload.liveObj ?? payload.executedObj));
 			sourceTab = 'executed';
 			sceneEpoch += 1;
 

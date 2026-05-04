@@ -25,7 +25,7 @@
 
 	const emptySourceHint = '';
 
-	const meshBasis = $derived(executedObjText || liveObjText);
+	const meshBasis = $derived(String(executedObjText ?? liveObjText ?? ''));
 	let showMeshLines = $state(true);
 
 	let editorValue = $state('');
@@ -35,19 +35,19 @@
 			? stripLiveObjMeshLines(meshBasis)
 			: '';
 		if (sourceTab === 'live') {
-			const liveBody = liveObjText.trim() ? liveObjText : emptySourceHint;
+			const liveBody = String(liveObjText || '').trim() ? liveObjText : emptySourceHint;
 			return showMeshLines ? liveBody : stripLiveObjMeshLines(liveBody) || emptySourceHint;
 		}
 		if (sourceTab === 'raw') {
-			const rawBody = rawLlmText.trim() ? rawLlmText : emptySourceHint;
+			const rawBody = String(rawLlmText || '').trim() ? rawLlmText : emptySourceHint;
 			return showMeshLines ? rawBody : stripLiveObjMeshLines(rawBody) || emptySourceHint;
 		}
-		if (sourceTab === 'meta') return metaBody.trim() ? metaBody : emptySourceHint;
-		const expanded = executedObjText.trim() ? executedObjText : emptySourceHint;
+		if (sourceTab === 'meta') return String(metaBody || '').trim() ? metaBody : emptySourceHint;
+		const expanded = String(executedObjText || '').trim() ? executedObjText : emptySourceHint;
 		return showMeshLines ? expanded : stripLiveObjMeshLines(expanded) || emptySourceHint;
 	}
 
-	/** Pre-DOM so `bind:value` sees seeded text on Monaco’s first bind (avoids empty model + missed sync). */
+	/** Pre-DOM so `bind:value` sees seeded text on Monaco's first bind (avoids empty model + missed sync). */
 	$effect.pre(() => {
 		void sceneEpoch;
 		void sourceTab;
@@ -55,17 +55,18 @@
 		void rawLlmText;
 		void executedObjText;
 		void showMeshLines;
-		editorValue = seedEditor();
+		const seeded = seedEditor();
+		editorValue = String(seeded ?? '');
 	});
 
 	const editable = $derived(sourceTab !== 'meta');
 
 	function revertEditor() {
-		editorValue = seedEditor();
+		editorValue = String(seedEditor() ?? '');
 	}
 
 	function buildPayloadForExecute(): string | null {
-		let t = editorValue;
+		let t = String(editorValue || '');
 		if (!t.trim()) return null;
 		if (sourceTab === 'meta') return null;
 

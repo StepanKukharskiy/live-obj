@@ -48,6 +48,7 @@
 	let isFullscreen = $state(false);
 
 	onMount(async () => {
+		// Set up Monaco environment with workers before importing
 		self.MonacoEnvironment = {
 			getWorker: (_workerId: string, label: string) => {
 				switch (label) {
@@ -70,17 +71,23 @@
 			}
 		};
 
-		const monacoInstance = await import('monaco-editor/esm/vs/editor/editor.api');
-		await Promise.all([
-			import('monaco-editor/esm/vs/language/json/monaco.contribution'),
-			import('monaco-editor/esm/vs/language/css/monaco.contribution'),
-			import('monaco-editor/esm/vs/language/html/monaco.contribution'),
-			import('monaco-editor/esm/vs/language/typescript/monaco.contribution'),
-			import('monaco-editor/esm/vs/basic-languages/css/css.contribution'),
-			import('monaco-editor/esm/vs/basic-languages/scss/scss.contribution'),
-			import('monaco-editor/esm/vs/basic-languages/less/less.contribution')
-		]);
-		monaco = monacoInstance;
+		try {
+			const monacoInstance = await import('monaco-editor/esm/vs/editor/editor.api');
+			await Promise.all([
+				import('monaco-editor/esm/vs/language/json/monaco.contribution'),
+				import('monaco-editor/esm/vs/language/css/monaco.contribution'),
+				import('monaco-editor/esm/vs/language/html/monaco.contribution'),
+				import('monaco-editor/esm/vs/language/typescript/monaco.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/css/css.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/scss/scss.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/less/less.contribution')
+			]);
+			// Wait a tick to ensure Monaco is fully initialized
+			await tick();
+			monaco = monacoInstance;
+		} catch (e) {
+			console.error('Failed to initialize Monaco Editor:', e);
+		}
 	});
 
 	onDestroy(() => {
@@ -95,14 +102,18 @@
 	const desiredContainer = $derived(isFullscreen ? fullscreenContainer : panelContainer);
 
 	$effect(() => {
-		if (monaco && desiredContainer) {
+		if (monaco && monaco.editor && desiredContainer) {
 			recreateEditor(desiredContainer);
 		}
 	});
 
 	$effect(() => {
-		if (editor && value !== editor.getValue()) {
-			editor.setValue(value);
+		if (editor) {
+			const currentValue = editor.getValue();
+			const newValue = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '');
+			if (newValue !== currentValue) {
+				editor.setValue(newValue);
+			}
 		}
 	});
 
@@ -140,7 +151,65 @@
 		resizeObserver?.disconnect();
 		editor?.dispose();
 
-		const model = existingModel ?? monaco.editor.createModel(previousValue, language);
+		let model: Monaco.editor.ITextModel | null = existingModel;
+		if (!model) {
+			try {
+				const safeValue = typeof previousValue === 'object' ? JSON.stringify(previousValue, null, 2) : String(previousValue ?? '');
+				model = monaco.editor.createModel(safeValue, language);
+			} catch (e) {
+				console.error('Failed to create Monaco model:', e);
+				// Fallback: try again after a tick
+				tick().then(() => {
+					if (!monaco?.editor) return;
+					try {
+						const safeValue = typeof previousValue === 'object' ? JSON.stringify(previousValue, null, 2) : String(previousValue ?? '');
+						model = monaco.editor.createModel(safeValue, language);
+						if (model) {
+							editor = monaco.editor.create(target, {
+								model,
+								theme,
+								readOnly,
+								automaticLayout: true,
+								minimap: { enabled: false },
+								scrollBeyondLastLine: false,
+								fontSize: 12,
+								lineNumbers: 'on',
+								renderLineHighlight: 'line',
+								selectOnLineNumbers: true,
+								wordWrap: 'on',
+								tabSize: 2,
+								formatOnPaste: true,
+								smoothScrolling: true,
+								cursorBlinking: 'smooth',
+								cursorSmoothCaretAnimation: 'on',
+								folding: true,
+								foldingStrategy: 'auto',
+								showFoldingControls: 'always',
+								bracketPairColorization: { enabled: true }
+							});
+							if (viewState) {
+								editor?.restoreViewState(viewState);
+							}
+							if (editor?.getValue() !== value) {
+								editor?.setValue(value);
+							}
+							editor?.onDidChangeModelContent(() => {
+								value = editor?.getValue() ?? '';
+							});
+							resizeObserver = new ResizeObserver(() => {
+								editor?.layout();
+							});
+							resizeObserver.observe(target);
+							activeContainer = target;
+							void tick().then(() => editor?.layout());
+						}
+					} catch (retryError) {
+						console.error('Retry failed to create Monaco model:', retryError);
+					}
+				});
+				return;
+			}
+		}
 
 		editor = monaco.editor.create(target, {
 			model,
@@ -169,10 +238,15 @@
 			editor.restoreViewState(viewState);
 		}
 
-		// Match bindable `value` once the instance exists (covers effect ordering vs async monaco load).
-		if (editor.getValue() !== value) {
-			editor.setValue(value);
-		}
+		$effect(() => {
+			if (editor) {
+				const currentValue = editor.getValue();
+				const newValue = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '');
+				if (newValue !== currentValue) {
+					editor.setValue(newValue);
+				}
+			}
+		});
 
 		editor.onDidChangeModelContent(() => {
 			value = editor?.getValue() ?? '';

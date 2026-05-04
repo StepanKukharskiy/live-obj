@@ -1,37 +1,21 @@
-import { error, json } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { expandLiveObjWithExecutor, stripCodeFences } from '$lib/server/liveObj/pipeline';
 
-type Body = {
-	liveObj?: string;
-};
-
 export const POST: RequestHandler = async ({ request }) => {
-	let body: Body;
 	try {
-		body = (await request.json()) as Body;
-	} catch {
-		throw error(400, 'Invalid JSON');
-	}
-
-	const liveObj = stripCodeFences(body.liveObj?.trim() ?? '');
-	if (!liveObj) throw error(400, 'liveObj is required');
-
-	try {
-		const { executedObj, warnings } = await expandLiveObjWithExecutor(liveObj);
-		return json({
-			liveObj,
-			executedObj,
-			...(warnings.length > 0 ? { executorWarnings: warnings } : {})
-		});
-	} catch (e) {
-		const message = e instanceof Error ? e.message : String(e);
-		const stack = e instanceof Error ? e.stack : undefined;
-		console.error('[live-obj/execute] Executor failed', {
-			message,
-			stack,
-			preview: liveObj.slice(0, 800)
-		});
-		return json({ error: 'Executor failed', detail: message }, { status: 500 });
+		const { liveObj } = await request.json();
+		if (!liveObj) {
+			return json({ detail: 'Missing liveObj in request body' }, { status: 400 });
+		}
+		const liveObjClean = stripCodeFences(liveObj);
+		const result = await expandLiveObjWithExecutor(liveObjClean);
+		return json({ executedObj: result.executedObj, liveObj: liveObjClean });
+	} catch (error) {
+		console.error('[live-obj/execute] Error:', error);
+		return json(
+			{ detail: error instanceof Error ? error.message : 'Unknown error' },
+			{ status: 500 }
+		);
 	}
 };

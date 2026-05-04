@@ -1,0 +1,84 @@
+# Spellshape - AI-Native 3D Authoring Platform
+
+## Project Overview
+Spellshape is a SvelteKit + TypeScript web application for AI-generated 3D modeling. Users create 3D geometry by describing it in natural language. The system uses a custom "Live OBJ" format that extends OBJ files with `#@` metadata to drive procedural generation, SDF operations, and simulations.
+
+## Core Architecture
+- **Frontend**: SvelteKit with TypeScript
+- **3D Rendering**: Three.js (sceneBuilder.js)
+- **AI Integration**: OpenAI API (user-provided API key)
+- **Format**: Live OBJ - OBJ with `#@` metadata as source of truth, mesh v/f as cache
+
+## Live OBJ Workflow
+1. User sends prompt/history to Live OBJ API
+2. Model returns Live OBJ text (`#@` metadata + OBJ cache)
+3. Executor regenerates geometry from metadata
+4. UI displays chat, source outputs, and metadata-driven controls
+
+## Key Features
+- Natural language to 3D generation
+- Procedural generation (CADQuery kernel)
+- Signed Distance Fields (SDF) with CSG operations
+- Simulations (cellular automata, differential growth, boids, flow fields)
+- Mesh operations (voxelization, smoothing, beveling, etc.)
+- Bring Your Own API Key (OpenAI)
+- Platform support: Web (beta), Grasshopper (beta), Blender (coming soon)
+
+## Project Structure
+```
+src/
+├── lib/
+│   ├── components/        # UI components
+│   ├── liveObj/          # Live OBJ parsing and execution
+│   └── sceneBuilder.js    # 3D scene setup
+├── routes/
+│   ├── api/              # API endpoints
+│   ├── app/              # Main application
+│   └── +page.svelte      # Landing page
+└── app.html              # HTML template
+```
+
+## Live OBJ Syntax
+Metadata starts with `#@` and drives geometry generation:
+
+### Procedural
+```
+o wall
+#@source: procedural
+#@type: extrude
+#@params: kernel=cadquery, profile=[[0,0,0],[4,0,0],[4,0,3],[0,0,3]], height=0.2
+```
+
+### SDF Operations
+```
+#@sdf:
+#@ - box id=a center=[0,0,0] size=[1,1,1]
+#@ - box id=b center=[0.5,0,0] size=[1,1,1]
+#@ - union a b
+```
+
+### Transformations
+```
+#@ops:
+#@ - move offset=[1,0,0]
+#@ - scale factor=2.0
+#@ - rotate angle=45 axis=z
+```
+
+### Simulation
+```
+o coral
+#@source: simulation
+#@sim: cellular_automata
+#@params: grid=[32,32,32], cell=0.08, steps=45, seed=8, mode=coral
+```
+
+## Development Principles (from AGENTS.md)
+1. Think before coding - ask when ambiguous
+2. Simplicity first - minimum code that solves the problem
+3. Surgical changes - only touch what the task requires
+4. Goal-driven execution - transform vague instructions into verifiable targets
+
+## Links
+- GitHub: https://github.com/StepanKukharskiy/live-obj
+- Discord: https://discord.gg/58zSgpaGc

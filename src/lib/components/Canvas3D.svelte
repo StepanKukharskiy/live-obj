@@ -399,12 +399,6 @@
 			}
 			camera.updateProjectionMatrix();
 		}
-
-		// Tone mapping exposure
-		if (renderer) {
-			renderer.toneMappingExposure = toneMappingExposure;
-			renderer.setClearAlpha(transparentBackground ? 0 : 1);
-		}
 	}
 
 	function updateRenderObject() {
