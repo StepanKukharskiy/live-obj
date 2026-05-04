@@ -76,12 +76,17 @@
 			</p>
 
 			<p class="byo-text">
-				Now Spellshape is bring your own API key. Bring your own model - coming soon.
+				Running on top of OBJ with metadata. Bring Your Own API Key - now. Bring Your Own Model - coming soon.
 			</p>
 
-			<a class="github-link" href="https://github.com/StepanKukharskiy/live-obj" target="_blank" rel="noopener noreferrer">
-				GitHub
-			</a>
+			<div class="link-buttons">
+				<a class="github-link" href="https://github.com/StepanKukharskiy/live-obj" target="_blank" rel="noopener noreferrer">
+					GitHub
+				</a>
+				<a class="discord-link" href="https://discord.gg/58zSgpaGc" target="_blank" rel="noopener noreferrer">
+					Discord
+				</a>
+			</div>
 
 			<div class="video-section">
 				<div class="video-background-text">{backgroundText}</div>
@@ -193,16 +198,24 @@
 		height: auto;
 	}
 
-	.github-link {
+	.link-buttons {
+		display: flex;
+		gap: 24px;
+		justify-content: center;
+		margin-bottom: 24px;
+	}
+
+	.github-link,
+	.discord-link {
 		color: #0000eb;
 		text-decoration: none;
 		font-weight: 600;
 		font-size: 16px;
-		margin-bottom: 24px;
 		display: inline-block;
 	}
 
-	.github-link:hover {
+	.github-link:hover,
+	.discord-link:hover {
 		text-decoration: underline;
 	}
 
