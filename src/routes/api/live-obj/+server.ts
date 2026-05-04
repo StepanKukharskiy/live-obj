@@ -44,7 +44,7 @@ const KNOWN_TYPES = new Set([
 	'box', 'cylinder', 'surface_grid', 'heightfield', 'curve', 'sweep', 'mesh',
 	'extrude', 'revolve', 'lathe', 'loft', 'cone', 'sphere'
 ]);
-const KNOWN_SIMS = new Set(['cellular_automata', 'differential_growth', 'boids']);
+const KNOWN_SIMS = new Set(['cellular_automata', 'cellular_automata_instances', 'differential_growth', 'boids']);
 
 function unknownOpsInLiveObj(liveObj: string): string[] {
 	const unknown = new Set<string>();

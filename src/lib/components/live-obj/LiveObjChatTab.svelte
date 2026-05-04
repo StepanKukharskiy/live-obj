@@ -19,6 +19,10 @@
 		{ text: 'Apply a taper deformation along the z-axis', category: 'Deformation' },
 		{ text: 'Add a bevel with 0.05 distance to all edges', category: 'Modifiers' },
 		{ text: 'Generate a cellular automata coral structure', category: 'Simulation' },
+		{
+			text: 'Create a Nakagin-style capsule tower using cellular_automata_instances where each capsule rotates based on alive neighbor count',
+			category: 'Simulation'
+		},
 		{ text: 'Create a differential growth pattern', category: 'Simulation' }
 	];
 
@@ -50,6 +54,26 @@ o wall_arch_profile_hole
 #@source: procedural
 #@type: extrude
 #@params: kernel=cadquery, profile=[[0,0,0],[4.0,0,0],[4.0,0,3.0],[0,0,3.0],[0,0,0],None,[1.0,0,0],[3.0,0,0],[3.0,0,1.8],[2.97,0,2.0],[2.88,0,2.2],[2.75,0,2.37],[2.57,0,2.55],[2.4,0,2.68],[2.2,0,2.77],[2.0,0,2.8],[1.8,0,2.77],[1.6,0,2.68],[1.43,0,2.55],[1.25,0,2.37],[1.12,0,2.2],[1.03,0,2.0],[1.0,0,1.8],[1.0,0,0]], height=0.25, segments=32`
+		},
+		{
+			name: 'Nakagin Capsule CA Placement',
+			liveObj: `#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+
+o nakagin_capsule_ca
+#@source: simulation
+#@sim: cellular_automata_instances
+#@params: grid=[8,8,12],cell=1.35,fill=0.22,seed=11,instance=box,instance_scale=0.8
+#@ops:
+#@ - bevel amount=0.08 segments=2
+#@ - smooth iterations=2 strength=0.35
+#@ - transform rotation=[0,0,8]
+#@ - material name=capsule_white
+
+#@material_preset: capsule_white color=#d9d9d4 roughness=0.55 metalness=0.05
+#@notes: Prompt follow-up: rotate each capsule by local alive-neighbor count around Z (e.g. 0..5 -> 0..75deg).`
 		},
 		{
 			name: 'Fluid Organic Vase',

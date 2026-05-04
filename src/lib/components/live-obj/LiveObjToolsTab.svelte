@@ -567,15 +567,31 @@
 				{
 					name: 'cellular_automata',
 					category: 'Simulations',
-					description: 'Cellular automata growth (e.g., coral)',
+					description: 'Cellular automata growth shell (voxel or smooth marching cubes)',
 					params: [
 						{ name: 'grid', type: 'vec3', description: 'Grid dimensions [x,y,z]', default: '[32,32,32]' },
 						{ name: 'cell', type: 'float', description: 'Cell size', default: '0.08' },
+						{ name: 'fill', type: 'float', description: 'Initial alive probability (0..1)', default: '0.18' },
 						{ name: 'steps', type: 'int', description: 'Simulation steps', default: '45' },
 						{ name: 'seed', type: 'int', description: 'Random seed', default: '8' },
-						{ name: 'mode', type: 'string', description: 'Growth mode', default: 'coral' }
+						{ name: 'surface', type: 'string', description: 'Surface mode: voxel or smooth', default: 'voxel' },
+						{ name: 'mc_resolution', type: 'float', description: 'Marching cubes resolution (smooth mode)', default: '0.04' }
 					],
-					example: 'o coral\n#@source: simulation\n#@sim: cellular_automata\n#@params: grid=[32,32,32], cell=0.08, steps=45, seed=8, mode=coral'
+					example: 'o coral_shell\n#@source: simulation\n#@sim: cellular_automata\n#@params: grid=[32,32,32], cell=0.08, fill=0.2, seed=8, surface=smooth, mc_resolution=0.04'
+				},
+				{
+					name: 'cellular_automata_instances',
+					category: 'Simulations',
+					description: 'Cellular automata placement of repeated primitives in space',
+					params: [
+						{ name: 'grid', type: 'vec3', description: 'Grid dimensions [x,y,z]', default: '[20,20,8]' },
+						{ name: 'cell', type: 'float', description: 'Grid spacing', default: '0.2' },
+						{ name: 'fill', type: 'float', description: 'Initial alive probability (0..1)', default: '0.15' },
+						{ name: 'seed', type: 'int', description: 'Random seed', default: '5' },
+						{ name: 'instance', type: 'string', description: 'Primitive: sphere, box, cylinder', default: 'sphere' },
+						{ name: 'instance_scale', type: 'float', description: 'Primitive scale relative to cell', default: '0.35' }
+					],
+					example: 'o ca_instances\n#@source: simulation\n#@sim: cellular_automata_instances\n#@params: grid=[20,20,8], cell=0.2, fill=0.15, seed=5, instance=sphere, instance_scale=0.35'
 				},
 				{
 					name: 'differential_growth',

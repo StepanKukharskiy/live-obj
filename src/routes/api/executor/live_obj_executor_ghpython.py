@@ -2779,18 +2779,112 @@ def build_simulation_geometry(obj, p, warnings):
         gx, gy, gz = _vec3(p, "grid", (8, 8, 4))
         cell = float(p.get("cell", 1.0))
         prob = float(p.get("fill", 0.18))
-        boxes = []
-        for ix in range(int(gx)):
-            for iy in range(int(gy)):
-                for iz in range(int(gz)):
+        mode = str(p.get("surface", p.get("mode", "voxel"))).lower()
+        mc_resolution = float(p.get("mc_resolution", p.get("resolution", cell * 0.5)))
+
+        nx, ny, nz = int(gx), int(gy), int(gz)
+        alive = set()
+        for ix in range(nx):
+            for iy in range(ny):
+                for iz in range(nz):
                     if rnd.random() <= prob:
-                        x = (ix - gx / 2.0) * cell
-                        y = (iy - gy / 2.0) * cell
-                        z = (iz - gz / 2.0) * cell
-                        plane = rg.Plane(rg.Point3d(x, y, z), rg.Vector3d.ZAxis)
-                        b = rg.Box(plane, rg.Interval(-cell / 2, cell / 2), rg.Interval(-cell / 2, cell / 2), rg.Interval(-cell / 2, cell / 2))
-                        boxes.append(b.ToBrep())
-        return boxes
+                        alive.add((ix, iy, iz))
+
+        if not alive:
+            return []
+
+        if mode in {"smooth", "marching_cubes", "marching", "mc"}:
+            sdf_ops = []
+            cell_half = cell * 0.5
+            for idx, (ix, iy, iz) in enumerate(alive):
+                x = (ix - gx / 2.0) * cell
+                y = (iy - gy / 2.0) * cell
+                z = (iz - gz / 2.0) * cell
+                sid = "ca_%s" % idx
+                sdf_ops.append({
+                    "op": "box",
+                    "id": sid,
+                    "center": [x, y, z],
+                    "size": [cell, cell, cell],
+                })
+                if idx > 0:
+                    sdf_ops.append({"op": "union", "id_a": "ca_0", "id_b": sid})
+            expr = _build_sdf(sdf_ops, unit_scale=1.0, warnings=warnings)
+            if expr is None:
+                warnings.append("cellular_automata smooth: SDF build failed, falling back to voxel")
+            else:
+                pad = max(cell_half, mc_resolution * 2.0)
+                bounds = [
+                    [(-gx / 2.0) * cell - pad, (-gy / 2.0) * cell - pad, (-gz / 2.0) * cell - pad],
+                    [(gx / 2.0) * cell + pad, (gy / 2.0) * cell + pad, (gz / 2.0) * cell + pad],
+                ]
+                return _sdf_to_marching_cubes_mesh(expr, bounds, max(1e-4, mc_resolution), warnings=warnings)
+
+        mesh = rg.Mesh()
+        dirs = [
+            ((1, 0, 0), [(1, -1, -1), (1, 1, -1), (1, 1, 1), (1, -1, 1)]),
+            ((-1, 0, 0), [(-1, -1, -1), (-1, -1, 1), (-1, 1, 1), (-1, 1, -1)]),
+            ((0, 1, 0), [(-1, 1, -1), (-1, 1, 1), (1, 1, 1), (1, 1, -1)]),
+            ((0, -1, 0), [(-1, -1, -1), (1, -1, -1), (1, -1, 1), (-1, -1, 1)]),
+            ((0, 0, 1), [(-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1)]),
+            ((0, 0, -1), [(-1, -1, -1), (-1, 1, -1), (1, 1, -1), (1, -1, -1)]),
+        ]
+        half = cell / 2.0
+        for ix, iy, iz in alive:
+            cx = (ix - gx / 2.0) * cell
+            cy = (iy - gy / 2.0) * cell
+            cz = (iz - gz / 2.0) * cell
+            for (dx, dy, dz), corners in dirs:
+                if (ix + dx, iy + dy, iz + dz) in alive:
+                    continue
+                ids = []
+                for sx, sy, sz in corners:
+                    mesh.Vertices.Add(cx + sx * half, cy + sy * half, cz + sz * half)
+                    ids.append(mesh.Vertices.Count - 1)
+                mesh.Faces.AddFace(ids[0], ids[1], ids[2], ids[3])
+        if mesh.Vertices.Count > 0:
+            mesh.Normals.ComputeNormals()
+            mesh.Compact()
+            mesh = _weld_mesh_by_tolerance(mesh, tol=max(1e-8, cell * 0.001), warnings=warnings, label="cellular_automata")
+        return mesh
+
+    if sim == "cellular_automata_instances":
+        gx, gy, gz = _vec3(p, "grid", (8, 8, 4))
+        cell = float(p.get("cell", 1.0))
+        prob = float(p.get("fill", 0.18))
+        primitive = str(p.get("instance", p.get("primitive", "sphere"))).lower()
+        scale = float(p.get("instance_scale", p.get("scale", 0.35)))
+        nx, ny, nz = int(gx), int(gy), int(gz)
+
+        alive = set()
+        for ix in range(nx):
+            for iy in range(ny):
+                for iz in range(nz):
+                    if rnd.random() <= prob:
+                        alive.add((ix, iy, iz))
+        if not alive:
+            return []
+
+        placed = []
+        for ix, iy, iz in alive:
+            x = (ix - gx / 2.0) * cell
+            y = (iy - gy / 2.0) * cell
+            z = (iz - gz / 2.0) * cell
+            if primitive == "box":
+                plane = rg.Plane(rg.Point3d(x, y, z), rg.Vector3d.ZAxis)
+                size = max(1e-6, cell * scale)
+                box = rg.Box(plane, rg.Interval(-size / 2, size / 2), rg.Interval(-size / 2, size / 2), rg.Interval(-size / 2, size / 2))
+                placed.append(box.ToBrep())
+            elif primitive == "cylinder":
+                radius = max(1e-6, cell * scale * 0.5)
+                height = max(1e-6, cell * scale)
+                circ = rg.Circle(rg.Plane(rg.Point3d(x, y, z - height * 0.5), rg.Vector3d.ZAxis), radius)
+                cyl = rg.Cylinder(circ, height)
+                placed.append(cyl.ToBrep(True, True))
+            else:
+                radius = max(1e-6, cell * scale * 0.5)
+                placed.append(rg.Sphere(rg.Point3d(x, y, z), radius).ToBrep())
+        return placed
 
     warnings.append("unsupported simulation type on '%s': %s" % (obj.name, sim))
     return None
@@ -3142,7 +3236,7 @@ def validate_compat(obj, warnings):
         "extrude", "loft", "sweep", "revolve", "lathe",
         "surface_grid", "heightfield", "mesh", "curve", "",
     }
-    supported_sims = {"boids", "differential_growth", "cellular_automata", "flow_field", ""}
+    supported_sims = {"boids", "differential_growth", "cellular_automata", "cellular_automata_instances", "flow_field", ""}
     supported_deformers = {"twist", "taper", "wave", "bend", ""}
 
     supported_sdf_ops = {
