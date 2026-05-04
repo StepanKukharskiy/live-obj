@@ -399,21 +399,10 @@
 			}
 			camera.updateProjectionMatrix();
 		}
-
-		// Tone mapping exposure
-		if (renderer) {
-			renderer.toneMappingExposure = toneMappingExposure;
-			renderer.setClearAlpha(transparentBackground ? 0 : 1);
-		}
 	}
 
 	function updateRenderObject() {
 		if (!scene) return;
-
-		// Log for debugging
-		console.log('[Canvas3D updateRenderObject] Called');
-		console.log('[Canvas3D updateRenderObject] renderObject:', renderObject ? 'present' : 'null');
-		console.log('[Canvas3D updateRenderObject] mountedRenderObject:', mountedRenderObject ? 'present' : 'null');
 
 		// Store reference to old object before cleanup
 		const oldRenderObject = mountedRenderObject;
