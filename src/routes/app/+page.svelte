@@ -238,9 +238,29 @@ o cube
 			console.log('[regenerateFromMetadata] Updated liveObjText length:', liveObjText.length);
 			console.log('[regenerateFromMetadata] Updated executedObjText length:', executedObjText.length);
 			console.log('[regenerateFromMetadata] sceneEpoch incremented to:', sceneEpoch);
-			// Log first few vertices to check if geometry actually changed
-			const vertexLines = (payload.executedObj ?? '').match(/^v\s+[\d\.\-]+/gm) || [];
-			console.log('[regenerateFromMetadata] First 5 vertices:', vertexLines.slice(0, 5));
+			// Log all vertices for the first object (first tread)
+			const lines = (payload.executedObj ?? '').split('\n');
+			let currentObject = null;
+			const firstObjectVertices: string[] = [];
+			for (const line of lines) {
+				const objMatch = line.match(/^o\s+(.+)$/);
+				if (objMatch) {
+					if (currentObject && firstObjectVertices.length === 0) {
+						// We've passed the first object without finding vertices, move to next
+						currentObject = objMatch[1];
+					} else if (currentObject && firstObjectVertices.length > 0) {
+						// We've collected vertices for the first object, stop
+						break;
+					} else {
+						// First object
+						currentObject = objMatch[1];
+					}
+				} else if (currentObject && line.match(/^v\s+/)) {
+					firstObjectVertices.push(line);
+				}
+			}
+			console.log('[regenerateFromMetadata] First object vertices count:', firstObjectVertices.length);
+			console.log('[regenerateFromMetadata] First 20 vertices of first object:', firstObjectVertices.slice(0, 20));
 			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? sceneWithKernel);
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
