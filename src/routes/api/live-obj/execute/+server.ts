@@ -17,6 +17,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	const liveObj = stripCodeFences(body.liveObj?.trim() ?? '');
 	if (!liveObj) throw error(400, 'liveObj is required');
 
+	// Log the Live OBJ text being passed to executor for debugging
+	console.log('[live-obj/execute] Live OBJ length:', liveObj.length);
+	// Extract and log outer_radius parameter if present
+	const outerRadiusMatch = liveObj.match(/outer_radius=([\d.]+)/);
+	if (outerRadiusMatch) {
+		console.log('[live-obj/execute] outer_radius parameter:', outerRadiusMatch[1]);
+	}
+
 	try {
 		const { executedObj, warnings } = await expandLiveObjWithExecutor(liveObj);
 		return json({
