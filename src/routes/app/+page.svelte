@@ -238,6 +238,9 @@ o cube
 			console.log('[regenerateFromMetadata] Updated liveObjText length:', liveObjText.length);
 			console.log('[regenerateFromMetadata] Updated executedObjText length:', executedObjText.length);
 			console.log('[regenerateFromMetadata] sceneEpoch incremented to:', sceneEpoch);
+			// Log first few vertices to check if geometry actually changed
+			const vertexLines = (payload.executedObj ?? '').match(/^v\s+[\d\.\-]+/gm) || [];
+			console.log('[regenerateFromMetadata] First 5 vertices:', vertexLines.slice(0, 5));
 			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? sceneWithKernel);
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
