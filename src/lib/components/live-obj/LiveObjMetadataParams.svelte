@@ -128,6 +128,7 @@
 		value: string,
 		source: string
 	) => {
+		if (typeof text !== 'string') return text;
 		const lines = text.split(/\r?\n/);
 		let activeObject: string | null = null;
 		for (let i = 0; i < lines.length; i += 1) {
@@ -205,15 +206,20 @@
 		if (typeof liveObjText !== 'string') return;
 		const nextValue = fieldValue(key, fallback);
 		if (nextValue === fallback) return;
-		const updated = rewriteParamInLiveObj(
-			liveObjText,
-			selectedMetaObject.id,
-			key,
-			nextValue,
-			selectedMetaObject.paramSources[key] ??
-				(key.includes('.') ? `sdf_op:${key.split('.', 1)[0]}` : 'params')
-		);
-		onLiveObjMetadataChange?.(updated);
+		try {
+			const updated = rewriteParamInLiveObj(
+				liveObjText,
+				selectedMetaObject.id,
+				key,
+				nextValue,
+				selectedMetaObject.paramSources[key] ??
+					(key.includes('.') ? `sdf_op:${key.split('.', 1)[0]}` : 'params')
+			);
+			onLiveObjMetadataChange?.(updated);
+		} catch (e) {
+			console.error('commitValue error:', e);
+			throw e;
+		}
 	}
 </script>
 
