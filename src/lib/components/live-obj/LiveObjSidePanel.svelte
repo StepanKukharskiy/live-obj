@@ -43,7 +43,7 @@
 		toneMappingExposure = $bindable(1),
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
-		providerSettings = $bindable({ provider: 'openai', apiKey: '', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }),
+		providerSettings = $bindable({ provider: 'openai', apiKey: '', apiUrl: 'https://api.openai.com/v1/chat/completions', imageUrl: 'https://api.openai.com/v1/images/edits', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }),
 	onSend,
 		onCaptureSceneScreenshot,
 		onLaunchObjExample,
@@ -80,7 +80,7 @@
 		toneMappingExposure?: number;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
-		providerSettings?: { provider: string; apiKey: string; textModel: string; imageModel: string; rememberMe: boolean };
+		providerSettings?: { provider: string; apiKey: string; apiUrl: string; imageUrl: string; textModel: string; imageModel: string; rememberMe: boolean };
 	onSend?: (payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
 		onCaptureSceneScreenshot?: () => string;
 		onLaunchObjExample?: (liveObj: string) => void;
@@ -111,11 +111,11 @@
 			</header>
 			<div class="planner-tabs" role="tablist" aria-label="Panel tabs">
 				<button type="button" class:active={activeTab === 'chat'} onclick={() => (activeTab = 'chat')}>Chat</button>
-				<button type="button" class:active={activeTab === 'provider'} onclick={() => (activeTab = 'provider')}>Provider</button>
 				<button type="button" class:active={activeTab === 'adjust'} onclick={() => (activeTab = 'adjust')}>Adjust</button>
 				<button type="button" class:active={activeTab === 'tools'} onclick={() => (activeTab = 'tools')}>Tools</button>
 				<button type="button" class:active={activeTab === 'scene'} onclick={() => (activeTab = 'scene')}>Scene</button>
 				<button type="button" class:active={activeTab === 'render'} onclick={() => (activeTab = 'render')}>Render</button>
+				<button type="button" class:active={activeTab === 'provider'} onclick={() => (activeTab = 'provider')}>Provider</button>
 			</div>
 		</div>
 		<div
@@ -167,6 +167,7 @@
 				{:else}
 					<LiveObjRenderTab
 						{liveObjText}
+						{providerSettings}
 						onCaptureSceneScreenshot={onCaptureSceneScreenshot}
 					/>
 				{/if}

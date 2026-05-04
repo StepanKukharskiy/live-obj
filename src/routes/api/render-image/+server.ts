@@ -5,13 +5,6 @@ const DEFAULT_OPENAI_IMAGES_API_URL = 'https://api.openai.com/v1/images/edits';
 const OPENAI_IMAGE_MODEL = 'gpt-image-1.5';
 const OPENAI_IMAGES_TIMEOUT_MS = 90_000;
 
-function pickString(...candidates: Array<string | undefined>): string {
-	for (const c of candidates) {
-		if (c != null && String(c).trim() !== '') return String(c).trim();
-	}
-	return '';
-}
-
 function metadataFromLiveObj(liveObjText: string): string {
 	return liveObjText
 		.split(/\r?\n/)
@@ -49,22 +42,10 @@ function networkErrorMessage(err: unknown): string {
 	return String(err);
 }
 
-function deriveImagesApiUrl(
-	explicitImagesApiUrl: string,
-	fallbackApiUrl: string
-): string {
-	if (explicitImagesApiUrl) return explicitImagesApiUrl;
-	if (!fallbackApiUrl) return DEFAULT_OPENAI_IMAGES_API_URL;
-	return fallbackApiUrl.replace(
-		/(\/v1\/(?:chat\/completions|responses))\/?$/i,
-		'/v1/images/edits'
-	);
-}
-
 export const POST: RequestHandler = async ({ request }) => {
-	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; imageModel?: string };
+	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; apiUrl?: string; imageUrl?: string; imageModel?: string };
 	try {
-		body = (await request.json()) as { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; imageModel?: string };
+		body = (await request.json()) as { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; apiUrl?: string; imageUrl?: string; imageModel?: string };
 	} catch {
 		throw error(400, 'Invalid JSON');
 	}
@@ -76,21 +57,12 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!prompt) throw error(400, 'prompt is required');
 	if (!screenshotDataUrl.startsWith('data:image/')) throw error(400, 'screenshotDataUrl must be an image data URL');
 
-	const { env } = await import('$env/dynamic/private');
 	const requestApiKey = body.apiKey?.trim() ?? '';
-	const provider = (body.provider?.trim() || 'openai').toLowerCase();
+	const requestImageUrl = body.imageUrl?.trim() ?? '';
 	const imageModel = body.imageModel?.trim() || OPENAI_IMAGE_MODEL;
-	const apiKey = pickString(requestApiKey, process.env.OPENAI_API_KEY, env.OPENAI_API_KEY, process.env.DEFAULT_OPENAI_API_KEY, env.DEFAULT_OPENAI_API_KEY);
-	const providerBaseUrl = provider === 'together'
-		? pickString(process.env.TOGETHER_API_URL, env.TOGETHER_API_URL)
-		: provider === 'google'
-			? pickString(process.env.GOOGLE_API_URL, env.GOOGLE_API_URL)
-			: pickString(process.env.OPENAI_API_URL, env.OPENAI_API_URL);
-	const imagesApiUrl = deriveImagesApiUrl(
-		pickString(process.env.OPENAI_IMAGES_API_URL, env.OPENAI_IMAGES_API_URL),
-		providerBaseUrl
-	);
-	if (!apiKey) throw error(500, 'OPENAI_API_KEY is not configured');
+	const apiKey = requestApiKey;
+	const imagesApiUrl = requestImageUrl || DEFAULT_OPENAI_IMAGES_API_URL;
+	if (!apiKey) throw error(500, 'API key is required');
 
 	const sceneMetadata = metadataFromLiveObj(liveObjText);
 	const fullPrompt = `${prompt}\n\nUse this scene metadata as a hard constraint for objects, materials, and structure:\n${sceneMetadata || '(no #@ metadata found)'}`;

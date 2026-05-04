@@ -1,9 +1,11 @@
 <script lang="ts">
 	let {
 		liveObjText = '',
+		providerSettings = { provider: 'openai', apiKey: '', apiUrl: '', imageUrl: '', textModel: '', imageModel: '', rememberMe: false },
 		onCaptureSceneScreenshot
 	}: {
 		liveObjText?: string;
+		providerSettings?: { provider: string; apiKey: string; apiUrl: string; imageUrl: string; textModel: string; imageModel: string; rememberMe: boolean };
 		onCaptureSceneScreenshot?: () => string;
 	} = $props();
 
@@ -68,7 +70,12 @@
 				body: JSON.stringify({
 					prompt,
 					screenshotDataUrl,
-					liveObjText
+					liveObjText,
+					provider: providerSettings.provider,
+					apiKey: providerSettings.apiKey?.trim() || undefined,
+					apiUrl: providerSettings.apiUrl?.trim() || undefined,
+					imageUrl: providerSettings.imageUrl?.trim() || undefined,
+					imageModel: providerSettings.imageModel
 				})
 			});
 			const payload = (await response.json().catch(() => ({}))) as {

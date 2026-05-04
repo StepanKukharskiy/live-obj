@@ -17,7 +17,7 @@
 	position: absolute;
 	top: 16px;
 	left: 16px;
-	width: min(420px, calc(100vw - 32px));
+	width: min(480px, calc(100vw - 32px));
 	height: calc(100vh - 32px);
 	display: flex;
 	flex-direction: column;
