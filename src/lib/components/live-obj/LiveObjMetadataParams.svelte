@@ -32,8 +32,10 @@
 	};
 
 	const parseParams = (raw: string): Record<string, string> => {
+		if (typeof raw !== 'string') return {};
 		const map: Record<string, string> = {};
 		for (const piece of splitTopLevel(raw)) {
+			if (typeof piece !== 'string') continue;
 			const eq = piece.indexOf('=');
 			if (eq <= 0) continue;
 			const key = piece.slice(0, eq).trim();
@@ -50,6 +52,7 @@
 			.join(', ');
 
 	const parseObjects = (text: string): MetaObject[] => {
+		if (typeof text !== 'string') return [];
 		const lines = text.split(/\r?\n/);
 		const objects: MetaObject[] = [];
 		let activeObject: string | null = null;
@@ -153,6 +156,7 @@
 			}
 			if (source.startsWith('sdf_op:')) {
 				const cmd = source.slice('sdf_op:'.length);
+				if (typeof key !== 'string') continue;
 				const dot = key.indexOf('.');
 				const rawKey = dot > 0 ? key.slice(dot + 1) : key;
 				const sdfCmdMatch = trimmed.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
