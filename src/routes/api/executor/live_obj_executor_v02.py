@@ -2397,7 +2397,13 @@ def spiral_treads_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
                 ox = srgn * hx * cr + stgn * hy * (-sr)
                 oy = srgn * hx * sr + stgn * hy * cr
                 oz = szgn * hz
-                corners.append((px + ox, py + oy, zc + oz))
+                corner = (px + ox, py + oy, zc + oz)
+                corners.append(corner)
+        # Log vertex coordinates for debugging
+        if i == 0 or i == count - 1:
+            print(f"Tread {i}: theta={theta:.4f}, z0={z0:.4f}, zc={zc:.4f}")
+            for idx, (cx_, cy_, cz_) in enumerate(corners):
+                print(f"  Corner {idx}: ({cx_:.4f}, {cy_:.4f}, {cz_:.4f})")
         base = len(mesh.vertices)
         mesh.vertices.extend(corners)
 
