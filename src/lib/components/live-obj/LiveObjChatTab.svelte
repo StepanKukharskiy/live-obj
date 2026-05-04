@@ -124,6 +124,83 @@ o reef_base_01
 #@ - tag value=decorative`
 		},
 		{
+			name: 'Spiral Staircase',
+			liveObj: `#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@material_preset: matte_black_steel color=#17191c roughness=0.58 metalness=0.75
+#@material_preset: warm_oak color=#9b6a3f roughness=0.72 metalness=0.05
+#@material_preset: brushed_steel color=#9ca3a8 roughness=0.38 metalness=0.85
+
+o spiral_staircase_01
+#@source: assembly
+#@children: center_post,treads,balusters,handrail_curve,handrail
+#@params: stair_height=3.2,turns=1.5,step_count=18,outer_radius=1.15,inner_radius=0.18,tread_thickness=0.07,tread_angle=18,tread_depth=0.72,post_radius=0.08,baluster_radius=0.025,handrail_radius=0.045,rail_height=0.92
+#@anchors:
+#@ - base_center=[0,0,0]
+#@ - post_center=[0,0,stair_height/2]
+#@ - top_center=[0,0,stair_height]
+#@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o center_post
+#@parent: spiral_staircase_01
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.08, depth=3.2, segments=48, center=[0,0,1.6]
+#@ops:
+#@ - bevel amount=0.012 segments=2
+#@ - material name=matte_black_steel
+#@ - tag value=structural
+#@ - collision proxy=convex
+#@material: matte_black_steel
+
+o treads
+#@parent: spiral_staircase_01
+#@source: procedural
+#@type: mesh
+#@params: generator=spiral_treads, count=18, turns=1.5, height=3.2, inner_radius=0.18, outer_radius=1.15, tread_thickness=0.07, tread_angle=18, tread_depth=0.72, center=[0,0,0]
+#@ops:
+#@ - bevel amount=0.025 segments=3
+#@ - material name=warm_oak
+#@ - tag value=structural
+#@ - collision proxy=mesh
+#@material: warm_oak
+
+o balusters
+#@parent: spiral_staircase_01
+#@source: procedural
+#@type: mesh
+#@params: generator=spiral_post_array, count=18, turns=1.5, height=3.2, radius=1.15, post_radius=0.025, post_height=0.92, start_z=0.07, center=[0,0,0]
+#@ops:
+#@ - bevel amount=0.006 segments=2
+#@ - material name=brushed_steel
+#@ - tag value=structural
+#@ - collision proxy=convex
+#@material: brushed_steel
+
+o handrail_curve
+#@parent: spiral_staircase_01
+#@source: procedural
+#@type: curve
+#@params: kind=helix, radius=1.15, height=3.2, turns=1.5, z_offset=0.99, segments=144, center=[0,0,0]
+#@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
+#@ops:
+#@ - tag value=structural
+
+o handrail
+#@parent: spiral_staircase_01
+#@source: procedural
+#@type: sweep
+#@params: profile=circle, radius=0.045, along=handrail_curve, segments=24
+#@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
+#@ops:
+#@ - material name=matte_black_steel
+#@ - tag value=structural
+#@ - collision proxy=convex
+#@material: matte_black_steel`
+		},
+		{
 			name: 'Fluid Organic Vase',
 			liveObj: `#@kernel_default: cadquery
 o fluid_organic_vase

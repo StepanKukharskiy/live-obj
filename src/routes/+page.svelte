@@ -75,6 +75,10 @@
 				No complex software. No technical skills needed. Just type what you want to build.
 			</p>
 
+			<p class="byo-text">
+				Now Spellshape is bring your own API key. Bring your own model - coming soon.
+			</p>
+
 			<a class="github-link" href="https://github.com/StepanKukharskiy/live-obj" target="_blank" rel="noopener noreferrer">
 				GitHub
 			</a>
@@ -99,6 +103,14 @@
 				<span class="platform-item">Grasshopper <span class="platform-status beta">(Beta)</span></span>
 				<span class="platform-separator">•</span>
 				<span class="platform-item">Blender <span class="platform-status coming-soon">(Coming Soon)</span></span>
+			</p>
+		</section>
+
+		<section class="credits">
+			<p class="credits-text">
+				<span class="credit-item">Vision - <a href="https://www.linkedin.com/in/alina-chereyskaya-architect/" target="_blank" rel="noopener noreferrer">Alina Chereyskaya</a></span>
+				<span class="credit-separator">•</span>
+				<span class="credit-item">Tech - <a href="https://www.linkedin.com/in/stepan-kukharskiy/" target="_blank" rel="noopener noreferrer">Stepan Kukharskiy</a></span>
 			</p>
 		</section>
 	</main>
@@ -223,8 +235,16 @@
 	.hero-subtitle {
 		font-size: 20px;
 		color: #555;
-		margin: 0 0 48px 0;
+		margin: 0 0 24px 0;
 		line-height: 1.5;
+	}
+
+	.byo-text {
+		font-size: 16px;
+		color: #0000eb;
+		margin: 0 0 32px 0;
+		line-height: 1.5;
+		font-weight: 500;
 	}
 
 	.video-placeholder {
@@ -305,6 +325,41 @@
 		font-size: 14px;
 		font-weight: 500;
 		color: #22c55e;
+	}
+
+	.credits {
+		text-align: center;
+		margin-bottom: 80px;
+		width: 100%;
+		max-width: 900px;
+	}
+
+	.credits-text {
+		font-size: 16px;
+		color: #555;
+		margin: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-wrap: wrap;
+		gap: 16px;
+	}
+
+	.credit-item {
+		font-weight: 500;
+	}
+
+	.credit-item a {
+		color: #0000eb;
+		text-decoration: none;
+	}
+
+	.credit-item a:hover {
+		text-decoration: underline;
+	}
+
+	.credit-separator {
+		color: #888;
 	}
 
 	.platform-status.beta {
