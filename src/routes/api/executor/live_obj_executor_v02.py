@@ -2001,6 +2001,8 @@ def cellular_automata_mesh(params: Dict[str, Any]) -> Mesh:
     steps = int(params.get("steps", 40))
     seed = int(params.get("seed", 1))
     mode = str(params.get("mode", "coral"))
+    surface = str(params.get("surface", "voxel")).lower()
+    mc_resolution = float(params.get("mc_resolution", cell * 0.5))
     rng = random.Random(seed)
 
     occupied = set()
@@ -2037,7 +2039,267 @@ def cellular_automata_mesh(params: Dict[str, Any]) -> Mesh:
             break
 
     origin = (-nx*cell/2, -ny*cell/2, 0)
-    return mesh_from_voxels(occupied, origin, cell)
+    
+    # If smooth surface requested, convert voxels to SDF and use marching cubes
+    if surface == "smooth" or surface == "marching_cubes":
+        # Build SDF from voxel grid using distance field
+        class VoxelSDF(SDFExpr):
+            def __init__(self, occ, orig, cl):
+                self.occupied = occ
+                self.origin = orig
+                self.cell = cl
+            
+            def dist(self, p):
+                px, py, pz = p
+                # Convert world position to grid position
+                gx = int((px - self.origin[0]) / self.cell)
+                gy = int((py - self.origin[1]) / self.cell)
+                gz = int((pz - self.origin[2]) / self.cell)
+                
+                # Check if position is inside an occupied cell
+                if (gx, gy, gz) in self.occupied:
+                    # Negative distance inside occupied cells
+                    cx = self.origin[0] + (gx + 0.5) * self.cell
+                    cy = self.origin[1] + (gy + 0.5) * self.cell
+                    cz = self.origin[2] + (gz + 0.5) * self.cell
+                    # Distance to nearest face of this cell
+                    dx = max(abs(px - cx) - self.cell/2, 0)
+                    dy = max(abs(py - cy) - self.cell/2, 0)
+                    dz = max(abs(pz - cz) - self.cell/2, 0)
+                    return -math.sqrt(dx*dx + dy*dy + dz*dz)
+                else:
+                    # Positive distance outside - find nearest occupied cell
+                    min_dist = float('inf')
+                    # Search nearby cells (limited radius for performance)
+                    search_radius = 3
+                    for dx in range(-search_radius, search_radius + 1):
+                        for dy in range(-search_radius, search_radius + 1):
+                            for dz in range(-search_radius, search_radius + 1):
+                                nx_, ny_, nz_ = gx + dx, gy + dy, gz + dz
+                                if (nx_, ny_, nz_) in self.occupied:
+                                    cx = self.origin[0] + (nx_ + 0.5) * self.cell
+                                    cy = self.origin[1] + (ny_ + 0.5) * self.cell
+                                    cz = self.origin[2] + (nz_ + 0.5) * self.cell
+                                    dist = math.sqrt((px - cx)**2 + (py - cy)**2 + (pz - cz)**2) - (self.cell * 0.5)
+                                    if dist < min_dist:
+                                        min_dist = dist
+                    return min_dist if min_dist != float('inf') else self.cell * 2
+        
+        # Build bounds for marching cubes with extra padding to ensure closed surface
+        pad = max(cell * 2, mc_resolution * 4.0)
+        bounds = [
+            [origin[0] - pad, origin[1] - pad, origin[2] - pad],
+            [origin[0] + nx * cell + pad, origin[1] + ny * cell + pad, origin[2] + nz * cell + pad]
+        ]
+        
+        # Use marching cubes
+        voxel_sdf = VoxelSDF(occupied, origin, cell)
+        return sdf_to_marching_cubes_mesh(voxel_sdf, bounds, mc_resolution)
+    
+    # Default voxel output with welding to merge separate planes
+    mesh = mesh_from_voxels(occupied, origin, cell)
+    if mesh.vertices:
+        mesh = weld_vertices(mesh, epsilon=cell * 0.001)
+    return mesh
+
+
+def cellular_automata_instances_mesh(params: Dict[str, Any], obn: Optional[Dict[str, LiveObject]] = None) -> Mesh:
+    grid = params.get("grid", [8, 8, 4])
+    nx, ny, nz = map(int, grid)
+    cell = float(params.get("cell", 1.0))
+    fill = float(params.get("fill", 0.18))
+    instance_ref = str(params.get("instance", params.get("primitive", "sphere")))
+    scale = float(params.get("instance_scale", params.get("scale", 0.35)))
+    seed = int(params.get("seed", 1))
+    rng = random.Random(seed)
+    rotation_step = float(params.get("rotation_step", 90.0))
+    
+    # CA rule parameters
+    steps = int(params.get("steps", 0))
+    birth_rules = params.get("birth_rules", [3])
+    survival_rules = params.get("survival_rules", [2, 3])
+    if isinstance(birth_rules, (int, float)):
+        birth_rules = [int(birth_rules)]
+    elif isinstance(birth_rules, str):
+        birth_rules = [int(x.strip()) for x in birth_rules.split(",")]
+    elif not isinstance(birth_rules, (list, tuple)):
+        birth_rules = [3]
+    if isinstance(survival_rules, (int, float)):
+        survival_rules = [int(survival_rules)]
+    elif isinstance(survival_rules, str):
+        survival_rules = [int(x.strip()) for x in survival_rules.split(",")]
+    elif not isinstance(survival_rules, (list, tuple)):
+        survival_rules = [2, 3]
+    birth_rules = set(birth_rules)
+    survival_rules = set(survival_rules)
+
+    # Determine if instance is a primitive or object reference
+    primitives = {"box", "cylinder", "sphere"}
+    is_primitive = instance_ref.lower() in primitives
+
+    # Get instance template mesh
+    if is_primitive:
+        primitive = instance_ref.lower()
+        template_mesh = None
+    else:
+        # Look up referenced object
+        if obn and instance_ref in obn:
+            template_obj = obn[instance_ref]
+            # Ensure the referenced object is executed first with its ops applied
+            source = template_obj.meta.get("source", "")
+            
+            if source == "procedural":
+                # For procedural objects, we need to generate the mesh with ops applied
+                base_mesh = generate_procedural(template_obj, obn)
+                if base_mesh.vertices:
+                    template_mesh = apply_ops(base_mesh, template_obj, obn, "")
+                else:
+                    template_mesh = None
+            elif source == "assembly":
+                # For assemblies, generate by combining children
+                base_mesh = Mesh()
+                for child in obn.values():
+                    if str(child.meta.get("parent")) == instance_ref:
+                        child_source = child.meta.get("source", "")
+                        if child_source == "procedural":
+                            child_mesh = generate_procedural(child, obn)
+                            if child_mesh.vertices:
+                                child_mesh = apply_ops(child_mesh, child, obn, "")
+                                base_mesh.extend(child_mesh)
+                        elif child.mesh and child.mesh.vertices:
+                            base_mesh.extend(child.mesh.copy())
+                # Apply the assembly's own ops to the combined mesh
+                if base_mesh.vertices:
+                    base_mesh = apply_ops(base_mesh, template_obj, obn, "")
+                template_mesh = base_mesh if base_mesh.vertices else None
+            elif template_obj.mesh and template_obj.mesh.vertices:
+                # For other sources, use the already-executed mesh
+                template_mesh = template_obj.mesh.copy()
+            else:
+                template_mesh = None
+        else:
+            template_mesh = None
+
+    alive = set()
+    for ix in range(nx):
+        for iy in range(ny):
+            for iz in range(nz):
+                if rng.random() <= fill:
+                    alive.add((ix, iy, iz))
+
+    # Run CA simulation steps if specified
+    if steps > 0:
+        neigh = [(dx, dy, dz) for dx in [-1, 0, 1] for dy in [-1, 0, 1] for dz in [-1, 0, 1] if not (dx == dy == dz == 0)]
+        for _ in range(steps):
+            new_alive = set()
+            for ix in range(nx):
+                for iy in range(ny):
+                    for iz in range(nz):
+                        count = sum((ix + dx, iy + dy, iz + dz) in alive for dx, dy, dz in neigh)
+                        if (ix, iy, iz) in alive:
+                            if count in survival_rules:
+                                new_alive.add((ix, iy, iz))
+                        else:
+                            if count in birth_rules:
+                                new_alive.add((ix, iy, iz))
+            alive = new_alive
+            if not alive:
+                break
+
+    if not alive:
+        return Mesh()
+
+    mesh = Mesh()
+    gx, gy, gz = float(nx), float(ny), float(nz)
+    
+    # Pre-calculate neighbor counts for rotation
+    neighbor_counts = {}
+    if rotation_step > 0:
+        neigh = [(dx, dy, dz) for dx in [-1, 0, 1] for dy in [-1, 0, 1] for dz in [-1, 0, 1] if not (dx == dy == dz == 0)]
+        for pos in alive:
+            ix, iy, iz = pos
+            count = sum((ix + dx, iy + dy, iz + dz) in alive for dx, dy, dz in neigh)
+            neighbor_counts[pos] = count
+
+    for ix, iy, iz in alive:
+        x = (ix - gx / 2.0) * cell
+        y = (iy - gy / 2.0) * cell
+        z = (iz - gz / 2.0) * cell
+        size = max(1e-6, cell * scale)
+
+        # Calculate neighbor-based rotation around Z axis
+        neighbor_angle_deg = 0.0
+        if rotation_step > 0 and (ix, iy, iz) in neighbor_counts:
+            count = neighbor_counts[(ix, iy, iz)]
+            neighbor_angle_deg = min(count, 5) * rotation_step
+
+        if is_primitive:
+            if primitive == "box":
+                instance_mesh = box_mesh((0, 0, 0), (size, size, size))
+            elif primitive == "cylinder":
+                radius = max(1e-6, size * 0.5)
+                height = max(1e-6, size)
+                instance_mesh = cylinder_mesh("z", (0, 0, 0), radius, height, 8)
+            else:  # sphere or default
+                radius = max(1e-6, size * 0.5)
+                instance_mesh = sphere_mesh((0, 0, 0), radius, 8)
+            
+            # Apply neighbor-based rotation around Z axis
+            if neighbor_angle_deg > 0:
+                transform = {
+                    "position": [0, 0, 0],
+                    "scale": [1, 1, 1],
+                    "rotation": [0, 0, neighbor_angle_deg]
+                }
+                instance_mesh = apply_transform(instance_mesh, transform)
+            
+            # Translate to final position
+            transform = {
+                "position": [x, y, z],
+                "scale": [size, size, size],
+                "rotation": [0, 0, 0]
+            }
+            instance_mesh = apply_transform(instance_mesh, transform)
+            
+        elif template_mesh:
+            # Transform and place the template mesh
+            instance_mesh = template_mesh.copy()
+            
+            # Scale around origin
+            transform = {
+                "position": [0, 0, 0],
+                "scale": [size, size, size],
+                "rotation": [0, 0, 0]
+            }
+            instance_mesh = apply_transform(instance_mesh, transform)
+            
+            # Apply neighbor-based rotation around Z axis
+            if neighbor_angle_deg > 0:
+                transform = {
+                    "position": [0, 0, 0],
+                    "scale": [1, 1, 1],
+                    "rotation": [0, 0, neighbor_angle_deg]
+                }
+                instance_mesh = apply_transform(instance_mesh, transform)
+            
+            # Translate to final position
+            transform = {
+                "position": [x, y, z],
+                "scale": [1, 1, 1],
+                "rotation": [0, 0, 0]
+            }
+            instance_mesh = apply_transform(instance_mesh, transform)
+            
+            # Weld vertices after transformation to fix holes
+            instance_mesh = weld_vertices(instance_mesh, epsilon=size * 0.001)
+        else:
+            # Fallback to sphere if reference not found
+            radius = max(1e-6, size * 0.5)
+            instance_mesh = sphere_mesh((x, y, z), radius, 8)
+
+        mesh.extend(instance_mesh)
+
+    return mesh
 
 
 def tube_between(a: Vec3, b: Vec3, radius: float, segments: int = 8) -> Mesh:
@@ -3421,7 +3683,14 @@ def apply_ops(mesh: Mesh, obj: LiveObject, obn: Dict[str, LiveObject], kernel_de
 
     for op in obj.ops:
         name = op.get("op")
-        if name == "displace":
+        if name == "transform":
+            transform_dict = {
+                "position": resolve_op_value(op, "position", [0, 0, 0]),
+                "scale": resolve_op_value(op, "scale", [1, 1, 1]),
+                "rotation": resolve_op_value(op, "rotation", [0, 0, 0])
+            }
+            out = apply_transform(out, transform_dict)
+        elif name == "displace":
             out = op_displace(out, op)
         elif name == "smooth":
             out = op_smooth(out, int(op.get("iterations",1)), float(op.get("strength",0.5)))
@@ -3884,12 +4153,14 @@ def normalize_misplaced_assembly_anchors(scene: Scene) -> None:
             asm.meta["anchors"] = asm_anchors
 
 
-def generate_simulation(obj: LiveObject) -> Mesh:
+def generate_simulation(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = None) -> Mesh:
     sim = str(obj.meta.get("sim", ""))
     params = obj.meta.get("params", {}) or {}
 
     if sim == "cellular_automata":
         return cellular_automata_mesh(params)
+    if sim == "cellular_automata_instances":
+        return cellular_automata_instances_mesh(params, obn)
     if sim == "differential_growth":
         return differential_growth_mesh(params)
     if sim == "boids":
@@ -3943,7 +4214,7 @@ def execute_scene(scene: Scene) -> Scene:
         elif source == "sdf":
             base = generate_sdf(obj, obn)
         elif source == "simulation":
-            base = generate_simulation(obj)
+            base = generate_simulation(obj, obn)
         else:
             base = obj.mesh.copy()
 

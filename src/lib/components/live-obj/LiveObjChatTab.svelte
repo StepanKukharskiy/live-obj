@@ -19,6 +19,10 @@
 		{ text: 'Apply a taper deformation along the z-axis', category: 'Deformation' },
 		{ text: 'Add a bevel with 0.05 distance to all edges', category: 'Modifiers' },
 		{ text: 'Generate a cellular automata coral structure', category: 'Simulation' },
+		{
+			text: 'Create a Nakagin-style capsule tower using cellular_automata_instances where each capsule rotates based on alive neighbor count',
+			category: 'Simulation'
+		},
 		{ text: 'Create a differential growth pattern', category: 'Simulation' }
 	];
 
@@ -50,6 +54,74 @@ o wall_arch_profile_hole
 #@source: procedural
 #@type: extrude
 #@params: kernel=cadquery, profile=[[0,0,0],[4.0,0,0],[4.0,0,3.0],[0,0,3.0],[0,0,0],None,[1.0,0,0],[3.0,0,0],[3.0,0,1.8],[2.97,0,2.0],[2.88,0,2.2],[2.75,0,2.37],[2.57,0,2.55],[2.4,0,2.68],[2.2,0,2.77],[2.0,0,2.8],[1.8,0,2.77],[1.6,0,2.68],[1.43,0,2.55],[1.25,0,2.37],[1.12,0,2.2],[1.03,0,2.0],[1.0,0,1.8],[1.0,0,0]], height=0.25, segments=32`
+		},
+		{
+			name: 'Nakagin Capsule CA Placement',
+			liveObj: `#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@kernel_default: cadquery
+
+o nakagin_capsule_body
+#@source: procedural
+#@type: box
+#@params: size=[1.2,1.2,1.2]
+#@parent: nakagin_capsule_assembly
+#@anchors: body_center=[0,0,0]
+
+o nakagin_capsule_window
+#@source: procedural
+#@type: cylinder
+#@params: axis=z radius=0.4 height=1.3
+#@parent: nakagin_capsule_assembly
+#@anchors: window_center=anchor(nakagin_capsule_assembly.body_center)
+
+o nakagin_capsule_assembly
+#@source: assembly
+#@params: capsule_size=1.2
+#@ops:
+#@ - transform rotation=[90,0,0]
+
+o nakagin_capsule_ca
+#@source: simulation
+#@sim: cellular_automata_instances
+#@params: grid=[8,8,12],cell=1.35,fill=0.22,seed=11,instance=nakagin_capsule_assembly,instance_scale=0.8,rotation_step=90,steps=5,birth_rules=3,survival_rules=2,3
+#@ops:
+#@ - material name=capsule_white
+
+#@material_preset: capsule_white color=#d9d9d4 roughness=0.55 metalness=0.05`
+		},
+		{
+			name: 'Coral Growth',
+			liveObj: `#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@kernel_default: cadquery
+#@material_preset: coral_pink color=#ff8f9f roughness=0.68 metalness=0.0
+#@material_preset: reef_base color=#6d5b4b roughness=0.9 metalness=0.0
+
+o coral_growth_01
+#@source: simulation
+#@sim: cellular_automata
+#@params: grid=[10,10,14],cell=0.08,steps=38,seed=2718,mode=coral,surface=smooth,mc_resolution=0.04
+#@ops:
+#@ - smooth iterations=3 strength=0.45
+#@ - material name=coral_pink
+#@ - tag value=art
+
+o reef_base_01
+#@source: sdf
+#@sdf:
+#@ - sphere id=base_mass center=[0,0,-0.12] radius=1.35
+#@ - box id=base_cut center=[0,0,-1.0] size=[3.2,3.2,1.6]
+#@ - intersect base_mass base_cut
+#@ - noise_displace strength=0.08 frequency=5.0 seed=91
+#@ - mesh_from_sdf resolution=0.04
+#@ops:
+#@ - material name=reef_base
+#@ - tag value=decorative`
 		},
 		{
 			name: 'Fluid Organic Vase',
