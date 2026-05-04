@@ -3,7 +3,7 @@
  * (Keeps parity with server `liveObj/pipeline.ts` for `/api/live-obj/execute`.)
  */
 export function stripCodeFences(text: string): string {
-	const t = text.trim();
+	const t = String(text ?? '').trim();
 	if (!t) return t;
 	const firstFence =
 		/```(?:[a-zA-Z0-9_-]+)?\s*\r?\n([\s\S]*?)```/.exec(t) ?? /```([\s\S]*?)```/.exec(t);

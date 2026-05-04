@@ -9,8 +9,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			return json({ detail: 'Missing liveObj in request body' }, { status: 400 });
 		}
 		const liveObjClean = stripCodeFences(liveObj);
-		const executedObj = await expandLiveObjWithExecutor(liveObjClean);
-		return json({ executedObj, liveObj: liveObjClean });
+		const result = await expandLiveObjWithExecutor(liveObjClean);
+		return json({ executedObj: result.executedObj, liveObj: liveObjClean });
 	} catch (error) {
 		console.error('[live-obj/execute] Error:', error);
 		return json(

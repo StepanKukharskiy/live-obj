@@ -40,7 +40,7 @@
 		const map: Record<string, string> = {};
 		for (const piece of splitTopLevel(raw)) {
 			if (typeof piece !== 'string') continue;
-			const eq = piece.indexOf('=');
+			const eq = String(piece).indexOf('=');
 			if (eq <= 0) continue;
 			const key = piece.slice(0, eq).trim();
 			const value = piece.slice(eq + 1).trim();
@@ -167,7 +167,7 @@
 			if (source.startsWith('sdf_op:')) {
 				const cmd = source.slice('sdf_op:'.length);
 				if (typeof key !== 'string') continue;
-				const dot = key.indexOf('.');
+				const dot = String(key).indexOf('.');
 				const rawKey = dot > 0 ? key.slice(dot + 1) : key;
 				const sdfCmdMatch = trimmed.match(/^#@\s*-\s*([a-zA-Z0-9_]+)\s+(.+)$/);
 				if (!sdfCmdMatch || sdfCmdMatch[1] !== cmd || typeof sdfCmdMatch[2] !== 'string') continue;

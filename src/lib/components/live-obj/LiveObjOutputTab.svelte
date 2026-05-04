@@ -25,7 +25,7 @@
 
 	const emptySourceHint = '';
 
-	const meshBasis = $derived(String(executedObjText || liveObjText || ''));
+	const meshBasis = $derived(String(executedObjText ?? liveObjText ?? ''));
 	let showMeshLines = $state(true);
 
 	let editorValue = $state('');
@@ -47,7 +47,7 @@
 		return showMeshLines ? expanded : stripLiveObjMeshLines(expanded) || emptySourceHint;
 	}
 
-	/** Pre-DOM so `bind:value` sees seeded text on Monaco’s first bind (avoids empty model + missed sync). */
+	/** Pre-DOM so `bind:value` sees seeded text on Monaco's first bind (avoids empty model + missed sync). */
 	$effect.pre(() => {
 		void sceneEpoch;
 		void sourceTab;
@@ -55,13 +55,14 @@
 		void rawLlmText;
 		void executedObjText;
 		void showMeshLines;
-		editorValue = seedEditor();
+		const seeded = seedEditor();
+		editorValue = String(seeded ?? '');
 	});
 
 	const editable = $derived(sourceTab !== 'meta');
 
 	function revertEditor() {
-		editorValue = seedEditor();
+		editorValue = String(seedEditor() ?? '');
 	}
 
 	function buildPayloadForExecute(): string | null {
