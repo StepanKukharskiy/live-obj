@@ -2491,7 +2491,7 @@ def spiral_post_array_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     else:
         total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
     total_h = float(params.get("height", params.get("total_height", 3.0)))
-    rise = float(params.get("rise_per_step", total_h / max(1, count)))
+    rise = total_h / max(1, count)
     r = float(params.get("radius", 1.0))
     post_r = float(params.get("post_radius", 0.025))
     ph = float(params.get("post_height", 0.9))
@@ -2499,7 +2499,7 @@ def spiral_post_array_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     cx, cy, cz = center
     mesh = Mesh()
     for i in range(count):
-        frac = (i * rise) / max(total_h, 1e-6)
+        frac = i / max(1, count - 1) if count > 1 else 0
         theta = total_turn * frac
         px = cx + r * math.cos(theta)
         py = cy + r * math.sin(theta)
