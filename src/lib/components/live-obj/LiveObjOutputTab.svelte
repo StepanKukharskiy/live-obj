@@ -25,7 +25,7 @@
 
 	const emptySourceHint = '';
 
-	const meshBasis = $derived(executedObjText || liveObjText);
+	const meshBasis = $derived(String(executedObjText || liveObjText || ''));
 	let showMeshLines = $state(true);
 
 	let editorValue = $state('');
@@ -35,15 +35,15 @@
 			? stripLiveObjMeshLines(meshBasis)
 			: '';
 		if (sourceTab === 'live') {
-			const liveBody = liveObjText.trim() ? liveObjText : emptySourceHint;
+			const liveBody = String(liveObjText || '').trim() ? liveObjText : emptySourceHint;
 			return showMeshLines ? liveBody : stripLiveObjMeshLines(liveBody) || emptySourceHint;
 		}
 		if (sourceTab === 'raw') {
-			const rawBody = rawLlmText.trim() ? rawLlmText : emptySourceHint;
+			const rawBody = String(rawLlmText || '').trim() ? rawLlmText : emptySourceHint;
 			return showMeshLines ? rawBody : stripLiveObjMeshLines(rawBody) || emptySourceHint;
 		}
-		if (sourceTab === 'meta') return metaBody.trim() ? metaBody : emptySourceHint;
-		const expanded = executedObjText.trim() ? executedObjText : emptySourceHint;
+		if (sourceTab === 'meta') return String(metaBody || '').trim() ? metaBody : emptySourceHint;
+		const expanded = String(executedObjText || '').trim() ? executedObjText : emptySourceHint;
 		return showMeshLines ? expanded : stripLiveObjMeshLines(expanded) || emptySourceHint;
 	}
 
@@ -65,7 +65,7 @@
 	}
 
 	function buildPayloadForExecute(): string | null {
-		let t = editorValue;
+		let t = String(editorValue || '');
 		if (!t.trim()) return null;
 		if (sourceTab === 'meta') return null;
 
