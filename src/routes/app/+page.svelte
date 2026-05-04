@@ -213,59 +213,22 @@ o cube
 		if (!updatedLiveObj.trim()) return;
 		statusLine = null;
 		const sceneWithKernel = applyKernelDefaultHeader(updatedLiveObj);
-		console.log('[regenerateFromMetadata] Calling executor with updated Live OBJ');
-		console.log('[regenerateFromMetadata] Updated Live OBJ length:', updatedLiveObj.length);
-		console.log('[regenerateFromMetadata] Scene with kernel length:', sceneWithKernel.length);
 		try {
 			const res = await fetch('/api/live-obj/execute', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ liveObj: sceneWithKernel })
 			});
-			const payload = (await res.json().catch(() => ({}))) as {
-				message?: string;
-				detail?: string;
-				liveObj?: string;
-				executedObj?: string;
-			};
-			console.log('[regenerateFromMetadata] Executor response status:', res.status);
-			console.log('[regenerateFromMetadata] Payload keys:', Object.keys(payload));
+			const payload = await res.json();
 			if (!res.ok) throw new Error(payload.detail || payload.message || res.statusText || 'Metadata regeneration failed');
 			liveObjText = payload.liveObj ?? sceneWithKernel;
 			executedObjText = payload.executedObj ?? '';
 			sourceTab = 'executed';
 			sceneEpoch += 1;
-			console.log('[regenerateFromMetadata] Updated liveObjText length:', liveObjText.length);
-			console.log('[regenerateFromMetadata] Updated executedObjText length:', executedObjText.length);
-			console.log('[regenerateFromMetadata] sceneEpoch incremented to:', sceneEpoch);
-			// Log all vertices for the first object (first tread)
-			const lines = (payload.executedObj ?? '').split('\n');
-			let currentObject = null;
-			const firstObjectVertices: string[] = [];
-			for (const line of lines) {
-				const objMatch = line.match(/^o\s+(.+)$/);
-				if (objMatch) {
-					if (currentObject && firstObjectVertices.length === 0) {
-						// We've passed the first object without finding vertices, move to next
-						currentObject = objMatch[1];
-					} else if (currentObject && firstObjectVertices.length > 0) {
-						// We've collected vertices for the first object, stop
-						break;
-					} else {
-						// First object
-						currentObject = objMatch[1];
-					}
-				} else if (currentObject && line.match(/^v\s+/)) {
-					firstObjectVertices.push(line);
-				}
-			}
-			console.log('[regenerateFromMetadata] First object vertices count:', firstObjectVertices.length);
-			console.log('[regenerateFromMetadata] First 20 vertices of first object:', firstObjectVertices.slice(0, 20));
 			if (payload.executedObj) applyObjString(payload.executedObj, payload.liveObj ?? sceneWithKernel);
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
 			statusLine = `Metadata regenerate failed: ${m}`;
-			// On error, revert to the original edited text
 			liveObjText = sceneWithKernel;
 		}
 	}

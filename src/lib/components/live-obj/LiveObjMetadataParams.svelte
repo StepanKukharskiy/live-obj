@@ -198,7 +198,7 @@
 	function commitValue(key: string, fallback: string) {
 		if (!selectedMetaObject) return;
 		const nextValue = fieldValue(key, fallback);
-		console.log(`[LiveObjMetadataParams] Updating ${key} from ${fallback} to ${nextValue}`);
+		if (nextValue === fallback) return;
 		const updated = rewriteParamInLiveObj(
 			liveObjText,
 			selectedMetaObject.id,
@@ -207,7 +207,6 @@
 			selectedMetaObject.paramSources[key] ??
 				(key.includes('.') ? `sdf_op:${key.split('.', 1)[0]}` : 'params')
 		);
-		console.log(`[LiveObjMetadataParams] Updated Live OBJ text length: ${updated.length}`);
 		onLiveObjMetadataChange?.(updated);
 	}
 </script>
