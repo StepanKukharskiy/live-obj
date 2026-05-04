@@ -197,6 +197,7 @@
 
 	function commitValue(key: string, fallback: string) {
 		if (!selectedMetaObject) return;
+		if (typeof liveObjText !== 'string') return;
 		const nextValue = fieldValue(key, fallback);
 		if (nextValue === fallback) return;
 		const updated = rewriteParamInLiveObj(
