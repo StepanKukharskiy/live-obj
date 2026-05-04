@@ -2380,6 +2380,8 @@ def spiral_treads_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     r_mid = 0.5 * (r_in + r_out)
     radial = max(0.02, r_out - r_in)
     tangential = max(0.03, r_mid * tread_ang)
+    # Log parameters for debugging
+    print(f"[spiral_treads_mesh] params: count={count}, turns={params.get('turns')}, height={total_h}, inner_radius={r_in}, outer_radius={r_out}, tread_thickness={thick}, tread_angle={tread_deg}")
     for i in range(count):
         frac = (i * rise) / max(total_h, 1e-6)
         theta = total_turn * frac
