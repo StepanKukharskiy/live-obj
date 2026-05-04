@@ -2417,6 +2417,54 @@ def spiral_treads_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     return mesh
 
 
+def helix_array_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
+    """Copy a base mesh along a helix path."""
+    count = int(params.get("count", params.get("step_count", 12)))
+    if params.get("turns") is not None:
+        total_turn = float(params["turns"]) * 2 * math.pi
+    else:
+        total_turn = math.radians(float(params.get("total_turn_degrees", 360)))
+    total_h = float(params.get("height", params.get("total_height", 3.0)))
+    rise = total_h / max(1, count)
+    radius = float(params.get("radius", 1.0))
+    cx, cy, cz = center
+    
+    # Get base mesh dimensions from params
+    base_size = params.get("base_size", [1.0, 1.0, 0.05])
+    base_size = [float(v) for v in (base_size if isinstance(base_size, (list, tuple)) else [base_size, base_size, base_size])]
+    
+    # Generate base mesh (simple box)
+    base_mesh = box_mesh((0, 0, 0), base_size)
+    
+    mesh = Mesh()
+    for i in range(count):
+        frac = i / max(1, count - 1) if count > 1 else 0
+        theta = total_turn * frac
+        z = cz + i * rise
+        
+        # Position on helix
+        px = cx + radius * math.cos(theta)
+        py = cy + radius * math.sin(theta)
+        pz = z
+        
+        # Rotation around Z axis (tangent to helix)
+        rot_z = theta
+        
+        # Transform: position, rotation
+        transform = {
+            "position": [px, py, pz],
+            "rotation": [0, 0, math.degrees(rot_z)],
+            "scale": [1, 1, 1]
+        }
+        
+        transformed = apply_transform(base_mesh, transform)
+        base_idx = len(mesh.vertices)
+        mesh.vertices.extend(transformed.vertices)
+        mesh.faces.extend([[base_idx + f for f in face] for face in transformed.faces])
+    
+    return mesh
+
+
 def spiral_post_array_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     """Vertical cylinders along the stair spiral at outer radius."""
     count = int(params.get("count", params.get("step_count", 12)))
@@ -3965,6 +4013,8 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
             return spiral_treads_mesh(params, center)
         if gen == "spiral_post_array":
             return spiral_post_array_mesh(params, center)
+        if gen == "helix_array":
+            return helix_array_mesh(params, center)
         return obj.mesh.copy()
 
     if typ == "sweep":

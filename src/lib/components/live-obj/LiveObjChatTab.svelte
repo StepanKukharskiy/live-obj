@@ -159,7 +159,7 @@ o treads
 #@parent: spiral_staircase_01
 #@source: procedural
 #@type: mesh
-#@params: generator=spiral_treads, count=18, turns=1.5, height=3.2, inner_radius=0.18, outer_radius=1.15, tread_thickness=0.07, tread_angle=18, tread_depth=0.72, center=[0,0,0]
+#@params: generator=helix_array, count=18, turns=1.5, height=3.2, radius=0.665, base_size=[0.97,0.2089,0.07], center=[0,0,0]
 #@ops:
 #@ - material name=warm_oak
 #@ - tag value=structural
