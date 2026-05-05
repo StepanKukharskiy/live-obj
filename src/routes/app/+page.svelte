@@ -27,6 +27,7 @@ o cube
 #@params: center=[0,0,0], size=[1,1,1]
 #@transform: rotation=[30,30,0]
 `);
+	let currentSceneMode = $state<'live_obj' | 'raw_obj'>('live_obj');
 	let rawLlmText = $state('');
 	let executedObjText = $state('');
 	let sceneEpoch = $state(0);
@@ -129,6 +130,135 @@ o cube
 		return axis === 'x' || axis === 'z' ? axis : 'y';
 	}
 
+	function objectNamesFromLiveObj(sourceText: string): string[] {
+		const names = [...sourceText.matchAll(/^\s*o\s+([^\s#]+)/gm)].map((m) => m[1]);
+		return [...new Set(names)];
+	}
+
+	function readableObjectName(name: string): string {
+		return name.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+	}
+
+	function summarizeObjectNames(names: string[], max = 4): string {
+		const readable = names.map(readableObjectName).filter(Boolean);
+		if (readable.length <= max) return readable.join(', ');
+		return `${readable.slice(0, max).join(', ')} and ${readable.length - max} more parts`;
+	}
+
+	function editVerbFromPrompt(promptText: string): string {
+		const lower = promptText.toLowerCase();
+		if (/\b(add|insert|create|make|put|include|attach)\b/.test(lower)) return 'Added';
+		if (/\b(remove|delete|erase|drop|hide)\b/.test(lower)) return 'Removed';
+		if (/\b(bigger|smaller|scale|resize|move|rotate|reposition|color|material|detail|adjust|change|modify|update|edit)\b/.test(lower)) return 'Adjusted';
+		return 'Updated';
+	}
+
+	const SUMMARY_STOP_WORDS = new Set([
+		'add', 'insert', 'create', 'make', 'put', 'include', 'attach',
+		'remove', 'delete', 'erase', 'drop', 'hide',
+		'bigger', 'smaller', 'scale', 'resize', 'move', 'rotate', 'reposition',
+		'color', 'material', 'detail', 'detailed', 'adjust', 'change', 'modify', 'update', 'edit',
+		'the', 'and', 'with', 'nearby', 'next', 'from', 'into', 'more', 'less', 'can', 'you',
+		'please', 'part', 'parts', 'scene', 'object', 'objects', 'robot', 'droid'
+	]);
+
+	function promptSummaryTerms(promptText: string): string[] {
+		return [...new Set(promptText.toLowerCase().match(/[a-z0-9]+/g) ?? [])]
+			.filter((term) => term.length > 2 && !SUMMARY_STOP_WORDS.has(term));
+	}
+
+	function namesMatchingPrompt(names: string[], promptText: string): string[] {
+		const terms = promptSummaryTerms(promptText);
+		if (terms.length === 0) return [];
+		return names.filter((name) => {
+			const readable = readableObjectName(name).toLowerCase();
+			return terms.some((term) => readable.includes(term));
+		});
+	}
+
+	function parsePatchEdits(rawPatch: string): Array<{ find: string; replace: string }> {
+		const cleaned = rawPatch.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+		const candidates = [cleaned];
+		const start = cleaned.indexOf('{');
+		const end = cleaned.lastIndexOf('}');
+		if (start >= 0 && end > start) candidates.push(cleaned.slice(start, end + 1));
+		for (const candidate of candidates) {
+			try {
+				const parsed = JSON.parse(candidate) as { edits?: unknown };
+				if (!Array.isArray(parsed.edits)) continue;
+				return parsed.edits
+					.filter((edit): edit is { find: string; replace: string } => {
+						if (!edit || typeof edit !== 'object') return false;
+						const e = edit as { find?: unknown; replace?: unknown };
+						return typeof e.find === 'string' && typeof e.replace === 'string';
+					});
+			} catch {}
+		}
+		return [];
+	}
+
+	function objectNameForSnippet(sceneText: string, snippet: string): string | null {
+		const index = sceneText.indexOf(snippet);
+		if (index < 0) return null;
+		let current: string | null = null;
+		for (const match of sceneText.matchAll(/^\s*o\s+([^\s#]+)/gm)) {
+			const matchIndex = match.index ?? 0;
+			if (matchIndex > index) break;
+			current = match[1];
+		}
+		return current;
+	}
+
+	function patchTouchedObjectNames(rawPatch: string, previousLiveObj: string, nextLiveObj: string): string[] {
+		const touched: string[] = [];
+		for (const edit of parsePatchEdits(rawPatch)) {
+			const fromFind = objectNameForSnippet(previousLiveObj, edit.find);
+			if (fromFind) touched.push(fromFind);
+			for (const name of objectNamesFromLiveObj(edit.replace)) touched.push(name);
+			const fromReplace = objectNameForSnippet(nextLiveObj, edit.replace);
+			if (fromReplace) touched.push(fromReplace);
+		}
+		return [...new Set(touched)];
+	}
+
+	function summarizeAssistantResult(args: {
+		promptText: string;
+		previousLiveObj: string;
+		nextLiveObj: string;
+		rawLlm: string;
+		isIterativeEdit: boolean;
+		editMode?: 'surgical' | 'rewrite';
+		surgicalEditSummary?: string;
+	}): string {
+		const nextNames = objectNamesFromLiveObj(args.nextLiveObj);
+		if (!args.isIterativeEdit && args.editMode !== 'surgical') {
+			const sceneParts = summarizeObjectNames(nextNames);
+			return sceneParts
+				? `Created scene with ${sceneParts}.`
+				: 'Created scene from prompt.';
+		}
+
+		const previousNames = objectNamesFromLiveObj(args.previousLiveObj);
+		const previousSet = new Set(previousNames);
+		const nextSet = new Set(nextNames);
+		const added = nextNames.filter((name) => !previousSet.has(name));
+		const removed = previousNames.filter((name) => !nextSet.has(name));
+		const changed = nextNames.filter((name) => previousSet.has(name));
+		const touched = patchTouchedObjectNames(args.rawLlm, args.previousLiveObj, args.nextLiveObj);
+		const verb = editVerbFromPrompt(args.promptText);
+		const promptMatchedAdded = namesMatchingPrompt(added, args.promptText);
+		const promptMatchedTouched = namesMatchingPrompt(touched, args.promptText);
+
+		if (promptMatchedAdded.length > 0) return `${verb} ${summarizeObjectNames(promptMatchedAdded)}.`;
+		if (added.length > 0) return `${verb} ${summarizeObjectNames(added)}.`;
+		if (removed.length > 0) return `${verb} ${summarizeObjectNames(removed)}.`;
+		if (promptMatchedTouched.length > 0) return `${verb} ${summarizeObjectNames(promptMatchedTouched)}.`;
+		if (touched.length > 0) return `${verb} ${summarizeObjectNames(touched)}.`;
+		if (args.surgicalEditSummary?.trim()) return args.surgicalEditSummary.trim();
+		if (changed.length > 0) return `${verb} ${summarizeObjectNames(changed)}.`;
+		return `${verb} scene.`;
+	}
+
 	function applyObjectControls() {
 		if (!renderObject) return;
 		renderObject.position.set(objectPosX, objectPosY, objectPosZ);
@@ -223,6 +353,7 @@ o cube
 			const payload = await res.json();
 			if (!res.ok) throw new Error(payload.detail || payload.message || res.statusText || 'Metadata regeneration failed');
 			liveObjText = String(payload.liveObj ?? sceneWithKernel);
+			currentSceneMode = /#@source:\s*(procedural|assembly|sdf|simulation)/i.test(liveObjText) ? 'live_obj' : currentSceneMode;
 			executedObjText = typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.executedObj ?? '');
 			sourceTab = 'executed';
 			sceneEpoch += 1;
@@ -322,8 +453,11 @@ o cube
 		const latestHistoryContent = [...priorMsgs]
 			.reverse()
 			.find((m) => m.role === 'assistant' && (m.historyContent ?? '').trim())?.historyContent;
+		const isIterativeEdit = Boolean(latestHistoryContent?.trim());
 		const currentLiveObj = liveObjText.trim();
-		if (currentLiveObj && currentLiveObj !== (latestHistoryContent ?? '').trim()) {
+		const previousLiveObj = currentLiveObj;
+		const previousSceneMode = currentSceneMode;
+		if (isIterativeEdit && currentLiveObj && currentLiveObj !== (latestHistoryContent ?? '').trim()) {
 			history.push({ role: 'assistant', content: currentLiveObj });
 		}
 
@@ -340,6 +474,7 @@ o cube
 					apiKey: providerSettings.apiKey?.trim() || undefined,
 					apiUrl: providerSettings.apiUrl?.trim() || undefined,
 					useProcedural,
+					...(isIterativeEdit ? { currentLiveObj, isIterativeEdit, currentSceneMode: previousSceneMode } : {}),
 					kernelDefault
 				})
 			});
@@ -349,10 +484,14 @@ o cube
 				rawLlm?: string;
 				executedObj?: string;
 				executorWarning?: string;
+				editMode?: 'surgical' | 'rewrite';
+				surgicalEditSummary?: string;
+				assistantMessage?: string;
 			};
 			if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
 
 			liveObjText = String(payload.liveObj ?? '');
+			currentSceneMode = useProcedural ? 'live_obj' : 'raw_obj';
 			rawLlmText = String(payload.rawLlm ?? '');
 			executedObjText = typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.executedObj ?? '');
 			if (payload.executedObj) applyObjString(typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.executedObj), String(payload.liveObj ?? payload.executedObj));
@@ -362,6 +501,15 @@ o cube
 			if (payload.executorWarning) {
 				statusLine = `Executor: ${payload.executorWarning}`;
 			}
+			const assistantMessage = summarizeAssistantResult({
+				promptText: text,
+				previousLiveObj,
+				nextLiveObj: String(payload.liveObj ?? payload.executedObj ?? ''),
+				rawLlm: String(payload.rawLlm ?? ''),
+				isIterativeEdit,
+				editMode: payload.editMode,
+				surgicalEditSummary: payload.surgicalEditSummary
+			});
 
 			msgs = [
 				...msgs,
@@ -369,7 +517,7 @@ o cube
 					role: 'assistant',
 					content: payload.executorWarning
 						? 'Received model output. Executor had issues; check status and the Adjust tab.'
-						: 'Updated scene applied. You can keep chatting to add/remove/modify objects.',
+						: payload.assistantMessage?.trim() || assistantMessage,
 					historyContent: payload.liveObj ?? payload.executedObj ?? ''
 				}
 			];

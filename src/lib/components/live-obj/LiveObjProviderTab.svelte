@@ -122,7 +122,27 @@
 <style>
 	.provider-tab { display: grid; gap: 10px; padding: 12px 2px; }
 	label { display: grid; gap: 6px; font-size: 12px; color: #334155; }
-	input, select { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+	input { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+	select {
+		box-sizing: border-box;
+		max-width: 140px;
+		height: 32px;
+		font-family: inherit;
+		font-size: 12px;
+		font-weight: 600;
+		color: #333;
+		border: 1px solid rgba(0, 0, 0, 0.12);
+		border-radius: 999px;
+		padding: 0 10px;
+		background: rgba(255, 255, 255, 0.95);
+		cursor: pointer;
+	}
+
+	select:disabled {
+		cursor: not-allowed;
+		opacity: 0.65;
+	}
+
 	.provider-note { margin: 0; font-size: 12px; color: #64748b; }
 	.provider-remember { grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
 </style>

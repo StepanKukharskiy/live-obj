@@ -450,6 +450,13 @@ def resolve_assembly_anchors(asm: LiveObject, obn: Dict[str, LiveObject]) -> Non
     params = asm.meta.get("params") or {}
     env0 = assembly_params_eval_env(params, obn)
     raw = asm.meta.get("anchors") or {}
+    if not isinstance(raw, dict):
+        print(
+            "[live-obj] assembly anchors on '%s' must be a key/value block; ignoring malformed anchors" % asm.name,
+            file=sys.stderr,
+        )
+        asm.meta["anchors"] = {}
+        return
     resolved: Dict[str, Any] = {}
     for aname, aval in raw.items():
         v = _resolve_anchor_value(aval, env0, obn)
