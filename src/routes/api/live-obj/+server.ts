@@ -18,11 +18,13 @@ type WireHistoryItem = {
 	role: string;
 	content: string;
 	imageUrl?: string;
+	imageUrls?: string[];
 };
 
 type Body = {
 	userMessage?: string;
 	imageUrl?: string;
+	imageUrls?: string[];
 	history?: WireHistoryItem[];
 	currentLiveObj?: string;
 	isIterativeEdit?: boolean;
@@ -57,6 +59,14 @@ const KNOWN_TYPES = new Set([
 	'extrude', 'revolve', 'lathe', 'loft', 'cone', 'sphere'
 ]);
 const KNOWN_SIMS = new Set(['cellular_automata', 'cellular_automata_instances', 'differential_growth', 'boids']);
+
+function normalizeImageUrls(...groups: Array<string | string[] | undefined>): string[] {
+	const urls = groups
+		.flatMap((group) => (Array.isArray(group) ? group : group ? [group] : []))
+		.map((url) => url.trim())
+		.filter(Boolean);
+	return [...new Set(urls)];
+}
 
 function unknownOpsInLiveObj(liveObj: string): string[] {
 	const unknown = new Set<string>();
@@ -141,8 +151,8 @@ function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[
 			if (m.role === 'assistant') {
 				return { role: 'assistant', content: m.content };
 			}
-			const img = m.imageUrl?.trim();
-			if (img) {
+			const imgs = normalizeImageUrls(m.imageUrls, m.imageUrl);
+			if (imgs.length > 0) {
 				const text =
 					m.content?.trim() ||
 					'Generate or update the Live OBJ scene from this reference image.';
@@ -150,7 +160,7 @@ function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[
 					role: 'user',
 					content: [
 						{ type: 'text', text },
-						{ type: 'image_url', image_url: { url: img } }
+						...imgs.map((url) => ({ type: 'image_url' as const, image_url: { url, detail: 'low' as const } }))
 					]
 				};
 			}
@@ -203,9 +213,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const userMessage = body.userMessage?.trim() ?? '';
-	const imageUrl = body.imageUrl?.trim();
-	if (!userMessage && !imageUrl) {
-		throw error(400, 'userMessage or imageUrl is required');
+	const imageUrls = normalizeImageUrls(body.imageUrls, body.imageUrl);
+	if (!userMessage && imageUrls.length === 0) {
+		throw error(400, 'userMessage or imageUrl/imageUrls is required');
 	}
 
 	const model = (body.model?.trim() || DEFAULT_LIVE_OBJ_MODEL) as string;
@@ -233,7 +243,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				history,
 				model,
 				currentSceneMode: body.currentSceneMode === 'raw_obj' ? 'raw_obj' : 'live_obj',
-				imageUrl,
+				imageUrls,
 				reqApiKey,
 				reqApiUrl
 			});
@@ -246,7 +256,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
 				() =>
 					requestLiveObjFromLlm(userMessage, history, model, {
-						imageDataUrl: imageUrl,
+						imageDataUrls: imageUrls,
 						useProcedural
 					})
 			);
@@ -398,9 +408,11 @@ async function requestAndApplySurgicalPatch(args: {
 	model: string;
 	currentSceneMode?: 'live_obj' | 'raw_obj';
 	imageUrl?: string;
+	imageUrls?: string[];
 	reqApiKey?: string;
 	reqApiUrl?: string;
 }): Promise<{ liveObj: string; rawPatch: string; appliedEdits: number; summary?: string }> {
+	const imageUrls = normalizeImageUrls(args.imageUrls, args.imageUrl);
 	const rawPatch = await withLlmRequestOverrides(
 		args.reqApiKey || args.reqApiUrl
 			? { apiKey: args.reqApiKey, apiUrl: args.reqApiUrl }
@@ -412,7 +424,7 @@ async function requestAndApplySurgicalPatch(args: {
 				args.history,
 				args.model,
 				{
-					imageDataUrl: args.imageUrl,
+					imageDataUrls: imageUrls,
 					currentSceneMode: args.currentSceneMode
 				}
 			)
@@ -442,7 +454,7 @@ async function requestAndApplySurgicalPatch(args: {
 					args.history,
 					args.model,
 					{
-						imageDataUrl: args.imageUrl,
+						imageDataUrls: imageUrls,
 						currentSceneMode: args.currentSceneMode
 					}
 				)

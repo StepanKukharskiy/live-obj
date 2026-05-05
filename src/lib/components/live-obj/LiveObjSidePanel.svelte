@@ -8,7 +8,15 @@
 	import LiveObjProviderTab from './LiveObjProviderTab.svelte';
 	import type { SourceTab } from './LiveObjOutputTab.svelte';
 
-	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
+	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string; historyContent?: string };
+	type SendPayload = {
+		text: string;
+		useProcedural?: boolean;
+		imageDataUrl?: string;
+		imageDataUrls?: string[];
+		feedbackLoop?: boolean;
+		feedbackPasses?: number;
+	};
 	type PanelTab = 'chat' | 'provider' | 'adjust' | 'tools' | 'scene' | 'render';
 	type RenderingMode = 'standard' | 'outline' | 'toon';
 
@@ -94,7 +102,7 @@
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
 		providerSettings?: { provider: string; apiKey: string; apiUrl: string; imageUrl: string; textModel: string; imageModel: string; rememberMe: boolean };
-	onSend?: (payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
+	onSend?: (payload: SendPayload) => void;
 	onCaptureSceneScreenshot?: () => string;
 	onLaunchObjExample?: (liveObj: string) => void;
 	kernelDefault?: 'auto' | 'cadquery';

@@ -5,13 +5,33 @@
 	import LiveObjSidePanel from '$lib/components/live-obj/LiveObjSidePanel.svelte';
 	import type { SourceTab } from '$lib/components/live-obj/LiveObjOutputTab.svelte';
 	import { browser } from '$app/environment';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	type ChatMsg = {
 		role: 'user' | 'assistant';
 		content: string;
 		imageDataUrl?: string;
 		historyContent?: string;
+	};
+
+	type SendPromptPayload = {
+		text: string;
+		useProcedural?: boolean;
+		imageDataUrl?: string;
+		imageDataUrls?: string[];
+		feedbackLoop?: boolean;
+		feedbackPasses?: number;
+	};
+
+	type LiveObjApiPayload = {
+		message?: string;
+		liveObj?: string;
+		rawLlm?: string;
+		executedObj?: string;
+		executorWarning?: string;
+		editMode?: 'surgical' | 'rewrite';
+		surgicalEditSummary?: string;
+		assistantMessage?: string;
 	};
 
 	let showPanel = $state(true);
@@ -424,10 +444,125 @@ o cube
 		}
 	});
 
-	async function sendPrompt(payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) {
-		const { text, useProcedural = true, imageDataUrl } = payload;
+	function buildChatHistory(priorMsgs: ChatMsg[], includeImages = true) {
+		return priorMsgs.map((m) => ({
+			role: m.role,
+			content: m.historyContent ?? m.content,
+			...(includeImages && m.imageDataUrl ? { imageUrl: m.imageDataUrl } : {})
+		}));
+	}
+
+	async function waitForSceneCaptureFrame() {
+		await tick();
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+	}
+
+	function captureFeedbackScreenshot() {
+		return (
+			canvasRef?.captureScreenshot({
+				maxWidth: 768,
+				format: 'image/jpeg',
+				quality: 0.82,
+				maxBytes: 900_000
+			}) ?? ''
+		);
+	}
+
+	function feedbackPrompt(originalText: string, pass: number, total: number, hasReferenceImage: boolean): string {
+		return [
+			`Feedback pass ${pass} of ${total}.`,
+			hasReferenceImage
+				? 'Compare the attached images: first is the original reference image, last is the current rendered 3D scene screenshot.'
+				: 'Review the attached rendered screenshot of the current 3D scene against the original user request.',
+			`Original user request: ${originalText || 'Use the attached image/request context.'}`,
+			'Improve the scene only where the screenshot reveals missing, unclear, misplaced, poorly scaled, or visually weak details.',
+			'Keep successful parts unchanged. Return an updated OBJ scene.'
+		].join('\n');
+	}
+
+	async function requestSceneUpdateTurn(args: {
+		text: string;
+		useProcedural: boolean;
+		imageDataUrl?: string;
+		imageDataUrls?: string[];
+		priorMsgs: ChatMsg[];
+		includeHistoryImages?: boolean;
+	}) {
+		const { text, useProcedural, imageDataUrl, imageDataUrls = [], priorMsgs, includeHistoryImages = true } = args;
+		const requestImageUrls = [...new Set([...imageDataUrls, ...(imageDataUrl ? [imageDataUrl] : [])].map((url) => url.trim()).filter(Boolean))];
 		const model = providerSettings.textModel?.trim() || 'gpt-5.5';
-		if ((!text.trim() && !imageDataUrl) || busy) return;
+		const history = buildChatHistory(priorMsgs, includeHistoryImages);
+		const latestHistoryContent = [...priorMsgs]
+			.reverse()
+			.find((m) => m.role === 'assistant' && (m.historyContent ?? '').trim())?.historyContent;
+		const isIterativeEdit = Boolean(latestHistoryContent?.trim());
+		const currentLiveObj = liveObjText.trim();
+		const previousLiveObj = currentLiveObj;
+		const previousSceneMode = currentSceneMode;
+		if (isIterativeEdit && currentLiveObj && currentLiveObj !== (latestHistoryContent ?? '').trim()) {
+			history.push({ role: 'assistant', content: currentLiveObj });
+		}
+
+		const res = await fetch('/api/live-obj', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				userMessage: text,
+				...(requestImageUrls.length === 1 ? { imageUrl: requestImageUrls[0] } : {}),
+				...(requestImageUrls.length > 1 ? { imageUrls: requestImageUrls } : {}),
+				history,
+				model,
+				provider: providerSettings.provider,
+				apiKey: providerSettings.apiKey?.trim() || undefined,
+				apiUrl: providerSettings.apiUrl?.trim() || undefined,
+				useProcedural,
+				...(isIterativeEdit ? { currentLiveObj, isIterativeEdit, currentSceneMode: previousSceneMode } : {}),
+				kernelDefault
+			})
+		});
+		const payload = (await res.json().catch(() => ({}))) as LiveObjApiPayload;
+		if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
+
+		liveObjText = String(payload.liveObj ?? '');
+		currentSceneMode = useProcedural ? 'live_obj' : 'raw_obj';
+		rawLlmText = String(payload.rawLlm ?? '');
+		executedObjText = typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.executedObj ?? '');
+		if (payload.executedObj) applyObjString(typeof payload.executedObj === 'string' ? payload.executedObj : String(payload.liveObj ?? payload.executedObj));
+		sourceTab = 'executed';
+		sceneEpoch += 1;
+
+		if (payload.executorWarning) {
+			statusLine = `Executor: ${payload.executorWarning}`;
+		}
+		const assistantMessage = summarizeAssistantResult({
+			promptText: text,
+			previousLiveObj,
+			nextLiveObj: String(payload.liveObj ?? payload.executedObj ?? ''),
+			rawLlm: String(payload.rawLlm ?? ''),
+			isIterativeEdit,
+			editMode: payload.editMode,
+			surgicalEditSummary: payload.surgicalEditSummary
+		});
+
+		msgs = [
+			...msgs,
+			{
+				role: 'assistant',
+				content: payload.executorWarning
+					? 'Received model output. Executor had issues; check status and the Adjust tab.'
+					: payload.assistantMessage?.trim() || assistantMessage,
+				historyContent: payload.liveObj ?? payload.executedObj ?? ''
+			}
+		];
+	}
+
+	async function sendPrompt(payload: SendPromptPayload) {
+		const { text, useProcedural = true, imageDataUrl } = payload;
+		const initialImageUrls = [...new Set([...(payload.imageDataUrls ?? []), ...(imageDataUrl ? [imageDataUrl] : [])].map((url) => url.trim()).filter(Boolean))];
+		const model = providerSettings.textModel?.trim() || 'gpt-5.5';
+		const feedbackPasses = payload.feedbackLoop ? Math.max(1, Math.min(5, Math.round(payload.feedbackPasses ?? 3))) : 0;
+		if ((!text.trim() && initialImageUrls.length === 0) || busy) return;
 
 		// Validate API key and model before generation
 		if (!providerSettings.apiKey?.trim() && !providerSettings.textModel?.trim()) {
@@ -467,7 +602,8 @@ o cube
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					userMessage: text,
-					...(imageDataUrl ? { imageUrl: imageDataUrl } : {}),
+					...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
+					...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
 					history,
 					model,
 					provider: providerSettings.provider,
@@ -521,6 +657,35 @@ o cube
 					historyContent: payload.liveObj ?? payload.executedObj ?? ''
 				}
 			];
+
+			for (let pass = 1; pass <= feedbackPasses; pass += 1) {
+				statusLine = `Feedback loop ${pass}/${feedbackPasses}: capturing rendered scene.`;
+				await waitForSceneCaptureFrame();
+				const screenshot = captureFeedbackScreenshot();
+				if (!screenshot) {
+					statusLine = 'Feedback loop stopped: unable to capture rendered scene screenshot.';
+					break;
+				}
+
+				const screenshotLine: ChatMsg = {
+					role: 'user',
+					content: `Feedback loop ${pass}/${feedbackPasses}: rendered scene screenshot.`,
+					imageDataUrl: screenshot
+				};
+				const priorBeforeFeedback = [...msgs];
+				msgs = [...msgs, screenshotLine];
+				statusLine = `Feedback loop ${pass}/${feedbackPasses}: asking the model to refine the scene.`;
+				await requestSceneUpdateTurn({
+					text: feedbackPrompt(text, pass, feedbackPasses, initialImageUrls.length > 0),
+					useProcedural,
+					imageDataUrls: [...initialImageUrls, screenshot],
+					priorMsgs: priorBeforeFeedback,
+					includeHistoryImages: false
+				});
+			}
+			if (feedbackPasses > 0 && statusLine?.startsWith('Feedback loop')) {
+				statusLine = null;
+			}
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
 			statusLine = m;

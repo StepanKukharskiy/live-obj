@@ -1739,6 +1739,21 @@ class SDFSphere(SDFExpr):
         return length3(sub3(p, self.c)) - self.r
 
 
+class SDFCapsule(SDFExpr):
+    def __init__(self, a: Vec3, b: Vec3, radius: float):
+        self.a = a
+        self.b = b
+        self.r = radius
+
+    def dist(self, p: Vec3) -> float:
+        pax, pay, paz = p[0] - self.a[0], p[1] - self.a[1], p[2] - self.a[2]
+        bax, bay, baz = self.b[0] - self.a[0], self.b[1] - self.a[1], self.b[2] - self.a[2]
+        denom = bax * bax + bay * bay + baz * baz
+        h = 0.0 if denom <= 1e-12 else max(0.0, min(1.0, (pax * bax + pay * bay + paz * baz) / denom))
+        q = (pax - bax * h, pay - bay * h, paz - baz * h)
+        return length3(q) - self.r
+
+
 class SDFCylinderZ(SDFExpr):
     def __init__(self, center: Vec3, radius: float, height: float):
         self.c = center
@@ -1850,6 +1865,13 @@ def build_sdf(sdf_ops: List[Dict[str, Any]]) -> Optional[SDFExpr]:
             center = tuple(cmd.get("center", [0,0,0]))
             radius = float(cmd.get("radius", 1))
             registry[sid] = SDFSphere(tuple(map(float, center)), radius)
+            current = registry[sid]
+        elif c == "capsule":
+            sid = str(cmd.get("id", f"capsule_{len(registry)}"))
+            a = tuple(cmd.get("a", [0, 0, 0]))
+            b = tuple(cmd.get("b", [0, 0, 1]))
+            radius = float(cmd.get("radius", 0.1))
+            registry[sid] = SDFCapsule(tuple(map(float, a)), tuple(map(float, b)), radius)
             current = registry[sid]
         elif c == "cylinder":
             sid = str(cmd.get("id", f"cylinder_{len(registry)}"))
@@ -3179,6 +3201,12 @@ def op_displace(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
 
 def op_smooth(mesh: Mesh, iterations: int = 1, strength: float = 0.5) -> Mesh:
     out = mesh.copy()
+    if out.vertices:
+        xs = [v[0] for v in out.vertices]
+        ys = [v[1] for v in out.vertices]
+        zs = [v[2] for v in out.vertices]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs), 1.0)
+        out = weld_vertices(out, epsilon=max(1e-6, span * 1e-6))
     # Pure Laplacian smoothing on very coarse primitives (e.g., an 8-vertex box)
     # mostly shrinks corners toward center but keeps the same faceted topology.
     # Add one adaptive subdivision pass so smoothing can actually round the shape.
@@ -4181,6 +4209,16 @@ def _infer_sdf_bounds(sdf_ops: List[Dict[str, Any]], default: List[List[float]])
         if name == "sphere":
             r = max(1e-6, float(cmd.get("radius", 0.5)))
             include_box(center, (r, r, r))
+        elif name == "capsule":
+            r = max(1e-6, float(cmd.get("radius", 0.1)))
+            a = _as_float3(cmd.get("a", [0.0, 0.0, 0.0]), (0.0, 0.0, 0.0))
+            b = _as_float3(cmd.get("b", [0.0, 0.0, 1.0]), (0.0, 0.0, 1.0))
+            lo = (min(a[0], b[0]), min(a[1], b[1]), min(a[2], b[2]))
+            hi = (max(a[0], b[0]), max(a[1], b[1]), max(a[2], b[2]))
+            include_box(
+                ((lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5),
+                ((hi[0] - lo[0]) * 0.5 + r, (hi[1] - lo[1]) * 0.5 + r, (hi[2] - lo[2]) * 0.5 + r),
+            )
         elif name == "box":
             sx, sy, sz = _as_float3(cmd.get("size", [1.0, 1.0, 1.0]), (1.0, 1.0, 1.0))
             include_box(center, (max(1e-6, sx * 0.5), max(1e-6, sy * 0.5), max(1e-6, sz * 0.5)))

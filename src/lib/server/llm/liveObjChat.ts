@@ -7,6 +7,21 @@ const DEFAULT_LIVE_OBJ_MODEL = 'gpt-5.5';
 const IMAGE_ONLY_USER_HINT = 'Generate or update the Live OBJ scene from this reference image.';
 const SURGICAL_HISTORY_ASSISTANT_PLACEHOLDER =
 	'Previous Live OBJ revision was applied. The current Live OBJ in the latest user message is the source of truth.';
+const LIVE_OBJ_GENERATION_QUALITY_HINT = `Executor quality guidance:
+- For limbs, hoses, fingers, and organic connecting forms, SDF capsules are supported and should render as continuous geometry.
+- Do not add smooth immediately after a CAD/kernel bevel on primitive boxes or cylinders; the bevel already rounds those edges and extra smoothing can weaken crisp assembled parts.`;
+const LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT = `Image-to-scene budget:
+- Start with a simplified modular 3D interpretation, not a full pixel-by-pixel reconstruction.
+- Keep the first-pass scene compact: target roughly 12-35 semantic objects.
+- For repeated windows, rooms, capsules, balconies, panels, columns, blocks, or floors, use arrays, paired objects, or a small number of representative modules instead of enumerating every visible instance.
+- Capture the main massing, proportions, colors, material families, and distinctive motifs first.
+- Avoid dense per-window/per-brick/per-cell geometry unless the user explicitly asks for exhaustive detail.`;
+const RAW_OBJ_IMAGE_GENERATION_BUDGET_HINT = `Image-to-raw-OBJ budget:
+- Make a compact low-poly interpretation of the reference image, not an exhaustive mesh reconstruction.
+- Target roughly 8-24 semantic object groups with direct v/f mesh.
+- Use simplified silhouettes, major volumes, representative facade/window/detail groups, and clear object names.
+- Do not hand-author every repeated window, panel, brick, cell, or ornament.
+- Prefer fewer larger mesh objects with #@semantic hints over hundreds of tiny objects or very large vertex lists.`;
 
 const LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT = `You are a surgical editor for Live OBJ files.
 
@@ -56,13 +71,17 @@ Rules:
 - Do not add a follow-up question.
 - Output plain text only.`;
 
-function userMessageContent(text: string, imageDataUrl?: string): ChatMessageContent {
+function normalizeImageDataUrls(imageDataUrls?: string[]): string[] {
+	return [...new Set((imageDataUrls ?? []).map((url) => url.trim()).filter(Boolean))];
+}
+
+function userMessageContent(text: string, imageDataUrls?: string[]): ChatMessageContent {
 	const t = text.trim();
-	const img = imageDataUrl?.trim();
-	if (!img) return t;
+	const images = normalizeImageDataUrls(imageDataUrls);
+	if (images.length === 0) return t;
 	const parts: ChatContentPart[] = [
 		{ type: 'text', text: t || IMAGE_ONLY_USER_HINT },
-		{ type: 'image_url', image_url: { url: img } }
+		...images.map((url) => ({ type: 'image_url' as const, image_url: { url, detail: 'low' as const } }))
 	];
 	return parts;
 }
@@ -79,7 +98,7 @@ function surgicalHistoryMessages(history: ChatCompletionMessage[]): ChatCompleti
 function surgicalEditUserContent(
 	userMessage: string,
 	currentLiveObj: string,
-	imageDataUrl?: string
+	imageDataUrls?: string[]
 ): ChatMessageContent {
 	const request = userMessage.trim() || IMAGE_ONLY_USER_HINT;
 	const text = [
@@ -93,7 +112,7 @@ function surgicalEditUserContent(
 		'',
 		'Return a surgical JSON patch against the Current Live OBJ. Do not return a full Live OBJ file.'
 	].join('\n');
-	return userMessageContent(text, imageDataUrl);
+	return userMessageContent(text, imageDataUrls);
 }
 
 function objectNamesFromLiveObj(sourceText: string): string[] {
@@ -144,20 +163,29 @@ export async function requestLiveObjFromLlm(
 	userMessage: string,
 	history: ChatCompletionMessage[],
 	model: string = DEFAULT_LIVE_OBJ_MODEL,
-	options?: { imageDataUrl?: string; useProcedural?: boolean }
+	options?: { imageDataUrl?: string; imageDataUrls?: string[]; useProcedural?: boolean }
 ): Promise<string> {
 	const useProcedural = options?.useProcedural !== false;
 	const systemPrompt = useProcedural ? LIVE_OBJ_SYSTEM_PROMPT : LLM_ONLY_SYSTEM_PROMPT;
+	const imageDataUrls = normalizeImageDataUrls([
+		...(options?.imageDataUrls ?? []),
+		...(options?.imageDataUrl ? [options.imageDataUrl] : [])
+	]);
+	const imageHint =
+		imageDataUrls.length > 0
+			? `\n\n${useProcedural ? LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT : RAW_OBJ_IMAGE_GENERATION_BUDGET_HINT}`
+			: '';
 	const messages: ChatCompletionMessage[] = [
-		{ role: 'system', content: systemPrompt },
+		{ role: 'system', content: useProcedural ? `${systemPrompt}\n\n${LIVE_OBJ_GENERATION_QUALITY_HINT}${imageHint}` : `${systemPrompt}${imageHint}` },
 		...history,
-		{ role: 'user', content: userMessageContent(userMessage, options?.imageDataUrl) }
+		{ role: 'user', content: userMessageContent(userMessage, imageDataUrls) }
 	];
 	const { content } = await requestChatCompletion({
 		messages,
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-llm',
-		maxTokens: 16000
+		maxTokens: imageDataUrls.length > 0 ? 10000 : 16000,
+		timeoutMs: imageDataUrls.length > 0 ? 180000 : undefined
 	});
 	return content;
 }
@@ -171,8 +199,12 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 	currentLiveObj: string,
 	history: ChatCompletionMessage[],
 	model: string = DEFAULT_LIVE_OBJ_MODEL,
-	options?: { imageDataUrl?: string; currentSceneMode?: 'live_obj' | 'raw_obj' }
+	options?: { imageDataUrl?: string; imageDataUrls?: string[]; currentSceneMode?: 'live_obj' | 'raw_obj' }
 ): Promise<string> {
+	const imageDataUrls = normalizeImageDataUrls([
+		...(options?.imageDataUrls ?? []),
+		...(options?.imageDataUrl ? [options.imageDataUrl] : [])
+	]);
 	const modeHint =
 		options?.currentSceneMode === 'raw_obj'
 			? [
@@ -185,14 +217,14 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 					'Important: #@ metadata is the editable source of truth; v/f mesh lines are cache output.'
 				].join('\n');
 	const messages: ChatCompletionMessage[] = [
-		{ role: 'system', content: LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT },
+		{ role: 'system', content: imageDataUrls.length > 0 ? `${LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT}\n\n${LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT}` : LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT },
 		...surgicalHistoryMessages(history),
 		{
 			role: 'user',
 			content: surgicalEditUserContent(
 				`${modeHint}\n\n${userMessage}`,
 				currentLiveObj,
-				options?.imageDataUrl
+				imageDataUrls
 			)
 		}
 	];

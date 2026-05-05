@@ -1,5 +1,13 @@
 <script lang="ts">
-	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string };
+	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string; historyContent?: string };
+	type SendPayload = {
+		text: string;
+		useProcedural?: boolean;
+		imageDataUrl?: string;
+		imageDataUrls?: string[];
+		feedbackLoop?: boolean;
+		feedbackPasses?: number;
+	};
 
 	const MODEL_OPTIONS = [
 		{ value: 'gpt-5.5', label: 'GPT-5.5' },
@@ -548,14 +556,64 @@ f 90 81 161 170`
 		msgs?: ChatMsg[];
 		busy?: boolean;
 		statusLine?: string | null;
-		onSend?: (payload: { text: string; useProcedural?: boolean; imageDataUrl?: string }) => void;
+		onSend?: (payload: SendPayload) => void;
 		onLaunchObjExample?: (liveObj: string) => void;
 	} = $props();
 
 	let input = $state('');
-		let useProcedural = $state<boolean>(true);
+	let useProcedural = $state<boolean>(true);
+	let feedbackLoop = $state<boolean>(false);
+	let feedbackPasses = $state<number>(3);
 	let attachedDataUrl = $state<string | undefined>(undefined);
 	let fileInputEl: HTMLInputElement | undefined = $state();
+
+	function estimateDataUrlBytes(dataUrl: string): number {
+		const base64Payload = dataUrl.split(',')[1] ?? '';
+		return Math.floor((base64Payload.length * 3) / 4);
+	}
+
+	function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+		return new Promise((resolve, reject) => {
+			const img = new Image();
+			img.onload = () => resolve(img);
+			img.onerror = () => reject(new Error('Unable to load image attachment'));
+			img.src = dataUrl;
+		});
+	}
+
+	async function compressImageDataUrl(dataUrl: string): Promise<string> {
+		const img = await loadImage(dataUrl);
+		const maxDimension = 1024;
+		const maxBytes = 750_000;
+		const scale = Math.min(1, maxDimension / Math.max(img.naturalWidth, img.naturalHeight, 1));
+		let width = Math.max(1, Math.round(img.naturalWidth * scale));
+		let height = Math.max(1, Math.round(img.naturalHeight * scale));
+		let quality = 0.82;
+
+		const encode = () => {
+			const canvas = document.createElement('canvas');
+			canvas.width = width;
+			canvas.height = height;
+			const ctx = canvas.getContext('2d');
+			if (!ctx) return dataUrl;
+			ctx.drawImage(img, 0, 0, width, height);
+			return canvas.toDataURL('image/jpeg', quality);
+		};
+
+		let out = encode();
+		let attempts = 0;
+		while (estimateDataUrlBytes(out) > maxBytes && attempts < 7) {
+			if (quality > 0.55) {
+				quality = Math.max(0.55, quality - 0.08);
+			} else {
+				width = Math.max(1, Math.round(width * 0.85));
+				height = Math.max(1, Math.round(height * 0.85));
+			}
+			out = encode();
+			attempts += 1;
+		}
+		return out;
+	}
 
 	function clearAttachment() {
 		attachedDataUrl = undefined;
@@ -570,9 +628,17 @@ f 90 81 161 170`
 			return;
 		}
 		const reader = new FileReader();
-		reader.onload = () => {
+		reader.onload = async () => {
 			const r = reader.result;
-			attachedDataUrl = typeof r === 'string' ? r : undefined;
+			if (typeof r !== 'string') {
+				attachedDataUrl = undefined;
+				return;
+			}
+			try {
+				attachedDataUrl = await compressImageDataUrl(r);
+			} catch {
+				attachedDataUrl = r;
+			}
 		};
 		reader.readAsDataURL(file);
 	}
@@ -581,7 +647,7 @@ f 90 81 161 170`
 		const text = input.trim();
 		const img = attachedDataUrl;
 		if ((!text && !img) || busy) return;
-		onSend?.({ text, useProcedural, imageDataUrl: img });
+		onSend?.({ text, useProcedural, imageDataUrl: img, feedbackLoop, feedbackPasses });
 		input = '';
 		clearAttachment();
 	}
@@ -717,6 +783,27 @@ f 90 81 161 170`
 					/>
 					<span class="planner-chat-procedural-text">Use tools</span>
 				</label>
+				<label class="planner-chat-procedural-label">
+					<input
+						type="checkbox"
+						bind:checked={feedbackLoop}
+						disabled={busy}
+						class="planner-chat-procedural-checkbox"
+					/>
+					<span class="planner-chat-procedural-text">Vision loop</span>
+				</label>
+				{#if feedbackLoop}
+					<label class="planner-chat-loop-count" title="Feedback loop generations">
+						<span>×</span>
+						<select bind:value={feedbackPasses} disabled={busy}>
+							<option value={1}>1</option>
+							<option value={2}>2</option>
+							<option value={3}>3</option>
+							<option value={4}>4</option>
+							<option value={5}>5</option>
+						</select>
+					</label>
+				{/if}
 				<input
 					bind:this={fileInputEl}
 					type="file"
@@ -901,6 +988,36 @@ f 90 81 161 170`
 
 	.planner-chat-procedural-text {
 		line-height: 1;
+	}
+
+	.planner-chat-loop-count {
+		margin: 0;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 12px;
+		font-weight: 600;
+		color: #333;
+		white-space: nowrap;
+	}
+
+	.planner-chat-loop-count select {
+		box-sizing: border-box;
+		height: 28px;
+		font-family: inherit;
+		font-size: 12px;
+		font-weight: 600;
+		color: #333;
+		border: 1px solid rgba(0, 0, 0, 0.12);
+		border-radius: 999px;
+		padding: 0 8px;
+		background: rgba(255, 255, 255, 0.95);
+		cursor: pointer;
+	}
+
+	.planner-chat-loop-count select:disabled {
+		opacity: 0.65;
+		cursor: not-allowed;
 	}
 
 	.planner-chat-attach-label {

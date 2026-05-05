@@ -2,6 +2,7 @@
 	import MonacoEditor from '$lib/components/MonacoEditor.svelte';
 	import { stripLiveObjMeshLines } from '$lib/liveObj/stripLiveObjMeshLines';
 	import { stripCodeFences } from '$lib/liveObj/stripCodeFences';
+	import { containsObjMeshLines, mergeMetadataWithMesh } from '$lib/liveObj/mergeMetadataWithMesh';
 
 	export type SourceTab = 'live' | 'raw' | 'executed' | 'meta';
 
@@ -70,10 +71,23 @@
 		if (!t.trim()) return null;
 		if (sourceTab === 'meta') return null;
 
-		if (sourceTab === 'raw' || sourceTab === 'live') {
-			return stripCodeFences(t).trim() || null;
+		const cleaned = stripCodeFences(t).trim();
+		if (!showMeshLines && !containsObjMeshLines(cleaned)) {
+			const fullSource =
+				sourceTab === 'raw'
+					? String(rawLlmText || '')
+					: sourceTab === 'live'
+						? String(liveObjText || '')
+						: String(executedObjText || liveObjText || '');
+			if (fullSource.trim() && containsObjMeshLines(fullSource)) {
+				return mergeMetadataWithMesh(cleaned, fullSource).trim();
+			}
 		}
-		return t.trim();
+
+		if (sourceTab === 'raw' || sourceTab === 'live') {
+			return cleaned || null;
+		}
+		return cleaned || null;
 	}
 
 	async function handleApply() {
