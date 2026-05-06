@@ -1,6 +1,6 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import type { ChatCompletionMessage } from '$lib/server/llm/chat';
+import type { ChatCompletionMessage, TokenUsage } from '$lib/server/llm/chat';
 import {
 	DEFAULT_LIVE_OBJ_MODEL,
 	requestLiveObjAssistantMessageFromLlm,
@@ -37,6 +37,15 @@ type Body = {
 	kernelDefault?: 'auto' | 'cadquery';
 };
 
+type TokenUsageSummary = {
+	records: TokenUsage[];
+	promptTokens?: number;
+	completionTokens?: number;
+	totalTokens?: number;
+	reasoningTokens?: number;
+	cachedTokens?: number;
+};
+
 const KNOWN_OPS = new Set([
 	'transform', 'mirror', 'array', 'radial_array', 'bevel', 'smooth', 'subdivide', 'remesh', 'simplify',
 	'displace', 'bend', 'twist', 'taper', 'sweep', 'thicken', 'skin', 'loft',
@@ -66,6 +75,26 @@ function normalizeImageUrls(...groups: Array<string | string[] | undefined>): st
 		.map((url) => url.trim())
 		.filter(Boolean);
 	return [...new Set(urls)];
+}
+
+function summarizeTokenUsage(records: Array<TokenUsage | undefined>): TokenUsageSummary | undefined {
+	const clean = records.filter((record): record is TokenUsage => Boolean(record));
+	if (clean.length === 0) return undefined;
+	const sum = (key: keyof TokenUsage): number | undefined => {
+		const total = clean.reduce((acc, record) => {
+			const value = record[key];
+			return typeof value === 'number' ? acc + value : acc;
+		}, 0);
+		return total > 0 ? total : undefined;
+	};
+	return {
+		records: clean,
+		...(sum('promptTokens') != null ? { promptTokens: sum('promptTokens') } : {}),
+		...(sum('completionTokens') != null ? { completionTokens: sum('completionTokens') } : {}),
+		...(sum('totalTokens') != null ? { totalTokens: sum('totalTokens') } : {}),
+		...(sum('reasoningTokens') != null ? { reasoningTokens: sum('reasoningTokens') } : {}),
+		...(sum('cachedTokens') != null ? { cachedTokens: sum('cachedTokens') } : {})
+	};
 }
 
 function unknownOpsInLiveObj(liveObj: string): string[] {
@@ -232,6 +261,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	let editMode: 'surgical' | 'rewrite' = useSurgicalEdit ? 'surgical' : 'rewrite';
 	let surgicalEditSummary: string | undefined;
 	let surgicalEditCount: number | undefined;
+	let llmUsages: TokenUsage[] = [];
 	const reqApiKey = body.apiKey?.trim() || undefined;
 	const reqApiUrl = body.apiUrl?.trim() || undefined;
 	try {
@@ -251,8 +281,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			correctedLiveObj = patchResult.liveObj;
 			surgicalEditSummary = patchResult.summary;
 			surgicalEditCount = patchResult.appliedEdits;
+			llmUsages = [...llmUsages, ...patchResult.usages];
 		} else {
-			rawLlm = await withLlmRequestOverrides(
+			const llmResult = await withLlmRequestOverrides(
 				reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
 				() =>
 					requestLiveObjFromLlm(userMessage, history, model, {
@@ -260,6 +291,8 @@ export const POST: RequestHandler = async ({ request }) => {
 						useProcedural
 					})
 			);
+			rawLlm = llmResult.content;
+			if (llmResult.usage) llmUsages.push(llmResult.usage);
 			correctedLiveObj = stripCodeFences(rawLlm);
 			correctedLiveObj = applyKernelDefaultHeader(correctedLiveObj, kernelDefault);
 		}
@@ -302,6 +335,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					reqApiKey,
 					reqApiUrl
 				});
+				llmUsages = [...llmUsages, ...correctionPatch.usages];
 				const retryResult = await expandLiveObjWithExecutor(correctionPatch.liveObj);
 				const assistantMessage = await requestAssistantChatMessage({
 					userMessage,
@@ -318,6 +352,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					liveObj: correctionPatch.liveObj,
 					rawLlm: correctionPatch.rawPatch,
 					executedObj: retryResult.executedObj,
+					...(summarizeTokenUsage(llmUsages) ? { llmUsage: summarizeTokenUsage(llmUsages) } : {}),
 					editMode,
 					surgicalEditSummary: correctionPatch.summary ?? surgicalEditSummary,
 					surgicalEditCount: (surgicalEditCount ?? 0) + correctionPatch.appliedEdits,
@@ -332,7 +367,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		} else {
 			const correctionPrompt = buildCorrectionPrompt(issues);
 			try {
-				const correctedRaw = await withLlmRequestOverrides(
+				const correctedResult = await withLlmRequestOverrides(
 					reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
 					() =>
 						requestLiveObjFromLlm(
@@ -341,7 +376,8 @@ export const POST: RequestHandler = async ({ request }) => {
 							model
 						)
 				);
-				const retryLiveObj = stripCodeFences(correctedRaw);
+				if (correctedResult.usage) llmUsages.push(correctedResult.usage);
+				const retryLiveObj = stripCodeFences(correctedResult.content);
 				try {
 					const retryResult = await expandLiveObjWithExecutor(retryLiveObj);
 					const assistantMessage = await requestAssistantChatMessage({
@@ -358,6 +394,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						liveObj: retryLiveObj,
 						rawLlm,
 						executedObj: retryResult.executedObj,
+						...(summarizeTokenUsage(llmUsages) ? { llmUsage: summarizeTokenUsage(llmUsages) } : {}),
 						editMode,
 						...(assistantMessage ? { assistantMessage } : {}),
 						executorWarning: `Auto-corrected after first pass:\n- ${issues.join('\n- ')}`,
@@ -390,6 +427,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		liveObj: correctedLiveObj,
 		rawLlm,
 		executedObj,
+		...(summarizeTokenUsage(llmUsages) ? { llmUsage: summarizeTokenUsage(llmUsages) } : {}),
 		editMode,
 		...(surgicalEditSummary ? { surgicalEditSummary } : {}),
 		...(surgicalEditCount != null ? { surgicalEditCount } : {}),
@@ -411,9 +449,9 @@ async function requestAndApplySurgicalPatch(args: {
 	imageUrls?: string[];
 	reqApiKey?: string;
 	reqApiUrl?: string;
-}): Promise<{ liveObj: string; rawPatch: string; appliedEdits: number; summary?: string }> {
+}): Promise<{ liveObj: string; rawPatch: string; appliedEdits: number; summary?: string; usages: TokenUsage[] }> {
 	const imageUrls = normalizeImageUrls(args.imageUrls, args.imageUrl);
-	const rawPatch = await withLlmRequestOverrides(
+	const patchResult = await withLlmRequestOverrides(
 		args.reqApiKey || args.reqApiUrl
 			? { apiKey: args.reqApiKey, apiUrl: args.reqApiUrl }
 			: undefined,
@@ -429,6 +467,8 @@ async function requestAndApplySurgicalPatch(args: {
 				}
 			)
 	);
+	const rawPatch = patchResult.content;
+	const usages = patchResult.usage ? [patchResult.usage] : [];
 	try {
 		const applied = applyLiveObjSurgicalPatch(
 			args.baseLiveObj,
@@ -439,11 +479,12 @@ async function requestAndApplySurgicalPatch(args: {
 			liveObj: applied.liveObj,
 			rawPatch,
 			appliedEdits: applied.appliedEdits,
-			summary: applied.summary
+			summary: applied.summary,
+			usages
 		};
 	} catch (firstError) {
 		const repairPrompt = buildPatchRepairPrompt(args.userMessage, rawPatch, firstError);
-		const repairedRawPatch = await withLlmRequestOverrides(
+		const repairedPatchResult = await withLlmRequestOverrides(
 			args.reqApiKey || args.reqApiUrl
 				? { apiKey: args.reqApiKey, apiUrl: args.reqApiUrl }
 				: undefined,
@@ -459,6 +500,8 @@ async function requestAndApplySurgicalPatch(args: {
 					}
 				)
 		);
+		const repairedRawPatch = repairedPatchResult.content;
+		if (repairedPatchResult.usage) usages.push(repairedPatchResult.usage);
 		const repaired = applyLiveObjSurgicalPatch(
 			args.baseLiveObj,
 			parseLiveObjSurgicalPatch(repairedRawPatch)
@@ -468,7 +511,8 @@ async function requestAndApplySurgicalPatch(args: {
 			liveObj: repaired.liveObj,
 			rawPatch: repairedRawPatch,
 			appliedEdits: repaired.appliedEdits,
-			summary: repaired.summary
+			summary: repaired.summary,
+			usages
 		};
 	}
 }

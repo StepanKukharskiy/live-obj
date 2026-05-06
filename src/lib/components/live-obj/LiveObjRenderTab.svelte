@@ -2,18 +2,23 @@
 	let {
 		liveObjText = '',
 		providerSettings = { provider: 'openai', apiKey: '', apiUrl: '', imageUrl: '', textModel: '', imageModel: '', rememberMe: false },
-		onCaptureSceneScreenshot
+		onCaptureSceneScreenshot,
+		prompt = $bindable(''),
+		screenshotDataUrl = $bindable(''),
+		generatedImageDataUrl = $bindable(''),
+		busy = $bindable(false),
+		errorLine = $bindable<string | null>(null)
 	}: {
 		liveObjText?: string;
 		providerSettings?: { provider: string; apiKey: string; apiUrl: string; imageUrl: string; textModel: string; imageModel: string; rememberMe: boolean };
 		onCaptureSceneScreenshot?: () => string;
+		prompt?: string;
+		screenshotDataUrl?: string;
+		generatedImageDataUrl?: string;
+		busy?: boolean;
+		errorLine?: string | null;
 	} = $props();
 
-	let prompt = $state('');
-	let screenshotDataUrl = $state('');
-	let generatedImageDataUrl = $state('');
-	let busy = $state(false);
-	let errorLine = $state<string | null>(null);
 	let fullscreenImageDataUrl = $state('');
 	let fullscreenDialog: HTMLDialogElement | null = $state(null);
 

@@ -12,6 +12,15 @@
 		content: string;
 		imageDataUrl?: string;
 		historyContent?: string;
+		tokenUsage?: TokenUsageSummary;
+	};
+
+	type TokenUsageSummary = {
+		promptTokens?: number;
+		completionTokens?: number;
+		totalTokens?: number;
+		reasoningTokens?: number;
+		cachedTokens?: number;
 	};
 
 	type SendPromptPayload = {
@@ -32,6 +41,7 @@
 		editMode?: 'surgical' | 'rewrite';
 		surgicalEditSummary?: string;
 		assistantMessage?: string;
+		llmUsage?: TokenUsageSummary;
 	};
 
 	let showPanel = $state(true);
@@ -552,7 +562,8 @@ o cube
 				content: payload.executorWarning
 					? 'Received model output. Executor had issues; check status and the Adjust tab.'
 					: payload.assistantMessage?.trim() || assistantMessage,
-				historyContent: payload.liveObj ?? payload.executedObj ?? ''
+				historyContent: payload.liveObj ?? payload.executedObj ?? '',
+				...(payload.llmUsage ? { tokenUsage: payload.llmUsage } : {})
 			}
 		];
 	}
@@ -623,6 +634,7 @@ o cube
 				editMode?: 'surgical' | 'rewrite';
 				surgicalEditSummary?: string;
 				assistantMessage?: string;
+				llmUsage?: TokenUsageSummary;
 			};
 			if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
 
@@ -654,7 +666,8 @@ o cube
 					content: payload.executorWarning
 						? 'Received model output. Executor had issues; check status and the Adjust tab.'
 						: payload.assistantMessage?.trim() || assistantMessage,
-					historyContent: payload.liveObj ?? payload.executedObj ?? ''
+					historyContent: payload.liveObj ?? payload.executedObj ?? '',
+					...(payload.llmUsage ? { tokenUsage: payload.llmUsage } : {})
 				}
 			];
 

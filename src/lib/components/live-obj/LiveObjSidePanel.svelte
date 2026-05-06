@@ -8,7 +8,20 @@
 	import LiveObjProviderTab from './LiveObjProviderTab.svelte';
 	import type { SourceTab } from './LiveObjOutputTab.svelte';
 
-	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string; historyContent?: string };
+	type TokenUsageSummary = {
+		promptTokens?: number;
+		completionTokens?: number;
+		totalTokens?: number;
+		reasoningTokens?: number;
+		cachedTokens?: number;
+	};
+	type ChatMsg = {
+		role: 'user' | 'assistant';
+		content: string;
+		imageDataUrl?: string;
+		historyContent?: string;
+		tokenUsage?: TokenUsageSummary;
+	};
 	type SendPayload = {
 		text: string;
 		useProcedural?: boolean;
@@ -109,6 +122,16 @@
 	} = $props();
 
 	let activeTab = $state<PanelTab>('chat');
+	let chatInput = $state('');
+	let chatUseProcedural = $state(true);
+	let chatFeedbackLoop = $state(false);
+	let chatFeedbackPasses = $state(3);
+	let chatAttachedDataUrl = $state<string | undefined>(undefined);
+	let renderPrompt = $state('');
+	let renderScreenshotDataUrl = $state('');
+	let renderGeneratedImageDataUrl = $state('');
+	let renderBusy = $state(false);
+	let renderErrorLine = $state<string | null>(null);
 </script>
 
 {#if showPanel}
@@ -144,7 +167,18 @@
 			class:chat-panel={activeTab === 'chat'}
 		>
 			{#if activeTab === 'chat'}
-				<LiveObjChatTab {msgs} {busy} {statusLine} {onSend} {onLaunchObjExample} />
+				<LiveObjChatTab
+					{msgs}
+					{busy}
+					{statusLine}
+					{onSend}
+					{onLaunchObjExample}
+					bind:input={chatInput}
+					bind:useProcedural={chatUseProcedural}
+					bind:feedbackLoop={chatFeedbackLoop}
+					bind:feedbackPasses={chatFeedbackPasses}
+					bind:attachedDataUrl={chatAttachedDataUrl}
+				/>
 			{:else if activeTab === 'provider'}
 				<LiveObjProviderTab bind:settings={providerSettings} {busy} />
 			{:else if activeTab === 'adjust'}
@@ -196,6 +230,11 @@
 						{liveObjText}
 						{providerSettings}
 						onCaptureSceneScreenshot={onCaptureSceneScreenshot}
+						bind:prompt={renderPrompt}
+						bind:screenshotDataUrl={renderScreenshotDataUrl}
+						bind:generatedImageDataUrl={renderGeneratedImageDataUrl}
+						bind:busy={renderBusy}
+						bind:errorLine={renderErrorLine}
 					/>
 				{/if}
 			{/if}

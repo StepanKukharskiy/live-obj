@@ -1,5 +1,18 @@
 <script lang="ts">
-	type ChatMsg = { role: 'user' | 'assistant'; content: string; imageDataUrl?: string; historyContent?: string };
+	type TokenUsageSummary = {
+		promptTokens?: number;
+		completionTokens?: number;
+		totalTokens?: number;
+		reasoningTokens?: number;
+		cachedTokens?: number;
+	};
+	type ChatMsg = {
+		role: 'user' | 'assistant';
+		content: string;
+		imageDataUrl?: string;
+		historyContent?: string;
+		tokenUsage?: TokenUsageSummary;
+	};
 	type SendPayload = {
 		text: string;
 		useProcedural?: boolean;
@@ -551,20 +564,25 @@ f 90 81 161 170`
 		busy = false,
 		statusLine = null,
 		onSend,
-		onLaunchObjExample
+		onLaunchObjExample,
+		input = $bindable(''),
+		useProcedural = $bindable(true),
+		feedbackLoop = $bindable(false),
+		feedbackPasses = $bindable(3),
+		attachedDataUrl = $bindable<string | undefined>(undefined)
 	}: {
 		msgs?: ChatMsg[];
 		busy?: boolean;
 		statusLine?: string | null;
 		onSend?: (payload: SendPayload) => void;
 		onLaunchObjExample?: (liveObj: string) => void;
+		input?: string;
+		useProcedural?: boolean;
+		feedbackLoop?: boolean;
+		feedbackPasses?: number;
+		attachedDataUrl?: string | undefined;
 	} = $props();
 
-	let input = $state('');
-	let useProcedural = $state<boolean>(true);
-	let feedbackLoop = $state<boolean>(false);
-	let feedbackPasses = $state<number>(3);
-	let attachedDataUrl = $state<string | undefined>(undefined);
 	let fileInputEl: HTMLInputElement | undefined = $state();
 
 	function estimateDataUrlBytes(dataUrl: string): number {
@@ -662,6 +680,21 @@ f 90 81 161 170`
 	function launchObjExample(example: { name: string; liveObj: string }) {
 		onLaunchObjExample?.(example.liveObj);
 	}
+
+	function formatTokens(value: number | undefined): string {
+		return typeof value === 'number' ? value.toLocaleString() : 'n/a';
+	}
+
+	function tokenUsageLine(usage: TokenUsageSummary): string {
+		const parts = [
+			`tokens ${formatTokens(usage.totalTokens)}`,
+			`in ${formatTokens(usage.promptTokens)}`,
+			`out ${formatTokens(usage.completionTokens)}`
+		];
+		if (usage.reasoningTokens != null) parts.push(`reasoning ${formatTokens(usage.reasoningTokens)}`);
+		if (usage.cachedTokens != null) parts.push(`cached ${formatTokens(usage.cachedTokens)}`);
+		return parts.join(' · ');
+	}
 </script>
 
 <div class="planner-chat-shell">
@@ -727,6 +760,9 @@ f 90 81 161 170`
 							{/if}
 							{#if m.content}
 								<div class="planner-chat-msg-text">{m.content}</div>
+							{/if}
+							{#if m.role === 'assistant' && m.tokenUsage}
+								<div class="planner-chat-token-usage">{tokenUsageLine(m.tokenUsage)}</div>
 							{/if}
 						</div>
 					</div>
@@ -850,6 +886,13 @@ f 90 81 161 170`
 	.planner-chat-msg-text {
 		white-space: pre-wrap;
 		word-break: break-word;
+	}
+
+	.planner-chat-token-usage {
+		margin-top: 6px;
+		font-size: 11px;
+		line-height: 1.3;
+		color: #64748b;
 	}
 
 	.planner-status {

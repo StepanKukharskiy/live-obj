@@ -27,7 +27,19 @@ export interface RequestChatCompletionOptions {
 export interface ChatCompletionResult {
 	data: unknown;
 	content: string;
+	usage?: TokenUsage;
 }
+
+export type TokenUsage = {
+	model?: string;
+	label?: string;
+	attempt?: number;
+	promptTokens?: number;
+	completionTokens?: number;
+	totalTokens?: number;
+	reasoningTokens?: number;
+	cachedTokens?: number;
+};
 
 export interface ChatCompletionAttempt {
 	model: string;
@@ -178,6 +190,12 @@ function buildCompletionRequestPayload(input: {
 	};
 }
 
+function completionTokenBudgetForAttempt(maxTokens: number, attempt: number): number {
+	if (attempt <= 1) return maxTokens;
+	const multiplier = attempt === 2 ? 1.6 : 2.2;
+	return Math.min(32000, Math.ceil(maxTokens * multiplier));
+}
+
 /**
  * Merge `process.env` and SvelteKit private env. Uses `||` so empty strings fall through
  * (SvelteKit populates `$env/dynamic/private` from `.env` even when `process.env` is unset).
@@ -263,11 +281,12 @@ export async function requestChatCompletion({
 			const releaseTurn = await acquireLlmRequestTurn();
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+			const attemptMaxTokens = completionTokenBudgetForAttempt(maxTokens, attempt);
 			const requestPayload = buildCompletionRequestPayload({
 				apiUrl,
 				model: currentModel,
 				messages,
-				maxTokens,
+				maxTokens: attemptMaxTokens,
 				temperature
 			});
 			onAttempt?.({
@@ -335,7 +354,7 @@ export async function requestChatCompletion({
 				status: 'succeeded'
 			});
 
-			return { data, content };
+			return { data, content, usage: extractTokenUsage(data, currentModel, label, attempt) };
 		} catch (error) {
 			lastError =
 				isAbortError(error)
@@ -358,8 +377,18 @@ export async function requestChatCompletion({
 
 			const hasMoreModels = modelsToTry.indexOf(currentModel) < modelsToTry.length - 1;
 
+			if (isLengthTruncatedEmptyResponseError(lastError)) {
+				if (attempt < MAX_ATTEMPTS) {
+					await wait(200 * attempt);
+					continue;
+				}
+				if (hasMoreModels) {
+					console.log('[LLM Model Fallback]', `Truncated empty response on ${currentModel}, trying next model`);
+					break;
+				}
+			}
+
 			if (isLengthTruncatedEmptyResponseError(lastError) && hasMoreModels) {
-				console.log('[LLM Model Fallback]', `Truncated empty response on ${currentModel}, trying next model`);
 				break;
 			}
 
@@ -424,6 +453,57 @@ export function extractCompletionContent(data: unknown): string {
 	);
 }
 
+function numberFromRecord(record: Record<string, unknown>, keys: string[]): number | undefined {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === 'number' && Number.isFinite(value)) return value;
+	}
+	return undefined;
+}
+
+function objectFromRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
+	const value = record[key];
+	return value && typeof value === 'object' && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+function extractTokenUsage(
+	data: unknown,
+	model: string,
+	label: string,
+	attempt: number
+): TokenUsage | undefined {
+	const payload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	const usage = objectFromRecord(payload, 'usage');
+	if (Object.keys(usage).length === 0) return undefined;
+	const promptDetails = objectFromRecord(usage, 'prompt_tokens_details');
+	const completionDetails = objectFromRecord(usage, 'completion_tokens_details');
+	const outputDetails = objectFromRecord(usage, 'output_tokens_details');
+	const promptTokens = numberFromRecord(usage, ['prompt_tokens', 'input_tokens']);
+	const completionTokens = numberFromRecord(usage, ['completion_tokens', 'output_tokens']);
+	const totalTokens = numberFromRecord(usage, ['total_tokens']);
+	return {
+		model,
+		label,
+		attempt,
+		...(promptTokens != null ? { promptTokens } : {}),
+		...(completionTokens != null ? { completionTokens } : {}),
+		...(totalTokens != null ? { totalTokens } : {}),
+		...(numberFromRecord(completionDetails, ['reasoning_tokens']) ??
+		numberFromRecord(outputDetails, ['reasoning_tokens'])
+			? {
+					reasoningTokens:
+						numberFromRecord(completionDetails, ['reasoning_tokens']) ??
+						numberFromRecord(outputDetails, ['reasoning_tokens'])
+				}
+			: {}),
+		...(numberFromRecord(promptDetails, ['cached_tokens'])
+			? { cachedTokens: numberFromRecord(promptDetails, ['cached_tokens']) }
+			: {})
+	};
+}
+
 function isLengthTruncatedEmptyResponsePayload(data: unknown): boolean {
 	const payload = (data && typeof data === 'object' ? data : {}) as {
 		choices?: Array<{
@@ -435,8 +515,7 @@ function isLengthTruncatedEmptyResponsePayload(data: unknown): boolean {
 	if (!firstChoice) return false;
 	const finishReason = typeof firstChoice.finish_reason === 'string' ? firstChoice.finish_reason : '';
 	const content = extractTextFromContentValue(firstChoice.message?.content);
-	const reasoning = extractTextFromContentValue(firstChoice.message?.reasoning);
-	return finishReason === 'length' && !content && Boolean(reasoning);
+	return finishReason === 'length' && !content;
 }
 
 function summarizeValueShape(value: unknown): Record<string, unknown> {

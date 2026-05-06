@@ -1,4 +1,4 @@
-import type { ChatCompletionMessage, ChatContentPart, ChatMessageContent } from './chat';
+import type { ChatCompletionMessage, ChatContentPart, ChatMessageContent, TokenUsage } from './chat';
 import { requestChatCompletion } from './chat';
 import { LIVE_OBJ_SYSTEM_PROMPT, LLM_ONLY_SYSTEM_PROMPT } from './liveObjSystemPrompt';
 
@@ -15,13 +15,15 @@ const LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT = `Image-to-scene budget:
 - Keep the first-pass scene compact: target roughly 12-35 semantic objects.
 - For repeated windows, rooms, capsules, balconies, panels, columns, blocks, or floors, use arrays, paired objects, or a small number of representative modules instead of enumerating every visible instance.
 - Capture the main massing, proportions, colors, material families, and distinctive motifs first.
-- Avoid dense per-window/per-brick/per-cell geometry unless the user explicitly asks for exhaustive detail.`;
+- Avoid dense per-window/per-brick/per-cell geometry unless the user explicitly asks for exhaustive detail.
+- Begin the response immediately with #@scene or #@live_obj_version; do not spend output budget on planning text.`;
 const RAW_OBJ_IMAGE_GENERATION_BUDGET_HINT = `Image-to-raw-OBJ budget:
 - Make a compact low-poly interpretation of the reference image, not an exhaustive mesh reconstruction.
 - Target roughly 8-24 semantic object groups with direct v/f mesh.
 - Use simplified silhouettes, major volumes, representative facade/window/detail groups, and clear object names.
 - Do not hand-author every repeated window, panel, brick, cell, or ornament.
-- Prefer fewer larger mesh objects with #@semantic hints over hundreds of tiny objects or very large vertex lists.`;
+- Prefer fewer larger mesh objects with #@semantic hints over hundreds of tiny objects or very large vertex lists.
+- Begin the response immediately with #@live_obj_version; do not spend output budget on planning text.`;
 
 const LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT = `You are a surgical editor for Live OBJ files.
 
@@ -70,6 +72,11 @@ Rules:
 - Do not apologize.
 - Do not add a follow-up question.
 - Output plain text only.`;
+
+export type LiveObjLlmResult = {
+	content: string;
+	usage?: TokenUsage;
+};
 
 function normalizeImageDataUrls(imageDataUrls?: string[]): string[] {
 	return [...new Set((imageDataUrls ?? []).map((url) => url.trim()).filter(Boolean))];
@@ -164,7 +171,7 @@ export async function requestLiveObjFromLlm(
 	history: ChatCompletionMessage[],
 	model: string = DEFAULT_LIVE_OBJ_MODEL,
 	options?: { imageDataUrl?: string; imageDataUrls?: string[]; useProcedural?: boolean }
-): Promise<string> {
+): Promise<LiveObjLlmResult> {
 	const useProcedural = options?.useProcedural !== false;
 	const systemPrompt = useProcedural ? LIVE_OBJ_SYSTEM_PROMPT : LLM_ONLY_SYSTEM_PROMPT;
 	const imageDataUrls = normalizeImageDataUrls([
@@ -180,14 +187,14 @@ export async function requestLiveObjFromLlm(
 		...history,
 		{ role: 'user', content: userMessageContent(userMessage, imageDataUrls) }
 	];
-	const { content } = await requestChatCompletion({
+	const { content, usage } = await requestChatCompletion({
 		messages,
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-llm',
-		maxTokens: imageDataUrls.length > 0 ? 10000 : 16000,
-		timeoutMs: imageDataUrls.length > 0 ? 180000 : undefined
+		maxTokens: imageDataUrls.length > 0 ? 20000 : 16000,
+		timeoutMs: imageDataUrls.length > 0 ? 240000 : undefined
 	});
-	return content;
+	return { content, usage };
 }
 
 /**
@@ -200,7 +207,7 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 	history: ChatCompletionMessage[],
 	model: string = DEFAULT_LIVE_OBJ_MODEL,
 	options?: { imageDataUrl?: string; imageDataUrls?: string[]; currentSceneMode?: 'live_obj' | 'raw_obj' }
-): Promise<string> {
+): Promise<LiveObjLlmResult> {
 	const imageDataUrls = normalizeImageDataUrls([
 		...(options?.imageDataUrls ?? []),
 		...(options?.imageDataUrl ? [options.imageDataUrl] : [])
@@ -228,13 +235,14 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 			)
 		}
 	];
-	const { content } = await requestChatCompletion({
+	const { content, usage } = await requestChatCompletion({
 		messages,
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-surgical-edit',
-		maxTokens: 8000
+		maxTokens: imageDataUrls.length > 0 ? 12000 : 8000,
+		timeoutMs: imageDataUrls.length > 0 ? 180000 : undefined
 	});
-	return content;
+	return { content, usage };
 }
 
 export async function requestLiveObjAssistantMessageFromLlm(
