@@ -149,6 +149,8 @@
 		format?: 'image/png' | 'image/jpeg';
 		quality?: number;
 		maxBytes?: number;
+		autoFrame?: boolean;
+		framePadding?: number;
 	};
 
 	const estimateDataUrlBytes = (dataUrl: string): number => {
@@ -156,9 +158,55 @@
 		return Math.floor((base64Payload.length * 3) / 4);
 	};
 
+	function frameMountedRenderObject(padding = 1.05): boolean {
+		if (!mountedRenderObject || !camera || !controls) return false;
+		const bounds = new THREE.Box3().setFromObject(mountedRenderObject);
+		if (bounds.isEmpty()) return false;
+
+		const center = bounds.getCenter(new THREE.Vector3());
+		const size = bounds.getSize(new THREE.Vector3());
+		const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+		const radius = Math.max(sphere.radius, Math.max(size.x, size.y, size.z, 1) * 0.5);
+		const viewDirection = new THREE.Vector3(1, 0.65, 1).normalize();
+
+		if (camera.isPerspectiveCamera) {
+			const fovRad = THREE.MathUtils.degToRad(camera.fov || cameraFov || 50);
+			const distance = (radius / Math.sin(Math.max(0.01, fovRad * 0.5))) * padding;
+			camera.position.copy(center).addScaledVector(viewDirection, distance);
+			camera.near = Math.max(0.01, distance / 100);
+			camera.far = Math.max(2000, distance * 20);
+		} else if (camera.isOrthographicCamera) {
+			const aspect = Math.max(1e-6, containerWidth / Math.max(containerHeight, 1));
+			const fitHeight = Math.max(size.y, size.x / aspect, size.z / aspect, 1) * padding;
+			camera.position.copy(center).addScaledVector(viewDirection, Math.max(radius * 3, 5));
+			camera.zoom = Math.max(0.1, ORTHOGRAPHIC_FRUSTUM_HEIGHT / fitHeight);
+		}
+
+		camera.lookAt(center);
+		camera.updateProjectionMatrix();
+		controls.target.copy(center);
+		controls.update();
+		framedRenderObject = renderObject;
+		return true;
+	}
+
+	export function frameScene(padding = 1.05) {
+		const framed = frameMountedRenderObject(padding);
+		if (framed) renderFrame();
+		return framed;
+	}
+
 	export function captureScreenshot(options: ScreenshotOptions = {}) {
 		if (!renderer || !scene || !camera) return '';
-		const { maxWidth, format = 'image/png', quality: requestedQuality = 0.9, maxBytes } = options;
+		const {
+			maxWidth,
+			format = 'image/png',
+			quality: requestedQuality = 0.9,
+			maxBytes,
+			autoFrame = false,
+			framePadding = 1.05
+		} = options;
+		if (autoFrame) frameScene(framePadding);
 		renderFrame();
 
 		const sourceCanvas = document.createElement('canvas');
@@ -426,24 +474,8 @@
 		if (renderObject) {
 			mountedRenderObject = renderObject;
 			scene.add(mountedRenderObject);
-			const bounds = new THREE.Box3().setFromObject(mountedRenderObject);
-			if (autoFrameOnObjectChange && !bounds.isEmpty() && framedRenderObject !== renderObject) {
-				const center = bounds.getCenter(new THREE.Vector3());
-				const size = bounds.getSize(new THREE.Vector3());
-				const distance = Math.max(size.x, size.y, size.z, 1) * 2.4;
-				camera.position.set(center.x + distance, center.y + distance * 0.7, center.z + distance);
-				camera.lookAt(center);
-				if (camera.isOrthographicCamera) {
-					camera.zoom = Math.max(
-						0.1,
-						ORTHOGRAPHIC_FRUSTUM_HEIGHT / Math.max(size.x, size.y, size.z, 1) / 2.2
-					);
-					camera.updateProjectionMatrix();
-				}
-				controls?.target.copy(center);
-				controls?.update();
-				framedRenderObject = renderObject;
-			}
+			if (autoFrameOnObjectChange && framedRenderObject !== renderObject)
+				frameMountedRenderObject(1.05);
 		}
 
 		// New mesh must pick up current objectColor / wireframe even if those props did not change.

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { tick } from 'svelte';
+
 	type TokenUsageSummary = {
 		promptTokens?: number;
 		completionTokens?: number;
@@ -11,6 +13,7 @@
 		content: string;
 		imageDataUrl?: string;
 		historyContent?: string;
+		meta?: string;
 		tokenUsage?: TokenUsageSummary;
 	};
 	type SendPayload = {
@@ -48,10 +51,16 @@
 	];
 
 	const LLM_ONLY_EXAMPLES = [
-		{ text: 'Create a simple cube with 8 vertices and 12 triangular faces', category: 'Basic Shapes' },
+		{
+			text: 'Create a simple cube with 8 vertices and 12 triangular faces',
+			category: 'Basic Shapes'
+		},
 		{ text: 'Create a pyramid with a square base and triangular sides', category: 'Basic Shapes' },
 		{ text: 'Create a low-poly sphere with approximately 100 vertices', category: 'Basic Shapes' },
-		{ text: 'Create a torus (donut shape) with tube radius 0.2 and ring radius 1.0', category: 'Basic Shapes' },
+		{
+			text: 'Create a torus (donut shape) with tube radius 0.2 and ring radius 1.0',
+			category: 'Basic Shapes'
+		},
 		{ text: 'Create a simple chair with seat, back, and 4 legs', category: 'Objects' },
 		{ text: 'Create a table with a rectangular top and 4 cylindrical legs', category: 'Objects' },
 		{ text: 'Create a simple lamp with a base, stem, and shade', category: 'Objects' },
@@ -584,6 +593,9 @@ f 90 81 161 170`
 	} = $props();
 
 	let fileInputEl: HTMLInputElement | undefined = $state();
+	let threadEl: HTMLDivElement | undefined = $state();
+	let hasInitializedThreadScroll = false;
+	let lastAutoScrolledMessageCount = 0;
 
 	function estimateDataUrlBytes(dataUrl: string): number {
 		const base64Payload = dataUrl.split(',')[1] ?? '';
@@ -691,19 +703,42 @@ f 90 81 161 170`
 			`in ${formatTokens(usage.promptTokens)}`,
 			`out ${formatTokens(usage.completionTokens)}`
 		];
-		if (usage.reasoningTokens != null) parts.push(`reasoning ${formatTokens(usage.reasoningTokens)}`);
+		if (usage.reasoningTokens != null)
+			parts.push(`reasoning ${formatTokens(usage.reasoningTokens)}`);
 		if (usage.cachedTokens != null) parts.push(`cached ${formatTokens(usage.cachedTokens)}`);
 		return parts.join(' · ');
 	}
+
+	function displayMessageContent(content: string): string {
+		return content.replace(/\s+/g, ' ').trim();
+	}
+
+	$effect(() => {
+		const messageCount = msgs.length;
+		if (!threadEl) return;
+		if (!hasInitializedThreadScroll) {
+			hasInitializedThreadScroll = true;
+			lastAutoScrolledMessageCount = messageCount;
+			return;
+		}
+		if (messageCount === 0 || messageCount <= lastAutoScrolledMessageCount) {
+			lastAutoScrolledMessageCount = messageCount;
+			return;
+		}
+		lastAutoScrolledMessageCount = messageCount;
+		tick().then(() => {
+			if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
+		});
+	});
 </script>
 
 <div class="planner-chat-shell">
-	<div class="planner-chat-thread" role="log">
+	<div class="planner-chat-thread" role="log" bind:this={threadEl}>
 		{#if msgs.length === 0}
 			<div class="planner-chat-welcome">
 				<p class="planner-chat-guide-copy">
-					Describe a scene or ask for edits like "add a lamp", "remove the sphere", or "make the table red". You can
-					attach a reference image instead of or in addition to text.
+					Describe a scene or ask for edits like "add a lamp", "remove the sphere", or "make the
+					table red". You can attach a reference image instead of or in addition to text.
 				</p>
 				{#if OBJ_EXAMPLES.length > 0}
 					<div class="planner-obj-examples">
@@ -752,14 +787,13 @@ f 90 81 161 170`
 					<div class="planner-chat-bubble">
 						<div class="planner-chat-content">
 							{#if m.imageDataUrl}
-								<img
-									class="planner-chat-msg-image"
-									src={m.imageDataUrl}
-									alt=""
-								/>
+								<img class="planner-chat-msg-image" src={m.imageDataUrl} alt="" />
 							{/if}
 							{#if m.content}
-								<div class="planner-chat-msg-text">{m.content}</div>
+								<div class="planner-chat-msg-text">{displayMessageContent(m.content)}</div>
+							{/if}
+							{#if m.role === 'assistant' && m.meta}
+								<div class="planner-chat-token-usage">{m.meta}</div>
 							{/if}
 							{#if m.role === 'assistant' && m.tokenUsage}
 								<div class="planner-chat-token-usage">{tokenUsageLine(m.tokenUsage)}</div>
@@ -809,7 +843,6 @@ f 90 81 161 170`
 		></textarea>
 		<div class="planner-chat-input-toolbar">
 			<div class="planner-chat-toolbar-left">
-				
 				<label class="planner-chat-procedural-label">
 					<input
 						type="checkbox"
@@ -884,12 +917,12 @@ f 90 81 161 170`
 	}
 
 	.planner-chat-msg-text {
-		white-space: pre-wrap;
+		white-space: normal;
 		word-break: break-word;
 	}
 
 	.planner-chat-token-usage {
-		margin-top: 6px;
+		margin-top: 4px;
 		font-size: 11px;
 		line-height: 1.3;
 		color: #64748b;
@@ -1002,9 +1035,6 @@ f 90 81 161 170`
 		min-width: 0;
 		flex: 1;
 	}
-
-
-
 
 	.planner-chat-procedural-label {
 		margin: 0;

@@ -1,0 +1,317 @@
+#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@kernel_default: cadquery
+#@material_preset: upper_knit color=#d9dde2 roughness=0.72 metalness=0.0
+#@material_preset: sole_foam color=#f4f1e8 roughness=0.5 metalness=0.0
+#@material_preset: outsole_dark color=#24272c roughness=0.78 metalness=0.03
+#@material_preset: accent_blue color=#2775d1 roughness=0.42 metalness=0.0
+
+o sneaker_v1
+#@source: assembly
+#@children: sneaker_v1_sole,sneaker_v1_upper,sneaker_v1_toe,sneaker_v1_collar,sneaker_v1_heel,sneaker_v1_accent,sneaker_v1_tread
+#@params: length=0.74, width=0.24, toe_length=0.18, collar_height=0.18, sole_height=0.09
+#@semantic: controlled sneaker variant preserving base style; length fixed while toe profile, collar height, and sole aggressiveness vary
+#@transform: position=[-1.05,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o sneaker_v1_sole
+#@parent: sneaker_v1
+#@source: procedural
+#@type: box
+#@params: size=[length,width,sole_height], center=[-1.05,0,sole_height/2]
+#@ops:
+#@ - bevel amount=0.035 segments=4
+#@ - material name=sole_foam
+#@ - tag value=structural
+
+o sneaker_v1_upper
+#@parent: sneaker_v1
+#@source: procedural
+#@type: box
+#@params: size=[0.48,0.20,0.18], center=[-1.05+0.02,0,sole_height+0.11]
+#@ops:
+#@ - bevel amount=0.045 segments=5
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v1_toe
+#@parent: sneaker_v1
+#@source: procedural
+#@type: box
+#@params: size=[toe_length,0.21,0.13], center=[-1.05-0.30,0,sole_height+0.08]
+#@ops:
+#@ - bevel amount=0.05 segments=5
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v1_collar
+#@parent: sneaker_v1
+#@source: procedural
+#@type: box
+#@params: size=[0.18,0.20,collar_height], center=[-1.05+0.25,0,sole_height+collar_height/2+0.05]
+#@ops:
+#@ - bevel amount=0.03 segments=4
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v1_heel
+#@parent: sneaker_v1
+#@source: procedural
+#@type: box
+#@params: size=[0.11,0.225,0.19], center=[-1.05+0.34,0,sole_height+0.10]
+#@ops:
+#@ - bevel amount=0.025 segments=3
+#@ - material name=accent_blue
+#@ - tag value=decorative
+
+o sneaker_v1_accent
+#@parent: sneaker_v1
+#@source: procedural
+#@type: box
+#@params: size=[0.30,0.018,0.045], center=[-1.05,-0.111,sole_height+0.17]
+#@ops:
+#@ - bevel amount=0.006 segments=1
+#@ - material name=accent_blue
+#@ - tag value=decorative
+
+o sneaker_v1_tread
+#@parent: sneaker_v1
+#@source: procedural
+#@type: box
+#@params: size=[0.055,0.27,0.035], center=[-1.05-0.31,0,-0.017]
+#@ops:
+#@ - array count=6 offset=[0.12,0,0]
+#@ - material name=outsole_dark
+#@ - tag value=structural
+
+o sneaker_v2
+#@source: assembly
+#@children: sneaker_v2_sole,sneaker_v2_upper,sneaker_v2_toe,sneaker_v2_collar,sneaker_v2_heel,sneaker_v2_accent,sneaker_v2_tread
+#@params: length=0.74, width=0.24, toe_length=0.23, collar_height=0.24, sole_height=0.12
+#@semantic: controlled sneaker variant preserving base style; length fixed while toe profile, collar height, and sole aggressiveness vary
+#@transform: position=[-0.3500000000000001,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o sneaker_v2_sole
+#@parent: sneaker_v2
+#@source: procedural
+#@type: box
+#@params: size=[length,width,sole_height], center=[-0.3500000000000001,0,sole_height/2]
+#@ops:
+#@ - bevel amount=0.035 segments=4
+#@ - material name=sole_foam
+#@ - tag value=structural
+
+o sneaker_v2_upper
+#@parent: sneaker_v2
+#@source: procedural
+#@type: box
+#@params: size=[0.48,0.20,0.18], center=[-0.3500000000000001+0.02,0,sole_height+0.11]
+#@ops:
+#@ - bevel amount=0.045 segments=5
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v2_toe
+#@parent: sneaker_v2
+#@source: procedural
+#@type: box
+#@params: size=[toe_length,0.21,0.13], center=[-0.3500000000000001-0.30,0,sole_height+0.08]
+#@ops:
+#@ - bevel amount=0.05 segments=5
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v2_collar
+#@parent: sneaker_v2
+#@source: procedural
+#@type: box
+#@params: size=[0.18,0.20,collar_height], center=[-0.3500000000000001+0.25,0,sole_height+collar_height/2+0.05]
+#@ops:
+#@ - bevel amount=0.03 segments=4
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v2_heel
+#@parent: sneaker_v2
+#@source: procedural
+#@type: box
+#@params: size=[0.11,0.225,0.19], center=[-0.3500000000000001+0.34,0,sole_height+0.10]
+#@ops:
+#@ - bevel amount=0.025 segments=3
+#@ - material name=accent_blue
+#@ - tag value=decorative
+
+o sneaker_v2_accent
+#@parent: sneaker_v2
+#@source: procedural
+#@type: box
+#@params: size=[0.30,0.018,0.045], center=[-0.3500000000000001,-0.111,sole_height+0.17]
+#@ops:
+#@ - bevel amount=0.006 segments=1
+#@ - material name=accent_blue
+#@ - tag value=decorative
+
+o sneaker_v2_tread
+#@parent: sneaker_v2
+#@source: procedural
+#@type: box
+#@params: size=[0.055,0.27,0.035], center=[-0.3500000000000001-0.31,0,-0.017]
+#@ops:
+#@ - array count=6 offset=[0.12,0,0]
+#@ - material name=outsole_dark
+#@ - tag value=structural
+
+o sneaker_v3
+#@source: assembly
+#@children: sneaker_v3_sole,sneaker_v3_upper,sneaker_v3_toe,sneaker_v3_collar,sneaker_v3_heel,sneaker_v3_accent,sneaker_v3_tread
+#@params: length=0.74, width=0.24, toe_length=0.2, collar_height=0.3, sole_height=0.15
+#@semantic: controlled sneaker variant preserving base style; length fixed while toe profile, collar height, and sole aggressiveness vary
+#@transform: position=[0.34999999999999987,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o sneaker_v3_sole
+#@parent: sneaker_v3
+#@source: procedural
+#@type: box
+#@params: size=[length,width,sole_height], center=[0.34999999999999987,0,sole_height/2]
+#@ops:
+#@ - bevel amount=0.035 segments=4
+#@ - material name=sole_foam
+#@ - tag value=structural
+
+o sneaker_v3_upper
+#@parent: sneaker_v3
+#@source: procedural
+#@type: box
+#@params: size=[0.48,0.20,0.18], center=[0.34999999999999987+0.02,0,sole_height+0.11]
+#@ops:
+#@ - bevel amount=0.045 segments=5
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v3_toe
+#@parent: sneaker_v3
+#@source: procedural
+#@type: box
+#@params: size=[toe_length,0.21,0.13], center=[0.34999999999999987-0.30,0,sole_height+0.08]
+#@ops:
+#@ - bevel amount=0.05 segments=5
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v3_collar
+#@parent: sneaker_v3
+#@source: procedural
+#@type: box
+#@params: size=[0.18,0.20,collar_height], center=[0.34999999999999987+0.25,0,sole_height+collar_height/2+0.05]
+#@ops:
+#@ - bevel amount=0.03 segments=4
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v3_heel
+#@parent: sneaker_v3
+#@source: procedural
+#@type: box
+#@params: size=[0.11,0.225,0.19], center=[0.34999999999999987+0.34,0,sole_height+0.10]
+#@ops:
+#@ - bevel amount=0.025 segments=3
+#@ - material name=accent_blue
+#@ - tag value=decorative
+
+o sneaker_v3_accent
+#@parent: sneaker_v3
+#@source: procedural
+#@type: box
+#@params: size=[0.30,0.018,0.045], center=[0.34999999999999987,-0.111,sole_height+0.17]
+#@ops:
+#@ - bevel amount=0.006 segments=1
+#@ - material name=accent_blue
+#@ - tag value=decorative
+
+o sneaker_v3_tread
+#@parent: sneaker_v3
+#@source: procedural
+#@type: box
+#@params: size=[0.055,0.27,0.035], center=[0.34999999999999987-0.31,0,-0.017]
+#@ops:
+#@ - array count=6 offset=[0.12,0,0]
+#@ - material name=outsole_dark
+#@ - tag value=structural
+
+o sneaker_v4
+#@source: assembly
+#@children: sneaker_v4_sole,sneaker_v4_upper,sneaker_v4_toe,sneaker_v4_collar,sneaker_v4_heel,sneaker_v4_accent,sneaker_v4_tread
+#@params: length=0.74, width=0.24, toe_length=0.16, collar_height=0.2, sole_height=0.18
+#@semantic: controlled sneaker variant preserving base style; length fixed while toe profile, collar height, and sole aggressiveness vary
+#@transform: position=[1.0499999999999996,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o sneaker_v4_sole
+#@parent: sneaker_v4
+#@source: procedural
+#@type: box
+#@params: size=[length,width,sole_height], center=[1.0499999999999996,0,sole_height/2]
+#@ops:
+#@ - bevel amount=0.035 segments=4
+#@ - material name=sole_foam
+#@ - tag value=structural
+
+o sneaker_v4_upper
+#@parent: sneaker_v4
+#@source: procedural
+#@type: box
+#@params: size=[0.48,0.20,0.18], center=[1.0499999999999996+0.02,0,sole_height+0.11]
+#@ops:
+#@ - bevel amount=0.045 segments=5
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v4_toe
+#@parent: sneaker_v4
+#@source: procedural
+#@type: box
+#@params: size=[toe_length,0.21,0.13], center=[1.0499999999999996-0.30,0,sole_height+0.08]
+#@ops:
+#@ - bevel amount=0.05 segments=5
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v4_collar
+#@parent: sneaker_v4
+#@source: procedural
+#@type: box
+#@params: size=[0.18,0.20,collar_height], center=[1.0499999999999996+0.25,0,sole_height+collar_height/2+0.05]
+#@ops:
+#@ - bevel amount=0.03 segments=4
+#@ - material name=upper_knit
+#@ - tag value=structural
+
+o sneaker_v4_heel
+#@parent: sneaker_v4
+#@source: procedural
+#@type: box
+#@params: size=[0.11,0.225,0.19], center=[1.0499999999999996+0.34,0,sole_height+0.10]
+#@ops:
+#@ - bevel amount=0.025 segments=3
+#@ - material name=accent_blue
+#@ - tag value=decorative
+
+o sneaker_v4_accent
+#@parent: sneaker_v4
+#@source: procedural
+#@type: box
+#@params: size=[0.30,0.018,0.045], center=[1.0499999999999996,-0.111,sole_height+0.17]
+#@ops:
+#@ - bevel amount=0.006 segments=1
+#@ - material name=accent_blue
+#@ - tag value=decorative
+
+o sneaker_v4_tread
+#@parent: sneaker_v4
+#@source: procedural
+#@type: box
+#@params: size=[0.055,0.27,0.035], center=[1.0499999999999996-0.31,0,-0.017]
+#@ops:
+#@ - array count=6 offset=[0.12,0,0]
+#@ - material name=outsole_dark
+#@ - tag value=structural

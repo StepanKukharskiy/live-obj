@@ -28,7 +28,9 @@
 	color: #1a1a1a;
 	backdrop-filter: blur(24px);
 	-webkit-backdrop-filter: blur(24px);
-	box-shadow: 0 12px 48px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.04);
+	box-shadow:
+		0 12px 48px rgba(0, 0, 0, 0.08),
+		0 4px 16px rgba(0, 0, 0, 0.04);
 	z-index: 10;
 	box-sizing: border-box;
 	transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -187,10 +189,10 @@
 .planner-chat-thread {
 	display: flex;
 	flex-direction: column;
-	gap: 24px;
+	gap: 10px;
 	min-height: 0;
 	overflow-y: auto;
-	padding: 0 0 24px;
+	padding: 0 0 14px;
 }
 
 .planner-chat-welcome {
@@ -234,21 +236,21 @@
 
 .planner-chat-bubble .planner-chat-content {
 	font-size: 14px;
-	line-height: 1.5;
-	white-space: pre-wrap;
+	line-height: 1.38;
+	white-space: normal;
 }
 
 .planner-chat-row.assistant .planner-chat-bubble .planner-chat-content {
 	background: rgba(255, 255, 255, 0.9);
-	padding: 8px 12px;
-	border-radius: 12px;
+	padding: 7px 10px;
+	border-radius: 10px;
 }
 
 .planner-chat-row.user .planner-chat-bubble .planner-chat-content {
 	background: rgba(0, 0, 235, 0.08);
 	color: #1a1a1a;
-	padding: 10px 16px;
-	border-radius: 20px;
+	padding: 8px 12px;
+	border-radius: 16px;
 	border-bottom-right-radius: 4px;
 	display: inline-block;
 }

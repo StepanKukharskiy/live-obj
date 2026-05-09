@@ -1,0 +1,66 @@
+#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@kernel_default: cadquery
+#@material_preset: coral_low_mat color=#e58b73 roughness=0.66 metalness=0.0
+#@material_preset: coral_mid_mat color=#ef755f roughness=0.68 metalness=0.0
+#@material_preset: coral_high_mat color=#ff6d83 roughness=0.70 metalness=0.0
+#@material_preset: base_sand color=#d9c7a5 roughness=0.8 metalness=0.0
+
+o coral_low
+#@source: simulation
+#@sim: differential_growth
+#@params: radius=0.16, points=18, steps=16, split_distance=0.065, repel_radius=0.09, thickness=0.025, seed=110
+#@semantic: low-density coral branching study with similar base footprint
+#@transform: position=[-0.55,0,0.05],rotation=[0,0,0],scale=[1,1,1]
+#@ops:
+#@ - material name=coral_low_mat
+#@ - tag value=art
+
+o coral_low_base
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.18, depth=0.04, segments=48, center=[-0.55,0,0.02]
+#@ops:
+#@ - bevel amount=0.012 segments=2
+#@ - material name=base_sand
+#@ - tag value=structural
+
+o coral_mid
+#@source: simulation
+#@sim: differential_growth
+#@params: radius=0.16, points=28, steps=24, split_distance=0.052, repel_radius=0.075, thickness=0.020, seed=220
+#@semantic: medium-density coral branching study with similar base footprint
+#@transform: position=[0,0,0.05],rotation=[0,0,0],scale=[1,1,1]
+#@ops:
+#@ - material name=coral_mid_mat
+#@ - tag value=art
+
+o coral_mid_base
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.18, depth=0.04, segments=48, center=[0,0,0.02]
+#@ops:
+#@ - bevel amount=0.012 segments=2
+#@ - material name=base_sand
+#@ - tag value=structural
+
+o coral_high
+#@source: simulation
+#@sim: differential_growth
+#@params: radius=0.16, points=42, steps=34, split_distance=0.040, repel_radius=0.060, thickness=0.016, seed=330
+#@semantic: high-density coral branching study with similar base footprint; printable readable silhouette
+#@transform: position=[0.55,0,0.05],rotation=[0,0,0],scale=[1,1,1]
+#@ops:
+#@ - material name=coral_high_mat
+#@ - tag value=art
+
+o coral_high_base
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.18, depth=0.04, segments=48, center=[0.55,0,0.02]
+#@ops:
+#@ - bevel amount=0.012 segments=2
+#@ - material name=base_sand
+#@ - tag value=structural

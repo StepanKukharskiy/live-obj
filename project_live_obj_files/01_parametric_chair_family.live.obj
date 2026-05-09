@@ -1,0 +1,570 @@
+#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@material_preset: warm_ash color=#b7865a roughness=0.58 metalness=0.0
+#@material_preset: graphite color=#2c3035 roughness=0.48 metalness=0.15
+
+o chair_a
+#@source: assembly
+#@children: chair_a_seat,chair_a_back,chair_a_leg_fl,chair_a_leg_fr,chair_a_leg_bl,chair_a_leg_br
+#@params: seat_height=0.45, seat_width=0.46, seat_depth=0.44, seat_thickness=0.045, leg_height=0.4275, back_height=0.46, back_thickness=0.045, leg_inset=0.055
+#@semantic: modern dining chair variant; fixed seat height 0.45m and fixed seat width 0.46m
+#@variant: leg_profile=straight, back_curvature=flat, arm_style=none
+#@anchors:
+#@ - seat_center=[0,0,seat_height]
+#@ - back_center=[0,(seat_depth/2+back_thickness/2),seat_height+back_height/2]
+#@ - leg_fl=[-(seat_width/2-leg_inset-0.0),-(seat_depth/2-leg_inset-0.0),leg_height/2]
+#@ - leg_fr=[(seat_width/2-leg_inset-0.0),-(seat_depth/2-leg_inset-0.0),leg_height/2]
+#@ - leg_bl=[-(seat_width/2-leg_inset+0.0),(seat_depth/2-leg_inset+0.0),leg_height/2]
+#@ - leg_br=[(seat_width/2-leg_inset+0.0),(seat_depth/2-leg_inset+0.0),leg_height/2]
+#@ - arm_l=[-(seat_width/2+0.035),0,0.60]
+#@ - arm_r=[(seat_width/2+0.035),0,0.60]
+#@transform: position=[-0.7,0.45,0],rotation=[0,0,0],scale=[1,1,1]
+
+o chair_a_seat
+#@parent: chair_a
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,seat_depth,seat_thickness], center=anchor(chair_a.seat_center)
+#@ops:
+#@ - bevel amount=0.025 segments=4
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_a_back
+#@parent: chair_a
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,0.022,back_height], center=anchor(chair_a.back_center)
+#@ops:
+#@ - bevel amount=0.022 segments=4
+#@ - bend axis=x angle=0
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_a_leg_fl
+#@parent: chair_a
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_a.leg_fl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_a_leg_fr
+#@parent: chair_a
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_a.leg_fr)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_a_leg_bl
+#@parent: chair_a
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_a.leg_bl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_a_leg_br
+#@parent: chair_a
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_a.leg_br)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_b
+#@source: assembly
+#@children: chair_b_seat,chair_b_back,chair_b_leg_fl,chair_b_leg_fr,chair_b_leg_bl,chair_b_leg_br,chair_b_arm_l,chair_b_arm_r
+#@params: seat_height=0.45, seat_width=0.46, seat_depth=0.44, seat_thickness=0.045, leg_height=0.4275, back_height=0.46, back_thickness=0.045, leg_inset=0.055
+#@semantic: modern dining chair variant; fixed seat height 0.45m and fixed seat width 0.46m
+#@variant: leg_profile=tapered, back_curvature=mid, arm_style=light
+#@anchors:
+#@ - seat_center=[0,0,seat_height]
+#@ - back_center=[0,(seat_depth/2+back_thickness/2),seat_height+back_height/2]
+#@ - leg_fl=[-(seat_width/2-leg_inset-0.025),-(seat_depth/2-leg_inset-0.025),leg_height/2]
+#@ - leg_fr=[(seat_width/2-leg_inset-0.025),-(seat_depth/2-leg_inset-0.025),leg_height/2]
+#@ - leg_bl=[-(seat_width/2-leg_inset+0.025),(seat_depth/2-leg_inset+0.025),leg_height/2]
+#@ - leg_br=[(seat_width/2-leg_inset+0.025),(seat_depth/2-leg_inset+0.025),leg_height/2]
+#@ - arm_l=[-(seat_width/2+0.035),0,0.60]
+#@ - arm_r=[(seat_width/2+0.035),0,0.60]
+#@transform: position=[0,0.45,0],rotation=[0,0,0],scale=[1,1,1]
+
+o chair_b_seat
+#@parent: chair_b
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,seat_depth,seat_thickness], center=anchor(chair_b.seat_center)
+#@ops:
+#@ - bevel amount=0.025 segments=4
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_b_back
+#@parent: chair_b
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,0.045,back_height], center=anchor(chair_b.back_center)
+#@ops:
+#@ - bevel amount=0.022 segments=4
+#@ - bend axis=x angle=-5
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_b_leg_fl
+#@parent: chair_b
+#@source: procedural
+#@type: box
+#@params: size=[0.040,0.040,leg_height], center=anchor(chair_b.leg_fl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - taper axis=z amount=-0.32
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_b_leg_fr
+#@parent: chair_b
+#@source: procedural
+#@type: box
+#@params: size=[0.040,0.040,leg_height], center=anchor(chair_b.leg_fr)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - taper axis=z amount=-0.32
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_b_leg_bl
+#@parent: chair_b
+#@source: procedural
+#@type: box
+#@params: size=[0.040,0.040,leg_height], center=anchor(chair_b.leg_bl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - taper axis=z amount=-0.32
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_b_leg_br
+#@parent: chair_b
+#@source: procedural
+#@type: box
+#@params: size=[0.040,0.040,leg_height], center=anchor(chair_b.leg_br)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - taper axis=z amount=-0.32
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_b_arm_l
+#@parent: chair_b
+#@source: procedural
+#@type: box
+#@params: size=[0.035,seat_depth,0.040], center=anchor(chair_b.arm_l)
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - transform position=[0,0,0] rotation=[0,0,0] scale=[1,1,1]
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_b_arm_r
+#@parent: chair_b
+#@source: procedural
+#@type: box
+#@params: size=[0.035,seat_depth,0.040], center=anchor(chair_b.arm_r)
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - transform position=[0,0,0] rotation=[0,0,0] scale=[1,1,1]
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_c
+#@source: assembly
+#@children: chair_c_seat,chair_c_back,chair_c_leg_fl,chair_c_leg_fr,chair_c_leg_bl,chair_c_leg_br,chair_c_arm_l,chair_c_arm_r
+#@params: seat_height=0.45, seat_width=0.46, seat_depth=0.44, seat_thickness=0.045, leg_height=0.4275, back_height=0.46, back_thickness=0.045, leg_inset=0.055
+#@semantic: modern dining chair variant; fixed seat height 0.45m and fixed seat width 0.46m
+#@variant: leg_profile=splayed, back_curvature=curved, arm_style=full
+#@anchors:
+#@ - seat_center=[0,0,seat_height]
+#@ - back_center=[0,(seat_depth/2+back_thickness/2),seat_height+back_height/2]
+#@ - leg_fl=[-(seat_width/2-leg_inset-0.055),-(seat_depth/2-leg_inset-0.055),leg_height/2]
+#@ - leg_fr=[(seat_width/2-leg_inset-0.055),-(seat_depth/2-leg_inset-0.055),leg_height/2]
+#@ - leg_bl=[-(seat_width/2-leg_inset+0.055),(seat_depth/2-leg_inset+0.055),leg_height/2]
+#@ - leg_br=[(seat_width/2-leg_inset+0.055),(seat_depth/2-leg_inset+0.055),leg_height/2]
+#@ - arm_l=[-(seat_width/2+0.035),0,0.60]
+#@ - arm_r=[(seat_width/2+0.035),0,0.60]
+#@transform: position=[0.7,0.45,0],rotation=[0,0,0],scale=[1,1,1]
+
+o chair_c_seat
+#@parent: chair_c
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,seat_depth,seat_thickness], center=anchor(chair_c.seat_center)
+#@ops:
+#@ - bevel amount=0.025 segments=4
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_c_back
+#@parent: chair_c
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,0.075,back_height], center=anchor(chair_c.back_center)
+#@ops:
+#@ - bevel amount=0.022 segments=4
+#@ - bend axis=x angle=-10
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_c_leg_fl
+#@parent: chair_c
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_c.leg_fl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_c_leg_fr
+#@parent: chair_c
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_c.leg_fr)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_c_leg_bl
+#@parent: chair_c
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_c.leg_bl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_c_leg_br
+#@parent: chair_c
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_c.leg_br)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_c_arm_l
+#@parent: chair_c
+#@source: procedural
+#@type: box
+#@params: size=[0.055,seat_depth,0.040], center=anchor(chair_c.arm_l)
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - transform position=[0,0,0.03] rotation=[0,0,0] scale=[1,1,1]
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_c_arm_r
+#@parent: chair_c
+#@source: procedural
+#@type: box
+#@params: size=[0.055,seat_depth,0.040], center=anchor(chair_c.arm_r)
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - transform position=[0,0,0.03] rotation=[0,0,0] scale=[1,1,1]
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_d
+#@source: assembly
+#@children: chair_d_seat,chair_d_back,chair_d_leg_fl,chair_d_leg_fr,chair_d_leg_bl,chair_d_leg_br,chair_d_arm_l,chair_d_arm_r
+#@params: seat_height=0.45, seat_width=0.46, seat_depth=0.44, seat_thickness=0.045, leg_height=0.4275, back_height=0.46, back_thickness=0.045, leg_inset=0.055
+#@semantic: modern dining chair variant; fixed seat height 0.45m and fixed seat width 0.46m
+#@variant: leg_profile=straight, back_curvature=curved, arm_style=light
+#@anchors:
+#@ - seat_center=[0,0,seat_height]
+#@ - back_center=[0,(seat_depth/2+back_thickness/2),seat_height+back_height/2]
+#@ - leg_fl=[-(seat_width/2-leg_inset-0.0),-(seat_depth/2-leg_inset-0.0),leg_height/2]
+#@ - leg_fr=[(seat_width/2-leg_inset-0.0),-(seat_depth/2-leg_inset-0.0),leg_height/2]
+#@ - leg_bl=[-(seat_width/2-leg_inset+0.0),(seat_depth/2-leg_inset+0.0),leg_height/2]
+#@ - leg_br=[(seat_width/2-leg_inset+0.0),(seat_depth/2-leg_inset+0.0),leg_height/2]
+#@ - arm_l=[-(seat_width/2+0.035),0,0.60]
+#@ - arm_r=[(seat_width/2+0.035),0,0.60]
+#@transform: position=[-0.7,-0.45,0],rotation=[0,0,0],scale=[1,1,1]
+
+o chair_d_seat
+#@parent: chair_d
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,seat_depth,seat_thickness], center=anchor(chair_d.seat_center)
+#@ops:
+#@ - bevel amount=0.025 segments=4
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_d_back
+#@parent: chair_d
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,0.075,back_height], center=anchor(chair_d.back_center)
+#@ops:
+#@ - bevel amount=0.022 segments=4
+#@ - bend axis=x angle=-10
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_d_leg_fl
+#@parent: chair_d
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_d.leg_fl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_d_leg_fr
+#@parent: chair_d
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_d.leg_fr)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_d_leg_bl
+#@parent: chair_d
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_d.leg_bl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_d_leg_br
+#@parent: chair_d
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_d.leg_br)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_d_arm_l
+#@parent: chair_d
+#@source: procedural
+#@type: box
+#@params: size=[0.035,seat_depth,0.040], center=anchor(chair_d.arm_l)
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - transform position=[0,0,0] rotation=[0,0,0] scale=[1,1,1]
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_d_arm_r
+#@parent: chair_d
+#@source: procedural
+#@type: box
+#@params: size=[0.035,seat_depth,0.040], center=anchor(chair_d.arm_r)
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - transform position=[0,0,0] rotation=[0,0,0] scale=[1,1,1]
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_e
+#@source: assembly
+#@children: chair_e_seat,chair_e_back,chair_e_leg_fl,chair_e_leg_fr,chair_e_leg_bl,chair_e_leg_br,chair_e_arm_l,chair_e_arm_r
+#@params: seat_height=0.45, seat_width=0.46, seat_depth=0.44, seat_thickness=0.045, leg_height=0.4275, back_height=0.46, back_thickness=0.045, leg_inset=0.055
+#@semantic: modern dining chair variant; fixed seat height 0.45m and fixed seat width 0.46m
+#@variant: leg_profile=tapered, back_curvature=flat, arm_style=full
+#@anchors:
+#@ - seat_center=[0,0,seat_height]
+#@ - back_center=[0,(seat_depth/2+back_thickness/2),seat_height+back_height/2]
+#@ - leg_fl=[-(seat_width/2-leg_inset-0.025),-(seat_depth/2-leg_inset-0.025),leg_height/2]
+#@ - leg_fr=[(seat_width/2-leg_inset-0.025),-(seat_depth/2-leg_inset-0.025),leg_height/2]
+#@ - leg_bl=[-(seat_width/2-leg_inset+0.025),(seat_depth/2-leg_inset+0.025),leg_height/2]
+#@ - leg_br=[(seat_width/2-leg_inset+0.025),(seat_depth/2-leg_inset+0.025),leg_height/2]
+#@ - arm_l=[-(seat_width/2+0.035),0,0.60]
+#@ - arm_r=[(seat_width/2+0.035),0,0.60]
+#@transform: position=[0,-0.45,0],rotation=[0,0,0],scale=[1,1,1]
+
+o chair_e_seat
+#@parent: chair_e
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,seat_depth,seat_thickness], center=anchor(chair_e.seat_center)
+#@ops:
+#@ - bevel amount=0.025 segments=4
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_e_back
+#@parent: chair_e
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,0.022,back_height], center=anchor(chair_e.back_center)
+#@ops:
+#@ - bevel amount=0.022 segments=4
+#@ - bend axis=x angle=0
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_e_leg_fl
+#@parent: chair_e
+#@source: procedural
+#@type: box
+#@params: size=[0.040,0.040,leg_height], center=anchor(chair_e.leg_fl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - taper axis=z amount=-0.32
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_e_leg_fr
+#@parent: chair_e
+#@source: procedural
+#@type: box
+#@params: size=[0.040,0.040,leg_height], center=anchor(chair_e.leg_fr)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - taper axis=z amount=-0.32
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_e_leg_bl
+#@parent: chair_e
+#@source: procedural
+#@type: box
+#@params: size=[0.040,0.040,leg_height], center=anchor(chair_e.leg_bl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - taper axis=z amount=-0.32
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_e_leg_br
+#@parent: chair_e
+#@source: procedural
+#@type: box
+#@params: size=[0.040,0.040,leg_height], center=anchor(chair_e.leg_br)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - taper axis=z amount=-0.32
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_e_arm_l
+#@parent: chair_e
+#@source: procedural
+#@type: box
+#@params: size=[0.055,seat_depth,0.040], center=anchor(chair_e.arm_l)
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - transform position=[0,0,0.03] rotation=[0,0,0] scale=[1,1,1]
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_e_arm_r
+#@parent: chair_e
+#@source: procedural
+#@type: box
+#@params: size=[0.055,seat_depth,0.040], center=anchor(chair_e.arm_r)
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - transform position=[0,0,0.03] rotation=[0,0,0] scale=[1,1,1]
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_f
+#@source: assembly
+#@children: chair_f_seat,chair_f_back,chair_f_leg_fl,chair_f_leg_fr,chair_f_leg_bl,chair_f_leg_br
+#@params: seat_height=0.45, seat_width=0.46, seat_depth=0.44, seat_thickness=0.045, leg_height=0.4275, back_height=0.46, back_thickness=0.045, leg_inset=0.055
+#@semantic: modern dining chair variant; fixed seat height 0.45m and fixed seat width 0.46m
+#@variant: leg_profile=splayed, back_curvature=mid, arm_style=none
+#@anchors:
+#@ - seat_center=[0,0,seat_height]
+#@ - back_center=[0,(seat_depth/2+back_thickness/2),seat_height+back_height/2]
+#@ - leg_fl=[-(seat_width/2-leg_inset-0.055),-(seat_depth/2-leg_inset-0.055),leg_height/2]
+#@ - leg_fr=[(seat_width/2-leg_inset-0.055),-(seat_depth/2-leg_inset-0.055),leg_height/2]
+#@ - leg_bl=[-(seat_width/2-leg_inset+0.055),(seat_depth/2-leg_inset+0.055),leg_height/2]
+#@ - leg_br=[(seat_width/2-leg_inset+0.055),(seat_depth/2-leg_inset+0.055),leg_height/2]
+#@ - arm_l=[-(seat_width/2+0.035),0,0.60]
+#@ - arm_r=[(seat_width/2+0.035),0,0.60]
+#@transform: position=[0.7,-0.45,0],rotation=[0,0,0],scale=[1,1,1]
+
+o chair_f_seat
+#@parent: chair_f
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,seat_depth,seat_thickness], center=anchor(chair_f.seat_center)
+#@ops:
+#@ - bevel amount=0.025 segments=4
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_f_back
+#@parent: chair_f
+#@source: procedural
+#@type: box
+#@params: size=[seat_width,0.045,back_height], center=anchor(chair_f.back_center)
+#@ops:
+#@ - bevel amount=0.022 segments=4
+#@ - bend axis=x angle=-5
+#@ - material name=warm_ash
+#@ - tag value=structural
+
+o chair_f_leg_fl
+#@parent: chair_f
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_f.leg_fl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_f_leg_fr
+#@parent: chair_f
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_f.leg_fr)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_f_leg_bl
+#@parent: chair_f
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_f.leg_bl)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural
+
+o chair_f_leg_br
+#@parent: chair_f
+#@source: procedural
+#@type: box
+#@params: size=[0.035,0.035,leg_height], center=anchor(chair_f.leg_br)
+#@ops:
+#@ - bevel amount=0.008 segments=2
+#@ - material name=graphite
+#@ - tag value=structural

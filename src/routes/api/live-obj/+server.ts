@@ -47,27 +47,140 @@ type TokenUsageSummary = {
 };
 
 const KNOWN_OPS = new Set([
-	'transform', 'mirror', 'array', 'radial_array', 'bevel', 'smooth', 'subdivide', 'remesh', 'simplify',
-	'displace', 'bend', 'twist', 'taper', 'sweep', 'thicken', 'skin', 'loft',
-	'boolean', 'mesh_from_sdf', 'collision', 'snap', 'anchor', 'attach', 'constraint', 'material', 'tag',
-	'trace_paths', 'sdf_tubes', 'voxelize', 'mesh_from_volume', 'tread',
-	'union', 'subtract', 'intersect', 'chamfer', 'shell', 'offset'
+	'transform',
+	'mirror',
+	'array',
+	'radial_array',
+	'bevel',
+	'smooth',
+	'subdivide',
+	'remesh',
+	'simplify',
+	'displace',
+	'bend',
+	'twist',
+	'taper',
+	'sweep',
+	'thicken',
+	'skin',
+	'loft',
+	'boolean',
+	'mesh_from_sdf',
+	'collision',
+	'snap',
+	'anchor',
+	'attach',
+	'constraint',
+	'material',
+	'tag',
+	'trace_paths',
+	'sdf_tubes',
+	'voxelize',
+	'mesh_from_volume',
+	'tread',
+	'union',
+	'subtract',
+	'intersect',
+	'chamfer',
+	'shell',
+	'offset'
 ]);
 // Ops valid inside `#@sdf:` blocks. SDF primitive/modifier ops are disjoint
 // from top-level `#@ops:` ops, so we must not flag them when encountered under
 // a `#@sdf:` section.
 const KNOWN_SDF_OPS = new Set([
-	'sphere', 'box', 'cylinder', 'capsule', 'torus', 'cone', 'plane',
-	'union', 'subtract', 'intersect', 'smooth_union',
-	'repeat', 'twist', 'bend', 'displace', 'noise_displace',
+	'sphere',
+	'box',
+	'cylinder',
+	'capsule',
+	'torus',
+	'cone',
+	'plane',
+	'union',
+	'subtract',
+	'intersect',
+	'smooth_union',
+	'repeat',
+	'twist',
+	'bend',
+	'displace',
+	'noise_displace',
 	'mesh_from_sdf'
 ]);
-const KNOWN_SOURCES = new Set(['procedural', 'llm_mesh', 'assembly', 'sdf', 'simulation']);
-const KNOWN_TYPES = new Set([
-	'box', 'cylinder', 'surface_grid', 'heightfield', 'curve', 'sweep', 'mesh',
-	'extrude', 'revolve', 'lathe', 'loft', 'cone', 'sphere'
+const KNOWN_RECIPE_OPS = new Set([
+	'boundary',
+	'offset',
+	'infill',
+	'path_formula',
+	'formula_path',
+	'path_field',
+	'curve',
+	'points',
+	'field',
+	'vector_field',
+	'trace_field',
+	'field_trace',
+	'trace',
+	'module',
+	'socket',
+	'grid',
+	'scatter',
+	'scatter_points',
+	'wfc',
+	'wave_function_collapse',
+	'iterate',
+	'surface_formula',
+	'formula_surface',
+	'ribbon_formula',
+	'ribbon',
+	'perforate_surface',
+	'surface_perforation',
+	'perforate',
+	'panelize_surface',
+	'panelize',
+	'emit_surface',
+	'surface',
+	'emit_tubes',
+	'tubes',
+	'emit_volume',
+	'volume',
+	'instance',
+	'instances',
+	'emit_instances',
+	'emit_mesh',
+	'emit_panels'
 ]);
-const KNOWN_SIMS = new Set(['cellular_automata', 'cellular_automata_instances', 'differential_growth', 'boids']);
+const KNOWN_SOURCES = new Set([
+	'procedural',
+	'llm_mesh',
+	'assembly',
+	'sdf',
+	'simulation',
+	'recipe'
+]);
+const KNOWN_TYPES = new Set([
+	'box',
+	'cylinder',
+	'surface_grid',
+	'heightfield',
+	'curve',
+	'sweep',
+	'mesh',
+	'extrude',
+	'revolve',
+	'lathe',
+	'loft',
+	'cone',
+	'sphere'
+]);
+const KNOWN_SIMS = new Set([
+	'cellular_automata',
+	'cellular_automata_instances',
+	'differential_growth',
+	'differential_growth_stack',
+	'boids',
+	'flow_field'
+]);
 
 function normalizeImageUrls(...groups: Array<string | string[] | undefined>): string[] {
 	const urls = groups
@@ -77,7 +190,9 @@ function normalizeImageUrls(...groups: Array<string | string[] | undefined>): st
 	return [...new Set(urls)];
 }
 
-function summarizeTokenUsage(records: Array<TokenUsage | undefined>): TokenUsageSummary | undefined {
+function summarizeTokenUsage(
+	records: Array<TokenUsage | undefined>
+): TokenUsageSummary | undefined {
 	const clean = records.filter((record): record is TokenUsage => Boolean(record));
 	if (clean.length === 0) return undefined;
 	const sum = (key: keyof TokenUsage): number | undefined => {
@@ -101,7 +216,8 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 	const unknown = new Set<string>();
 	// Track which `#@` block the current `#@ - …` line belongs to so SDF ops
 	// don't get flagged as if they were top-level mesh ops.
-	let block: 'ops' | 'sdf' | 'anchors' | 'params' | 'placement' | 'other' = 'other';
+	let block: 'ops' | 'sdf' | 'recipe' | 'anchors' | 'params' | 'placement' | 'controls' | 'other' =
+		'other';
 	for (const rawLine of liveObj.split('\n')) {
 		const line = rawLine.trim();
 		if (!line.startsWith('#@')) {
@@ -111,18 +227,49 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 			continue;
 		}
 		const body = line.slice(2).trim();
-		if (body.startsWith('ops:')) { block = 'ops'; continue; }
-		if (body.startsWith('sdf:')) { block = 'sdf'; continue; }
-		if (body.startsWith('anchors:')) { block = 'anchors'; continue; }
-		if (body.startsWith('params:')) { block = 'params'; continue; }
-		if (body.startsWith('placement:')) { block = 'placement'; continue; }
+		if (body.startsWith('ops:')) {
+			block = 'ops';
+			continue;
+		}
+		if (body.startsWith('sdf:')) {
+			block = 'sdf';
+			continue;
+		}
+		if (body.startsWith('recipe:')) {
+			block = 'recipe';
+			continue;
+		}
+		if (body.startsWith('anchors:')) {
+			block = 'anchors';
+			continue;
+		}
+		if (body.startsWith('params:')) {
+			block = 'params';
+			continue;
+		}
+		if (body.startsWith('placement:')) {
+			block = 'placement';
+			continue;
+		}
+		if (body.startsWith('controls:')) {
+			block = 'controls';
+			continue;
+		}
 		if (body.startsWith('-')) {
-			if (block === 'anchors' || block === 'params' || block === 'placement') continue;
+			if (
+				block === 'anchors' ||
+				block === 'params' ||
+				block === 'placement' ||
+				block === 'controls'
+			)
+				continue;
 			const opToken = body.slice(1).trim().split(/\s+/)[0] ?? '';
 			if (!opToken) continue;
 			const op = opToken.toLowerCase();
 			if (block === 'sdf') {
 				if (!KNOWN_SDF_OPS.has(op)) unknown.add(`sdf:${op}`);
+			} else if (block === 'recipe') {
+				if (!KNOWN_RECIPE_OPS.has(op)) unknown.add(`recipe:${op}`);
 			} else {
 				if (!KNOWN_OPS.has(op)) unknown.add(op);
 			}
@@ -142,7 +289,11 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 	return [...unknown];
 }
 
-function unknownMetaValues(liveObj: string): { badSources: string[]; badTypes: string[]; badSims: string[] } {
+function unknownMetaValues(liveObj: string): {
+	badSources: string[];
+	badTypes: string[];
+	badSims: string[];
+} {
 	const badSources = new Set<string>();
 	const badTypes = new Set<string>();
 	const badSims = new Set<string>();
@@ -172,7 +323,6 @@ function unknownMetaValues(liveObj: string): { badSources: string[]; badTypes: s
 	};
 }
 
-
 function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[] {
 	return items
 		.filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -183,13 +333,15 @@ function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[
 			const imgs = normalizeImageUrls(m.imageUrls, m.imageUrl);
 			if (imgs.length > 0) {
 				const text =
-					m.content?.trim() ||
-					'Generate or update the Live OBJ scene from this reference image.';
+					m.content?.trim() || 'Generate or update the Live OBJ scene from this reference image.';
 				return {
 					role: 'user',
 					content: [
 						{ type: 'text', text },
-						...imgs.map((url) => ({ type: 'image_url' as const, image_url: { url, detail: 'low' as const } }))
+						...imgs.map((url) => ({
+							type: 'image_url' as const,
+							image_url: { url, detail: 'low' as const }
+						}))
 					]
 				};
 			}
@@ -212,7 +364,9 @@ function objectNamesFromLiveObj(sourceText: string): string[] {
 }
 
 function allowsExistingObjectRemoval(userMessage: string): boolean {
-	return /\b(remove|delete|erase|drop|replace|rebuild|rename|convert|turn\s+.+\s+into)\b/i.test(userMessage);
+	return /\b(remove|delete|erase|drop|replace|rebuild|rename|convert|turn\s+.+\s+into)\b/i.test(
+		userMessage
+	);
 }
 
 function assertSurgicalPatchPreservesExistingObjects(
@@ -252,9 +406,10 @@ export const POST: RequestHandler = async ({ request }) => {
 	const kernelDefault = body.kernelDefault === 'cadquery' ? 'cadquery' : 'auto';
 	const rawHistory = body.history ?? [];
 	const history: ChatCompletionMessage[] = wireHistoryToMessages(rawHistory);
-	const currentLiveObj = stripCodeFences(body.currentLiveObj ?? latestAssistantLiveObj(rawHistory) ?? '');
-	const useSurgicalEdit =
-		useProcedural && body.isIterativeEdit === true && currentLiveObj.trim().length > 0;
+	const currentLiveObj = stripCodeFences(
+		body.currentLiveObj ?? latestAssistantLiveObj(rawHistory) ?? ''
+	);
+	const useSurgicalEdit = body.isIterativeEdit === true && currentLiveObj.trim().length > 0;
 
 	let rawLlm: string;
 	let correctedLiveObj: string;
@@ -449,7 +604,13 @@ async function requestAndApplySurgicalPatch(args: {
 	imageUrls?: string[];
 	reqApiKey?: string;
 	reqApiUrl?: string;
-}): Promise<{ liveObj: string; rawPatch: string; appliedEdits: number; summary?: string; usages: TokenUsage[] }> {
+}): Promise<{
+	liveObj: string;
+	rawPatch: string;
+	appliedEdits: number;
+	summary?: string;
+	usages: TokenUsage[];
+}> {
 	const imageUrls = normalizeImageUrls(args.imageUrls, args.imageUrl);
 	const patchResult = await withLlmRequestOverrides(
 		args.reqApiKey || args.reqApiUrl
@@ -474,7 +635,11 @@ async function requestAndApplySurgicalPatch(args: {
 			args.baseLiveObj,
 			parseLiveObjSurgicalPatch(rawPatch)
 		);
-		assertSurgicalPatchPreservesExistingObjects(args.userMessage, args.baseLiveObj, applied.liveObj);
+		assertSurgicalPatchPreservesExistingObjects(
+			args.userMessage,
+			args.baseLiveObj,
+			applied.liveObj
+		);
 		return {
 			liveObj: applied.liveObj,
 			rawPatch,
@@ -506,7 +671,11 @@ async function requestAndApplySurgicalPatch(args: {
 			args.baseLiveObj,
 			parseLiveObjSurgicalPatch(repairedRawPatch)
 		);
-		assertSurgicalPatchPreservesExistingObjects(args.userMessage, args.baseLiveObj, repaired.liveObj);
+		assertSurgicalPatchPreservesExistingObjects(
+			args.userMessage,
+			args.baseLiveObj,
+			repaired.liveObj
+		);
 		return {
 			liveObj: repaired.liveObj,
 			rawPatch: repairedRawPatch,
@@ -576,11 +745,15 @@ function collectSceneIssues(args: {
 }): string[] {
 	const issues: string[] = [];
 	if (args.unknownOps.length > 0) issues.push(`unknown ops: ${args.unknownOps.join(', ')}`);
-	if (args.unknownMeta.badSources.length > 0) issues.push(`unknown source values: ${args.unknownMeta.badSources.join(', ')}`);
-	if (args.unknownMeta.badTypes.length > 0) issues.push(`unknown type values: ${args.unknownMeta.badTypes.join(', ')}`);
-	if (args.unknownMeta.badSims.length > 0) issues.push(`unknown sim values: ${args.unknownMeta.badSims.join(', ')}`);
+	if (args.unknownMeta.badSources.length > 0)
+		issues.push(`unknown source values: ${args.unknownMeta.badSources.join(', ')}`);
+	if (args.unknownMeta.badTypes.length > 0)
+		issues.push(`unknown type values: ${args.unknownMeta.badTypes.join(', ')}`);
+	if (args.unknownMeta.badSims.length > 0)
+		issues.push(`unknown sim values: ${args.unknownMeta.badSims.join(', ')}`);
 	for (const w of args.executorWarnings) issues.push(`executor warning: ${w}`);
-	if (args.executorError) issues.push(`executor error: ${args.executorError.split('\n').slice(0, 8).join(' | ')}`);
+	if (args.executorError)
+		issues.push(`executor error: ${args.executorError.split('\n').slice(0, 8).join(' | ')}`);
 	return issues;
 }
 

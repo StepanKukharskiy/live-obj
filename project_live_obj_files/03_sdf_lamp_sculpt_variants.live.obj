@@ -1,0 +1,99 @@
+#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@kernel_default: cadquery
+#@material_preset: porcelain_warm color=#f1e8d8 roughness=0.48 metalness=0.0
+#@material_preset: anodized_black color=#111418 roughness=0.35 metalness=0.28
+#@material_preset: glow_warm color=#ffd68a roughness=0.15 metalness=0.0
+
+o lamp_a
+#@source: sdf
+#@semantic: soft organic shell table lamp variant A, total height about 0.55m
+#@transform: position=[-0.55,0,0],rotation=[0,0,0],scale=[1,1,1]
+#@sdf:
+#@ - cylinder id=base center=[0,0,0.045] radius=0.13 height=0.09 axis=z
+#@ - sphere id=shell center=[0,0,0.34] radius=0.22
+#@ - sphere id=hollow center=[0,-0.035,0.34] radius=0.18
+#@ - subtract shell hollow
+#@ - smooth_union base shell radius=0.04
+#@ - noise_displace strength=0.012 frequency=2.5 seed=41
+#@ - mesh_from_sdf resolution=0.025
+#@ops:
+#@ - material name=porcelain_warm
+#@ - tag value=art
+
+o lamp_b
+#@source: sdf
+#@semantic: faceted geometric shell table lamp variant B, total height about 0.55m
+#@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
+#@sdf:
+#@ - cylinder id=base center=[0,0,0.045] radius=0.13 height=0.09 axis=z
+#@ - box id=shell_a center=[0,0,0.34] size=[0.34,0.28,0.34]
+#@ - box id=shell_b center=[0,0,0.38] size=[0.24,0.36,0.30]
+#@ - smooth_union shell_a shell_b radius=0.015
+#@ - sphere id=cavity center=[0,-0.04,0.35] radius=0.15
+#@ - subtract shell_a cavity
+#@ - mesh_from_sdf resolution=0.025
+#@ops:
+#@ - material name=porcelain_warm
+#@ - simplify ratio=0.72
+#@ - tag value=art
+
+o lamp_c
+#@source: assembly
+#@children: lamp_c_base,lamp_c_ring_lower,lamp_c_ring_mid,lamp_c_ring_upper,lamp_c_core_glow
+#@semantic: ring-based open shell table lamp variant C, total height about 0.55m
+#@transform: position=[0.55,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o lamp_c_base
+#@parent: lamp_c
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.13, depth=0.09, segments=48, center=[0.55,0,0.045]
+#@ops:
+#@ - bevel amount=0.012 segments=3
+#@ - material name=anodized_black
+#@ - tag value=structural
+
+o lamp_c_ring_lower
+#@parent: lamp_c
+#@source: sdf
+#@transform: position=[0.55,0,0.23],rotation=[0,0,0],scale=[1,1,1]
+#@sdf:
+#@ - torus id=ring center=[0,0,0] major=0.15 minor=0.018
+#@ - mesh_from_sdf resolution=0.018
+#@ops:
+#@ - material name=porcelain_warm
+#@ - tag value=structural
+
+o lamp_c_ring_mid
+#@parent: lamp_c
+#@source: sdf
+#@transform: position=[0.55,0,0.34],rotation=[12,0,0],scale=[1,1,1]
+#@sdf:
+#@ - torus id=ring center=[0,0,0] major=0.18 minor=0.018
+#@ - mesh_from_sdf resolution=0.018
+#@ops:
+#@ - material name=porcelain_warm
+#@ - tag value=structural
+
+o lamp_c_ring_upper
+#@parent: lamp_c
+#@source: sdf
+#@transform: position=[0.55,0,0.47],rotation=[-10,0,0],scale=[1,1,1]
+#@sdf:
+#@ - torus id=ring center=[0,0,0] major=0.12 minor=0.016
+#@ - mesh_from_sdf resolution=0.018
+#@ops:
+#@ - material name=porcelain_warm
+#@ - tag value=structural
+
+o lamp_c_core_glow
+#@parent: lamp_c
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.055, depth=0.34, segments=32, center=[0.55,0,0.31]
+#@ops:
+#@ - material name=glow_warm
+#@ - tag value=decorative

@@ -65,7 +65,12 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!apiKey) throw error(500, 'API key is required');
 
 	const sceneMetadata = metadataFromLiveObj(liveObjText);
-	const fullPrompt = `${prompt}\n\nUse this scene metadata as a hard constraint for objects, materials, and structure:\n${sceneMetadata || '(no #@ metadata found)'}`;
+	const fullPrompt = `${prompt}
+
+Do not redesign the object. Preserve exact silhouette, object count, relative position, camera angle, major outlines, and block proportions.
+
+Use this scene metadata as a hard constraint for objects, materials, and structure:
+${sceneMetadata || '(no #@ metadata found)'}`;
 
 	const form = new FormData();
 	form.append('model', imageModel);

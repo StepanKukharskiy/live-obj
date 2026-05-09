@@ -20,6 +20,7 @@
 		content: string;
 		imageDataUrl?: string;
 		historyContent?: string;
+		meta?: string;
 		tokenUsage?: TokenUsageSummary;
 	};
 	type SendPayload = {
@@ -71,8 +72,16 @@
 		toonOutline = $bindable(true),
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
-		providerSettings = $bindable({ provider: 'openai', apiKey: '', apiUrl: 'https://api.openai.com/v1/chat/completions', imageUrl: 'https://api.openai.com/v1/images/edits', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }),
-	onSend,
+		providerSettings = $bindable({
+			provider: 'openai',
+			apiKey: '',
+			apiUrl: 'https://api.openai.com/v1/chat/completions',
+			imageUrl: 'https://api.openai.com/v1/images/edits',
+			textModel: 'gpt-5.5',
+			imageModel: 'gpt-image-1.5',
+			rememberMe: false
+		}),
+		onSend,
 		onCaptureSceneScreenshot,
 		onLaunchObjExample,
 		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery')
@@ -114,11 +123,19 @@
 		toonOutline?: boolean;
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
-		providerSettings?: { provider: string; apiKey: string; apiUrl: string; imageUrl: string; textModel: string; imageModel: string; rememberMe: boolean };
-	onSend?: (payload: SendPayload) => void;
-	onCaptureSceneScreenshot?: () => string;
-	onLaunchObjExample?: (liveObj: string) => void;
-	kernelDefault?: 'auto' | 'cadquery';
+		providerSettings?: {
+			provider: string;
+			apiKey: string;
+			apiUrl: string;
+			imageUrl: string;
+			textModel: string;
+			imageModel: string;
+			rememberMe: boolean;
+		};
+		onSend?: (payload: SendPayload) => void;
+		onCaptureSceneScreenshot?: () => string;
+		onLaunchObjExample?: (liveObj: string) => void;
+		kernelDefault?: 'auto' | 'cadquery';
 	} = $props();
 
 	let activeTab = $state<PanelTab>('chat');
@@ -135,10 +152,7 @@
 </script>
 
 {#if showPanel}
-	<aside
-		class="planner-panel live-obj-side-panel"
-		aria-label="Spellshape"
-	>
+	<aside class="planner-panel live-obj-side-panel" aria-label="Spellshape">
 		<div class="live-obj-side-panel-chrome">
 			<header class="live-obj-panel-head">
 				<h1 class="live-obj-panel-title live-obj-panel-title--wordmark">
@@ -151,21 +165,47 @@
 						draggable="false"
 					/>
 				</h1>
-				<button type="button" class="live-obj-panel-close" onclick={() => (showPanel = false)} title="Close panel">✕</button>
+				<button
+					type="button"
+					class="live-obj-panel-close"
+					onclick={() => (showPanel = false)}
+					title="Close panel">✕</button
+				>
 			</header>
 			<div class="planner-tabs" role="tablist" aria-label="Panel tabs">
-				<button type="button" class:active={activeTab === 'chat'} onclick={() => (activeTab = 'chat')}>Chat</button>
-				<button type="button" class:active={activeTab === 'adjust'} onclick={() => (activeTab = 'adjust')}>Adjust</button>
-				<button type="button" class:active={activeTab === 'tools'} onclick={() => (activeTab = 'tools')}>Tools</button>
-				<button type="button" class:active={activeTab === 'scene'} onclick={() => (activeTab = 'scene')}>Scene</button>
-				<button type="button" class:active={activeTab === 'render'} onclick={() => (activeTab = 'render')}>Render</button>
-				<button type="button" class:active={activeTab === 'provider'} onclick={() => (activeTab = 'provider')}>Provider</button>
+				<button
+					type="button"
+					class:active={activeTab === 'chat'}
+					onclick={() => (activeTab = 'chat')}>Chat</button
+				>
+				<button
+					type="button"
+					class:active={activeTab === 'adjust'}
+					onclick={() => (activeTab = 'adjust')}>Adjust</button
+				>
+				<button
+					type="button"
+					class:active={activeTab === 'tools'}
+					onclick={() => (activeTab = 'tools')}>Tools</button
+				>
+				<button
+					type="button"
+					class:active={activeTab === 'scene'}
+					onclick={() => (activeTab = 'scene')}>Scene</button
+				>
+				<button
+					type="button"
+					class:active={activeTab === 'render'}
+					onclick={() => (activeTab = 'render')}>Render</button
+				>
+				<button
+					type="button"
+					class:active={activeTab === 'provider'}
+					onclick={() => (activeTab = 'provider')}>Provider</button
+				>
 			</div>
 		</div>
-		<div
-			class="planner-tab-panel"
-			class:chat-panel={activeTab === 'chat'}
-		>
+		<div class="planner-tab-panel" class:chat-panel={activeTab === 'chat'}>
 			{#if activeTab === 'chat'}
 				<LiveObjChatTab
 					{msgs}
@@ -195,13 +235,12 @@
 					{executedObjText}
 					{sceneEpoch}
 					{sourceApplyBusy}
-					onLiveObjMetadataChange={onLiveObjMetadataChange}
-					onApplyEditedSource={onApplyEditedSource}
+					{onLiveObjMetadataChange}
+					{onApplyEditedSource}
 				/>
 			{:else if activeTab === 'tools'}
 				<LiveObjToolsTab />
-			{:else}
-				{#if activeTab === 'scene'}
+			{:else if activeTab === 'scene'}
 				<LiveObjSceneTab
 					bind:backgroundColor
 					bind:showGrid
@@ -225,23 +264,27 @@
 					bind:toonOutline
 					{executedObjText}
 				/>
-				{:else}
-					<LiveObjRenderTab
-						{liveObjText}
-						{providerSettings}
-						onCaptureSceneScreenshot={onCaptureSceneScreenshot}
-						bind:prompt={renderPrompt}
-						bind:screenshotDataUrl={renderScreenshotDataUrl}
-						bind:generatedImageDataUrl={renderGeneratedImageDataUrl}
-						bind:busy={renderBusy}
-						bind:errorLine={renderErrorLine}
-					/>
-				{/if}
+			{:else}
+				<LiveObjRenderTab
+					{liveObjText}
+					{providerSettings}
+					{onCaptureSceneScreenshot}
+					bind:prompt={renderPrompt}
+					bind:screenshotDataUrl={renderScreenshotDataUrl}
+					bind:generatedImageDataUrl={renderGeneratedImageDataUrl}
+					bind:busy={renderBusy}
+					bind:errorLine={renderErrorLine}
+				/>
 			{/if}
 		</div>
 	</aside>
 {:else}
-	<button type="button" class="live-obj-reopen" onclick={() => (showPanel = true)} title="Open panel">☰</button>
+	<button
+		type="button"
+		class="live-obj-reopen"
+		onclick={() => (showPanel = true)}
+		title="Open panel">☰</button
+	>
 {/if}
 
 <style>

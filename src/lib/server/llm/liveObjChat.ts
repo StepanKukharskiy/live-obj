@@ -1,4 +1,9 @@
-import type { ChatCompletionMessage, ChatContentPart, ChatMessageContent, TokenUsage } from './chat';
+import type {
+	ChatCompletionMessage,
+	ChatContentPart,
+	ChatMessageContent,
+	TokenUsage
+} from './chat';
 import { requestChatCompletion } from './chat';
 import { LIVE_OBJ_SYSTEM_PROMPT, LLM_ONLY_SYSTEM_PROMPT } from './liveObjSystemPrompt';
 
@@ -9,7 +14,9 @@ const SURGICAL_HISTORY_ASSISTANT_PLACEHOLDER =
 	'Previous Live OBJ revision was applied. The current Live OBJ in the latest user message is the source of truth.';
 const LIVE_OBJ_GENERATION_QUALITY_HINT = `Executor quality guidance:
 - For limbs, hoses, fingers, and organic connecting forms, SDF capsules are supported and should render as continuous geometry.
-- Do not add smooth immediately after a CAD/kernel bevel on primitive boxes or cylinders; the bevel already rounds those edges and extra smoothing can weaken crisp assembled parts.`;
+- Do not add smooth immediately after a CAD/kernel bevel on primitive boxes or cylinders; the bevel already rounds those edges and extra smoothing can weaken crisp assembled parts.
+- Use #@hidden: true for construction curves, contours, cutters, guide paths, and sweep/loft input objects that should remain editable in source but not render in the scene. Do not use visibility as an op.
+- #@source: recipe is supported. For contained ornamental paths, field-traced strands, scattered modules, WFC-like tile layouts, cellular volumes, panelized shells, and expressive sheet/ribbon surfaces, prefer a #@recipe: block using boundary, curve, points, field, trace_field, module, socket, grid, scatter, wfc, instance, iterate, path_formula, surface_formula, perforate_surface, panelize_surface, emit_surface, emit_tubes, emit_volume, and emit_panels instead of hand-authoring many raw curves or vertices. For WFC facades/maps, use semantic modules plus directional sockets such as east/west/north/south, optional force=x,y:tile pins, and #@controls: sliders/selects for important #@params. Recipe objects that emit visible geometry should not be hidden.`;
 const LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT = `Image-to-scene budget:
 - Start with a simplified modular 3D interpretation, not a full pixel-by-pixel reconstruction.
 - Keep the first-pass scene compact: target roughly 12-35 semantic objects.
@@ -33,6 +40,8 @@ Your job:
 - Read the current Live OBJ exactly as provided.
 - Satisfy the user request with the smallest useful text edits.
 - Preserve all unrelated text byte-for-byte.
+- Never rewrite the whole scene for a visual feedback/repair pass. Patch only the named object blocks or lines that need repair.
+- If a repair can be done by moving, lowering, trimming, narrowing, or deleting one conflicting object, do that instead of regenerating surrounding objects.
 - Edit #@ metadata first. Do not add or regenerate v/f cache lines for procedural, SDF, assembly, or simulation objects.
 - Keep existing object IDs, units, up axis, kernel settings, params, materials, anchors, and comments unless the user asked to change them.
 - For modifications, replace the smallest exact line or object block that contains the change.
@@ -40,8 +49,9 @@ Your job:
 - For removals, replace only the relevant object block with an empty string. If removing a material preset that is no longer used, remove only that preset line.
 - If an assembly child list or parent relationship must change, update the smallest relevant #@children/#@parent/#@params lines too.
 - When the user asks to mirror/duplicate an existing object to create a second one in the scene, create a distinct nearby instance with new object IDs and a transform/offset. Do not rely only on #@ops mirror unless the user explicitly wants symmetric geometry inside the same object.
-- Use only supported Live OBJ metadata patterns already present in the file, plus common supported sources: procedural, llm_mesh, assembly, sdf, simulation.
+- Use only supported Live OBJ metadata patterns already present in the file, plus common supported sources: procedural, llm_mesh, assembly, sdf, simulation, recipe.
 - Use #@ops: lists, not #@op: lines.
+- Use #@hidden: true for construction curves, contours, cutters, guide paths, and sweep/loft input objects that should remain editable in source but not render in the scene. Do not use visibility as an op.
 
 Return only JSON with this exact shape:
 {
@@ -73,6 +83,64 @@ Rules:
 - Do not add a follow-up question.
 - Output plain text only.`;
 
+const LIVE_OBJ_ITERATIVE_PLAN_SYSTEM_PROMPT = `You are the planner for an AI-native Live OBJ modeling pipeline.
+
+Decompose the requested scene into a build queue of semantic parts. Do not generate geometry.
+The next system stage will ask for each part as a separate Live OBJ object/group and append it to the scene.
+
+Return only JSON with this shape:
+{
+  "scene": "short scene description",
+  "units": "meters",
+  "up": "y",
+  "materials": [
+    { "id": "material_id", "color": "#RRGGBB", "roughness": 0.7, "metalness": 0, "role": "short role" }
+  ],
+  "parts": [
+    {
+      "id": "stable_object_or_group_id",
+      "role": "what this part contributes",
+      "method": "llm_mesh|procedural|recipe|hybrid",
+      "dependencies": ["prior_part_id"],
+      "prompt": "specific instructions for generating only this part",
+      "validationHints": ["bbox/contact/detail expectations"]
+    }
+  ],
+  "notes": ["global composition notes"]
+}
+
+Planning rules:
+- Prefer 5-8 parts for rich scenes; fewer for simple objects.
+- First pass should be low-poly semantic massing: major ground/support, primary structure, main envelope/shell, major infill/openings, and one restrained interior/context part only when important.
+- Build from coarse support/massing to envelope, structure, major infill, then one optional accent/detail part.
+- Merge related elements into one part instead of producing many small parts.
+- Do not plan separate first-pass parts for seams, fasteners, bolts, handles, bollards, expansion joints, connection plates, tiny context objects, or micro facade details unless the user explicitly asks for them.
+- Make dependencies explicit so later parts can align to earlier geometry.
+- Use y as the vertical/up axis unless the user explicitly asks otherwise.
+- Do not invent executor operations. The default generation method is llm_mesh with semantic metadata and optional generic post notes.
+- Use stable snake_case ids.`;
+
+const LIVE_OBJ_ITERATIVE_PART_SYSTEM_PROMPT = `You generate one Live OBJ part for an iterative scene builder.
+
+Return only OBJ/Live OBJ text for the requested part. Do not return JSON, Markdown, a scene header, or explanations.
+
+Critical OBJ indexing rule:
+- Use local vertex numbering in your returned part. The first vertex you emit is v 1 for face purposes.
+- Face lines must reference only vertices defined in this returned part, starting at 1.
+- The server will remap indices when appending to the full scene.
+
+Part rules:
+- Usually use #@source: llm_mesh for the generated object/group.
+- Include #@editable, #@semantic, #@part_of, and #@depends_on metadata where useful.
+- Use material names from the plan/current scene; include #@material_preset lines before the first object only if a needed material is missing.
+- Generate only the requested part, not the whole scene.
+- Fit the part to the existing scene summary and dependencies.
+- Use y as the vertical/up axis unless the current scene summary says otherwise.
+- Keep geometry compact and low-poly: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell/roof.
+- Prefer quads and simple polygons. Avoid dense grids, seam networks, individual fasteners, tiny bolts, repeated micro-panels, or context clutter in the first pass.
+- Prefer one named object per requested part. Use multiple named objects only when the part naturally has a few major sub-parts.
+- Add #@post comments only as generic refinement intent; do not invent custom executor ops.`;
+
 export type LiveObjLlmResult = {
 	content: string;
 	usage?: TokenUsage;
@@ -88,7 +156,10 @@ function userMessageContent(text: string, imageDataUrls?: string[]): ChatMessage
 	if (images.length === 0) return t;
 	const parts: ChatContentPart[] = [
 		{ type: 'text', text: t || IMAGE_ONLY_USER_HINT },
-		...images.map((url) => ({ type: 'image_url' as const, image_url: { url, detail: 'low' as const } }))
+		...images.map((url) => ({
+			type: 'image_url' as const,
+			image_url: { url, detail: 'low' as const }
+		}))
 	];
 	return parts;
 }
@@ -159,7 +230,9 @@ function chatMessagePrompt(input: {
 			: '',
 		'',
 		'Write the assistant chat message now.'
-	].filter(Boolean).join('\n');
+	]
+		.filter(Boolean)
+		.join('\n');
 }
 
 /**
@@ -183,7 +256,12 @@ export async function requestLiveObjFromLlm(
 			? `\n\n${useProcedural ? LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT : RAW_OBJ_IMAGE_GENERATION_BUDGET_HINT}`
 			: '';
 	const messages: ChatCompletionMessage[] = [
-		{ role: 'system', content: useProcedural ? `${systemPrompt}\n\n${LIVE_OBJ_GENERATION_QUALITY_HINT}${imageHint}` : `${systemPrompt}${imageHint}` },
+		{
+			role: 'system',
+			content: useProcedural
+				? `${systemPrompt}\n\n${LIVE_OBJ_GENERATION_QUALITY_HINT}${imageHint}`
+				: `${systemPrompt}${imageHint}`
+		},
 		...history,
 		{ role: 'user', content: userMessageContent(userMessage, imageDataUrls) }
 	];
@@ -191,7 +269,7 @@ export async function requestLiveObjFromLlm(
 		messages,
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-llm',
-		maxTokens: imageDataUrls.length > 0 ? 20000 : 16000,
+		maxTokens: imageDataUrls.length > 0 ? 30000 : 24000,
 		timeoutMs: imageDataUrls.length > 0 ? 240000 : undefined
 	});
 	return { content, usage };
@@ -206,7 +284,11 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 	currentLiveObj: string,
 	history: ChatCompletionMessage[],
 	model: string = DEFAULT_LIVE_OBJ_MODEL,
-	options?: { imageDataUrl?: string; imageDataUrls?: string[]; currentSceneMode?: 'live_obj' | 'raw_obj' }
+	options?: {
+		imageDataUrl?: string;
+		imageDataUrls?: string[];
+		currentSceneMode?: 'live_obj' | 'raw_obj';
+	}
 ): Promise<LiveObjLlmResult> {
 	const imageDataUrls = normalizeImageDataUrls([
 		...(options?.imageDataUrls ?? []),
@@ -224,7 +306,13 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 					'Important: #@ metadata is the editable source of truth; v/f mesh lines are cache output.'
 				].join('\n');
 	const messages: ChatCompletionMessage[] = [
-		{ role: 'system', content: imageDataUrls.length > 0 ? `${LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT}\n\n${LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT}` : LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT },
+		{
+			role: 'system',
+			content:
+				imageDataUrls.length > 0
+					? `${LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT}\n\n${LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT}`
+					: LIVE_OBJ_SURGICAL_EDIT_SYSTEM_PROMPT
+		},
 		...surgicalHistoryMessages(history),
 		{
 			role: 'user',
@@ -239,8 +327,8 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 		messages,
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-surgical-edit',
-		maxTokens: imageDataUrls.length > 0 ? 12000 : 8000,
-		timeoutMs: imageDataUrls.length > 0 ? 180000 : undefined
+		maxTokens: imageDataUrls.length > 0 ? 22000 : 14000,
+		timeoutMs: imageDataUrls.length > 0 ? 240000 : undefined
 	});
 	return { content, usage };
 }
@@ -263,9 +351,84 @@ export async function requestLiveObjAssistantMessageFromLlm(
 		],
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-chat-message',
-		maxTokens: 120
+		maxTokens: 1000,
+		timeoutMs: 90000
 	});
 	return content.replace(/^["'`]+|["'`]+$/g, '').trim();
+}
+
+export async function requestLiveObjPartPlanFromLlm(
+	userMessage: string,
+	model: string = DEFAULT_LIVE_OBJ_MODEL,
+	options?: {
+		imageDataUrl?: string;
+		imageDataUrls?: string[];
+		currentLiveObjSummary?: string;
+	}
+): Promise<LiveObjLlmResult> {
+	const imageDataUrls = normalizeImageDataUrls([
+		...(options?.imageDataUrls ?? []),
+		...(options?.imageDataUrl ? [options.imageDataUrl] : [])
+	]);
+	const prompt = [
+		`User request: ${userMessage.trim() || IMAGE_ONLY_USER_HINT}`,
+		options?.currentLiveObjSummary
+			? `Current scene summary:\n${options.currentLiveObjSummary}`
+			: 'Current scene summary: (empty scene)',
+		'',
+		'Create the iterative part plan now.'
+	].join('\n');
+	const { content, usage } = await requestChatCompletion({
+		messages: [
+			{ role: 'system', content: LIVE_OBJ_ITERATIVE_PLAN_SYSTEM_PROMPT },
+			{ role: 'user', content: userMessageContent(prompt, imageDataUrls) }
+		],
+		model: model || DEFAULT_LIVE_OBJ_MODEL,
+		label: 'live-obj-iterative-plan',
+		maxTokens: 10000,
+		timeoutMs: imageDataUrls.length > 0 ? 180000 : undefined
+	});
+	return { content, usage };
+}
+
+export async function requestLiveObjPartFromLlm(
+	input: {
+		userMessage: string;
+		part: unknown;
+		plan?: unknown;
+		currentLiveObjSummary: string;
+	},
+	model: string = DEFAULT_LIVE_OBJ_MODEL,
+	options?: { imageDataUrl?: string; imageDataUrls?: string[] }
+): Promise<LiveObjLlmResult> {
+	const imageDataUrls = normalizeImageDataUrls([
+		...(options?.imageDataUrls ?? []),
+		...(options?.imageDataUrl ? [options.imageDataUrl] : [])
+	]);
+	const prompt = [
+		`Original user request: ${input.userMessage.trim() || IMAGE_ONLY_USER_HINT}`,
+		'',
+		`Requested part spec:\n${JSON.stringify(input.part, null, 2)}`,
+		'',
+		input.plan ? `Overall part plan:\n${JSON.stringify(input.plan, null, 2)}` : '',
+		'',
+		`Current scene summary:\n${input.currentLiveObjSummary || '(empty scene)'}`,
+		'',
+		'Generate only the requested part now.'
+	]
+		.filter(Boolean)
+		.join('\n');
+	const { content, usage } = await requestChatCompletion({
+		messages: [
+			{ role: 'system', content: LIVE_OBJ_ITERATIVE_PART_SYSTEM_PROMPT },
+			{ role: 'user', content: userMessageContent(prompt, imageDataUrls) }
+		],
+		model: model || DEFAULT_LIVE_OBJ_MODEL,
+		label: 'live-obj-iterative-part',
+		maxTokens: imageDataUrls.length > 0 ? 20000 : 16000,
+		timeoutMs: imageDataUrls.length > 0 ? 240000 : 180000
+	});
+	return { content, usage };
 }
 
 export { DEFAULT_LIVE_OBJ_MODEL };

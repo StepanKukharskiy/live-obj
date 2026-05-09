@@ -1,0 +1,219 @@
+#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@kernel_default: cadquery
+#@material_preset: crate_body color=#59616a roughness=0.68 metalness=0.12
+#@material_preset: edge_dark color=#24282e roughness=0.62 metalness=0.18
+#@material_preset: signal_orange color=#ff8a28 roughness=0.35 metalness=0.0
+#@material_preset: glass_cyan color=#52d7ff roughness=0.18 metalness=0.0
+
+o crate_main
+#@source: assembly
+#@children: crate_main_body,crate_main_lid,crate_main_front_panel,crate_main_left_rail,crate_main_right_rail,crate_main_corner_posts
+#@semantic: main chamfered sci-fi cargo crate with panel seams
+#@transform: position=[-0.9,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o crate_main_body
+#@parent: crate_main
+#@source: procedural
+#@type: box
+#@params: size=[0.62,0.42,0.32], center=[-0.9,0,0.16]
+#@ops:
+#@ - bevel amount=0.035 segments=3
+#@ - material name=crate_body
+#@ - collision proxy=box
+#@ - tag value=structural
+
+o crate_main_lid
+#@parent: crate_main
+#@source: procedural
+#@type: box
+#@params: size=[0.66,0.46,0.045], center=[-0.9,0,0.345]
+#@ops:
+#@ - bevel amount=0.018 segments=2
+#@ - material name=edge_dark
+#@ - tag value=structural
+
+o crate_main_front_panel
+#@parent: crate_main
+#@source: procedural
+#@type: box
+#@params: size=[0.44,0.025,0.18], center=[-0.9,-0.225,0.19]
+#@ops:
+#@ - bevel amount=0.012 segments=2
+#@ - material name=edge_dark
+#@ - tag value=decorative
+
+o crate_main_left_rail
+#@parent: crate_main
+#@source: procedural
+#@type: box
+#@params: size=[0.055,0.50,0.38], center=[-1.24,0,0.19]
+#@ops:
+#@ - bevel amount=0.012 segments=2
+#@ - material name=edge_dark
+#@ - tag value=structural
+
+o crate_main_right_rail
+#@parent: crate_main
+#@source: procedural
+#@type: box
+#@params: size=[0.055,0.50,0.38], center=[-0.56,0,0.19]
+#@ops:
+#@ - bevel amount=0.012 segments=2
+#@ - material name=edge_dark
+#@ - tag value=structural
+
+o crate_main_corner_posts
+#@parent: crate_main
+#@source: procedural
+#@type: box
+#@params: size=[0.045,0.045,0.36], center=[-1.18,-0.18,0.18]
+#@ops:
+#@ - array count=4 offset=[0.19,0.12,0]
+#@ - bevel amount=0.008 segments=2
+#@ - material name=edge_dark
+#@ - tag value=structural
+
+o canister_a
+#@source: assembly
+#@children: canister_a_body,canister_a_cap,canister_a_band_lower,canister_a_band_upper
+#@semantic: compact cylindrical canister sharing crate chamfer language
+#@transform: position=[-0.15,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o canister_a_body
+#@parent: canister_a
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.16, depth=0.46, segments=48, center=[-0.15,0,0.23]
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - material name=crate_body
+#@ - tag value=structural
+
+o canister_a_cap
+#@parent: canister_a
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.175, depth=0.06, segments=48, center=[-0.15,0,0.49]
+#@ops:
+#@ - bevel amount=0.012 segments=2
+#@ - material name=edge_dark
+#@ - tag value=structural
+
+o canister_a_band_lower
+#@parent: canister_a
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.168, depth=0.035, segments=48, center=[-0.15,0,0.14]
+#@ops:
+#@ - material name=edge_dark
+#@ - tag value=decorative
+
+o canister_a_band_upper
+#@parent: canister_a
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.168, depth=0.035, segments=48, center=[-0.15,0,0.34]
+#@ops:
+#@ - material name=edge_dark
+#@ - tag value=decorative
+
+o beacon_a
+#@source: assembly
+#@children: beacon_a_base,beacon_a_mast,beacon_a_lens,beacon_a_guard
+#@semantic: small sci-fi locator beacon with cyan lens
+#@transform: position=[0.45,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o beacon_a_base
+#@parent: beacon_a
+#@source: procedural
+#@type: box
+#@params: size=[0.28,0.24,0.11], center=[0.45,0,0.055]
+#@ops:
+#@ - bevel amount=0.02 segments=3
+#@ - material name=edge_dark
+#@ - tag value=structural
+
+o beacon_a_mast
+#@parent: beacon_a
+#@source: procedural
+#@type: cylinder
+#@params: axis=z, radius=0.045, depth=0.32, segments=32, center=[0.45,0,0.27]
+#@ops:
+#@ - material name=crate_body
+#@ - tag value=structural
+
+o beacon_a_lens
+#@parent: beacon_a
+#@source: procedural
+#@type: sphere
+#@params: radius=0.08, center=[0.45,0,0.46]
+#@ops:
+#@ - material name=glass_cyan
+#@ - tag value=decorative
+
+o beacon_a_guard
+#@parent: beacon_a
+#@source: procedural
+#@type: torus
+#@params: center=[0.45,0,0.46], major=0.105, minor=0.012
+#@ops:
+#@ - material name=edge_dark
+#@ - tag value=decorative
+
+o panel_a
+#@source: assembly
+#@children: panel_a_slab,panel_a_screen,panel_a_buttons,panel_a_rib_top,panel_a_rib_bottom
+#@semantic: flat industrial control panel with seams and dense detail
+#@transform: position=[1.05,0,0],rotation=[0,0,0],scale=[1,1,1]
+
+o panel_a_slab
+#@parent: panel_a
+#@source: procedural
+#@type: box
+#@params: size=[0.42,0.07,0.30], center=[1.05,0,0.15]
+#@ops:
+#@ - bevel amount=0.018 segments=3
+#@ - material name=crate_body
+#@ - tag value=structural
+
+o panel_a_screen
+#@parent: panel_a
+#@source: procedural
+#@type: box
+#@params: size=[0.22,0.018,0.11], center=[0.98,-0.045,0.19]
+#@ops:
+#@ - bevel amount=0.006 segments=1
+#@ - material name=glass_cyan
+#@ - tag value=decorative
+
+o panel_a_buttons
+#@parent: panel_a
+#@source: procedural
+#@type: box
+#@params: size=[0.04,0.02,0.035], center=[1.16,-0.05,0.12]
+#@ops:
+#@ - array count=3 offset=[0,0,0.055]
+#@ - bevel amount=0.004 segments=1
+#@ - material name=signal_orange
+#@ - tag value=decorative
+
+o panel_a_rib_top
+#@parent: panel_a
+#@source: procedural
+#@type: box
+#@params: size=[0.44,0.03,0.028], center=[1.05,-0.045,0.285]
+#@ops:
+#@ - material name=edge_dark
+#@ - tag value=decorative
+
+o panel_a_rib_bottom
+#@parent: panel_a
+#@source: procedural
+#@type: box
+#@params: size=[0.44,0.03,0.028], center=[1.05,-0.045,0.015]
+#@ops:
+#@ - material name=edge_dark
+#@ - tag value=decorative

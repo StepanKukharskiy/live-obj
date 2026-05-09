@@ -144,6 +144,7 @@ class LiveObject:
     meta: Dict[str, Any] = field(default_factory=dict)
     ops: List[Dict[str, Any]] = field(default_factory=list)
     sdf_ops: List[Dict[str, Any]] = field(default_factory=list)
+    recipe_ops: List[Dict[str, Any]] = field(default_factory=list)
     mesh: Mesh = field(default_factory=Mesh)
     raw_nonlive_lines: List[str] = field(default_factory=list)
 
@@ -159,6 +160,40 @@ def record_kernel_event(obj: LiveObject, event: str) -> None:
     events = obj.meta.setdefault("_kernel_events", [])
     if isinstance(events, list) and event not in events:
         events.append(event)
+
+
+def metadata_flag(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off"}:
+            return False
+    return None
+
+
+def is_explicitly_visible(obj: LiveObject) -> bool:
+    for key in ("visible", "render", "renderable"):
+        flag = metadata_flag(obj.meta.get(key))
+        if flag is True:
+            return True
+    return False
+
+
+def is_render_hidden(obj: LiveObject) -> bool:
+    if metadata_flag(obj.meta.get("helper")) is True:
+        return True
+    if metadata_flag(obj.meta.get("hidden")) is True:
+        return True
+    for key in ("visible", "render", "renderable"):
+        flag = metadata_flag(obj.meta.get(key))
+        if flag is False:
+            return True
+    return False
 
 
 # ----------------------------
@@ -684,10 +719,11 @@ def parse_tokens(s: str) -> Dict[str, Any]:
     return d
 
 
-def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
+def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     meta: Dict[str, Any] = {}
     ops: List[Dict[str, Any]] = []
     sdf_ops: List[Dict[str, Any]] = []
+    recipe_ops: List[Dict[str, Any]] = []
     block: Optional[str] = None
 
     for line in meta_lines:
@@ -702,6 +738,9 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         if body == "sdf:":
             block = "sdf"
             continue
+        if body == "recipe:":
+            block = "recipe"
+            continue
         if body == "params:":
             block = "params"
             meta.setdefault("params", {})
@@ -709,6 +748,9 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         if body == "anchors:":
             block = "anchors"
             meta["anchors"] = {}
+            continue
+        if body == "controls:":
+            block = "controls"
             continue
 
         if block == "params":
@@ -725,7 +767,10 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
                 meta.setdefault("anchors", {})[k.strip()] = parse_scalar(v)
             continue
 
-        if block in {"ops", "sdf"} and body.startswith("-"):
+        if block == "controls" and body.startswith("-"):
+            continue
+
+        if block in {"ops", "sdf", "recipe"} and body.startswith("-"):
             parsed = parse_tokens(body)
             if parsed:
                 if block == "sdf":
@@ -738,6 +783,8 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
                             p["method"] = parsed.get("method")
                         if p:
                             meta["params"] = p
+                elif block == "recipe":
+                    recipe_ops.append(parsed)
                 else:
                     ops.append(parsed)
             continue
@@ -789,7 +836,7 @@ def parse_meta(meta_lines: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, An
         else:
             meta[key] = parse_scalar(val)
 
-    return meta, ops, sdf_ops
+    return meta, ops, sdf_ops, recipe_ops
 
 
 def _cylinder_anchor_is_base(obj: LiveObject) -> bool:
@@ -846,7 +893,7 @@ def parse_obj(path: Path) -> Scene:
         current.raw_nonlive_lines.append(line)
 
     for obj in scene.objects:
-        obj.meta, obj.ops, obj.sdf_ops = parse_meta(obj.meta_lines)
+        obj.meta, obj.ops, obj.sdf_ops, obj.recipe_ops = parse_meta(obj.meta_lines)
 
     return scene
 
@@ -2595,6 +2642,1894 @@ def helix_sweep_mesh(params: Dict[str, Any], center: Vec3) -> Mesh:
     return mesh
 
 
+def bezier_point(points: List[Vec3], t: float) -> Vec3:
+    work = [p for p in points]
+    n = len(work)
+    for level in range(1, n):
+        for i in range(n - level):
+            ax, ay, az = work[i]
+            bx, by, bz = work[i + 1]
+            work[i] = (
+                ax + (bx - ax) * t,
+                ay + (by - ay) * t,
+                az + (bz - az) * t,
+            )
+    return work[0]
+
+
+def curve_params_to_points(params: Dict[str, Any]) -> List[Vec3]:
+    raw_points = params.get("points", [])
+    if not isinstance(raw_points, list) or len(raw_points) < 2:
+        return []
+    pts: List[Vec3] = []
+    for p in raw_points:
+        if isinstance(p, (list, tuple)) and len(p) >= 3:
+            pts.append((float(p[0]), float(p[1]), float(p[2])))
+    if len(pts) < 2:
+        return []
+
+    kind = str(params.get("kind", "polyline")).lower()
+    if kind == "bezier" and len(pts) >= 3:
+        segs = max(8, int(float(params.get("segments", 48))))
+        return [bezier_point(pts, i / segs) for i in range(segs + 1)]
+    return pts
+
+
+def curve_path_sweep_mesh(params: Dict[str, Any], center: Vec3, obn: Dict[str, LiveObject]) -> Optional[Mesh]:
+    along_name = str(params.get("along", "")).strip()
+    curve_obj = obn.get(along_name)
+    if curve_obj is None:
+        return None
+    curve_params = get_effective_params(curve_obj, obn)
+    pts = curve_params_to_points(curve_params)
+    if len(pts) < 2:
+        return None
+
+    radius = float(params.get("profile_radius", params.get("radius", params.get("tube_radius", 0.035))))
+    segments = max(4, int(float(params.get("segments", 12))))
+    tube_segments = max(6, min(16, segments))
+    cx, cy, cz = center
+    mesh = Mesh()
+    world_pts = [(x + cx, y + cy, z + cz) for x, y, z in pts]
+    for a, b in zip(world_pts, world_pts[1:]):
+        mesh.extend(tube_between(a, b, radius, tube_segments))
+    return mesh
+
+
+Point2 = Tuple[float, float]
+
+
+def _as_float2(val: Any, default: Point2 = (0.0, 0.0)) -> Point2:
+    v = val if val is not None else default
+    if isinstance(v, (list, tuple)) and len(v) >= 2:
+        return (float(v[0]), float(v[1]))
+    return default
+
+
+def _poly_centroid(points: List[Point2]) -> Point2:
+    if not points:
+        return (0.0, 0.0)
+    return (sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points))
+
+
+def _point_in_polygon(pt: Point2, polygon: List[Point2]) -> bool:
+    x, y = pt
+    inside = False
+    n = len(polygon)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _capsule_boundary(params: Dict[str, Any]) -> List[Point2]:
+    cx, cy = _as_float2(params.get("center"), (0.0, 0.0))
+    length = float(params.get("length", params.get("width", 2.0)))
+    depth = float(params.get("depth", params.get("height", 0.8)))
+    radius = min(float(params.get("radius", depth * 0.5)), depth * 0.5, length * 0.5)
+    seg = max(8, int(params.get("segments", 48)) // 2)
+    half_straight = max(0.0, length * 0.5 - radius)
+    pts: List[Point2] = []
+    for i in range(seg + 1):
+        a = -math.pi * 0.5 + math.pi * i / seg
+        pts.append((cx + half_straight + math.cos(a) * radius, cy + math.sin(a) * radius))
+    for i in range(seg + 1):
+        a = math.pi * 0.5 + math.pi * i / seg
+        pts.append((cx - half_straight + math.cos(a) * radius, cy + math.sin(a) * radius))
+    return pts
+
+
+def _rounded_rect_boundary(params: Dict[str, Any]) -> List[Point2]:
+    cx, cy = _as_float2(params.get("center"), (0.0, 0.0))
+    width = float(params.get("width", params.get("length", 2.0)))
+    depth = float(params.get("depth", params.get("height", 1.0)))
+    radius = min(float(params.get("radius", params.get("corner_radius", 0.12))), width * 0.5, depth * 0.5)
+    seg = max(3, int(params.get("corner_segments", max(4, int(params.get("segments", 48)) // 8))))
+    corners = [
+        (cx + width * 0.5 - radius, cy - depth * 0.5 + radius, -math.pi * 0.5, 0.0),
+        (cx + width * 0.5 - radius, cy + depth * 0.5 - radius, 0.0, math.pi * 0.5),
+        (cx - width * 0.5 + radius, cy + depth * 0.5 - radius, math.pi * 0.5, math.pi),
+        (cx - width * 0.5 + radius, cy - depth * 0.5 + radius, math.pi, math.pi * 1.5),
+    ]
+    pts: List[Point2] = []
+    for ox, oy, a0, a1 in corners:
+        for i in range(seg + 1):
+            a = a0 + (a1 - a0) * i / seg
+            pts.append((ox + math.cos(a) * radius, oy + math.sin(a) * radius))
+    return pts
+
+
+def _circle_boundary(params: Dict[str, Any]) -> List[Point2]:
+    cx, cy = _as_float2(params.get("center"), (0.0, 0.0))
+    radius = float(params.get("radius", 0.5))
+    seg = max(16, int(params.get("segments", 64)))
+    return [(cx + math.cos(math.tau * i / seg) * radius, cy + math.sin(math.tau * i / seg) * radius) for i in range(seg)]
+
+
+def _offset_boundary(points: List[Point2], amount: float) -> List[Point2]:
+    cx, cy = _poly_centroid(points)
+    out: List[Point2] = []
+    for x, y in points:
+        dx, dy = x - cx, y - cy
+        d = math.sqrt(dx * dx + dy * dy)
+        if d < 1e-6:
+            out.append((x, y))
+        else:
+            out.append((x + dx / d * amount, y + dy / d * amount))
+    return out
+
+
+def _boundary_bbox(points: List[Point2]) -> Tuple[float, float, float, float]:
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _recipe_infill_paths(boundary: List[Point2], params: Dict[str, Any]) -> List[List[Vec3]]:
+    min_x, min_y, max_x, max_y = _boundary_bbox(boundary)
+    spacing = max(0.02, float(params.get("spacing", 0.12)))
+    step = max(spacing * 0.35, float(params.get("sample_step", spacing * 0.45)))
+    z = float(params.get("z", 0.0))
+    amplitude = float(params.get("amplitude", params.get("curl", spacing * 0.42)))
+    frequency = float(params.get("frequency", 2.3))
+    phase = float(params.get("phase", 0.0))
+    seed = int(params.get("seed", 1))
+    rng = random.Random(seed)
+    jitter = float(params.get("jitter", spacing * 0.18))
+    margin = float(params.get("margin", spacing * 0.15))
+    paths: List[List[Vec3]] = []
+    row = 0
+    y = min_y + spacing * 0.5
+    while y <= max_y - spacing * 0.35:
+        row_phase = phase + rng.uniform(-0.65, 0.65)
+        row_y = y + rng.uniform(-jitter, jitter)
+        current: List[Vec3] = []
+        x = min_x + margin
+        while x <= max_x - margin:
+            t = (x - min_x) / max(1e-6, max_x - min_x)
+            wave_y = row_y + math.sin(math.tau * (frequency * t + row * 0.17) + row_phase) * amplitude
+            if _point_in_polygon((x, wave_y), boundary):
+                current.append((x, wave_y, z))
+            else:
+                if len(current) >= 2:
+                    paths.append(current if row % 2 == 0 else list(reversed(current)))
+                current = []
+            x += step
+        if len(current) >= 2:
+            paths.append(current if row % 2 == 0 else list(reversed(current)))
+        row += 1
+        y += spacing
+    return paths
+
+
+def _formula_clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, x))
+
+
+def _formula_lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def _formula_noise(x: float, y: float = 0.0, seed: float = 0.0) -> float:
+    # Deterministic value-noise-ish hash in [-1, 1]. Good enough for recipe variation.
+    v = math.sin(x * 12.9898 + y * 78.233 + seed * 37.719) * 43758.5453
+    return (v - math.floor(v)) * 2.0 - 1.0
+
+
+FORMULA_FUNCS = {
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "asin": math.asin,
+    "acos": math.acos,
+    "atan": math.atan,
+    "sqrt": math.sqrt,
+    "abs": abs,
+    "min": min,
+    "max": max,
+    "pow": pow,
+    "floor": math.floor,
+    "ceil": math.ceil,
+    "clamp": _formula_clamp,
+    "lerp": _formula_lerp,
+    "noise": _formula_noise,
+}
+
+
+def _eval_formula_ast(node: ast.AST, env: Dict[str, float]) -> float:
+    if isinstance(node, ast.Expression):
+        return _eval_formula_ast(node.body, env)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    if isinstance(node, ast.Name):
+        if node.id not in env:
+            raise ValueError(f"unknown formula variable: {node.id}")
+        return float(env[node.id])
+    if isinstance(node, ast.UnaryOp):
+        v = _eval_formula_ast(node.operand, env)
+        if isinstance(node.op, ast.USub):
+            return -v
+        if isinstance(node.op, ast.UAdd):
+            return v
+    if isinstance(node, ast.BinOp):
+        a = _eval_formula_ast(node.left, env)
+        b = _eval_formula_ast(node.right, env)
+        if isinstance(node.op, ast.Add):
+            return a + b
+        if isinstance(node.op, ast.Sub):
+            return a - b
+        if isinstance(node.op, ast.Mult):
+            return a * b
+        if isinstance(node.op, ast.Div):
+            return a / b
+        if isinstance(node.op, ast.Pow):
+            return a ** b
+        if isinstance(node.op, ast.Mod):
+            return a % b
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        fn = FORMULA_FUNCS.get(node.func.id)
+        if fn is None:
+            raise ValueError(f"unsupported formula function: {node.func.id}")
+        args = [_eval_formula_ast(arg, env) for arg in node.args]
+        return float(fn(*args))
+    if isinstance(node, ast.Compare):
+        left = _eval_formula_ast(node.left, env)
+        ok = True
+        for op, comparator in zip(node.ops, node.comparators):
+            right = _eval_formula_ast(comparator, env)
+            if isinstance(op, ast.Lt):
+                ok = ok and left < right
+            elif isinstance(op, ast.LtE):
+                ok = ok and left <= right
+            elif isinstance(op, ast.Gt):
+                ok = ok and left > right
+            elif isinstance(op, ast.GtE):
+                ok = ok and left >= right
+            elif isinstance(op, ast.Eq):
+                ok = ok and abs(left - right) < 1e-9
+            elif isinstance(op, ast.NotEq):
+                ok = ok and abs(left - right) >= 1e-9
+            else:
+                raise ValueError("unsupported formula comparison")
+            left = right
+        return 1.0 if ok else 0.0
+    if isinstance(node, ast.BoolOp):
+        values = [_eval_formula_ast(v, env) != 0.0 for v in node.values]
+        if isinstance(node.op, ast.And):
+            return 1.0 if all(values) else 0.0
+        if isinstance(node.op, ast.Or):
+            return 1.0 if any(values) else 0.0
+    raise ValueError("unsupported formula expression")
+
+
+def _eval_formula(expr: Any, env: Dict[str, float], default: float = 0.0) -> float:
+    if isinstance(expr, (int, float)):
+        return float(expr)
+    if not isinstance(expr, str) or not expr.strip():
+        return default
+    tree = ast.parse(expr.strip(), mode="eval")
+    for child in ast.walk(tree):
+        if isinstance(child, (ast.Attribute, ast.Subscript, ast.List, ast.Tuple, ast.Dict, ast.Lambda)):
+            raise ValueError("unsupported formula syntax")
+    return _eval_formula_ast(tree, env)
+
+
+def _recipe_formula_paths(boundary: List[Point2], params: Dict[str, Any]) -> List[List[Vec3]]:
+    min_x, min_y, max_x, max_y = _boundary_bbox(boundary)
+    width = max(1e-6, max_x - min_x)
+    depth = max(1e-6, max_y - min_y)
+    center_x, center_y = _poly_centroid(boundary)
+    rows = max(1, int(params.get("rows", params.get("count", 8))))
+    samples = max(2, int(params.get("samples", params.get("points", 80))))
+    z = float(params.get("z", 0.0))
+    reverse_alternate = metadata_flag(params.get("reverse_alternate")) is not False
+    clip = metadata_flag(params.get("clip")) is not False
+
+    x_expr = params.get("x", params.get("formula_x", "min_x+width*u"))
+    y_expr = params.get("y", params.get("formula_y", "min_y+depth*v"))
+    z_expr = params.get("z_formula", params.get("formula_z"))
+
+    numeric_params = {
+        str(k): float(v)
+        for k, v in params.items()
+        if isinstance(k, str) and isinstance(v, (int, float)) and k not in {"rows", "count", "samples", "points"}
+    }
+    paths: List[List[Vec3]] = []
+    for row in range(rows):
+        v = row / max(1, rows - 1) if rows > 1 else 0.5
+        row_y = min_y + depth * v
+        current: List[Vec3] = []
+        for sample in range(samples):
+            u = sample / max(1, samples - 1)
+            env: Dict[str, float] = {
+                "u": u,
+                "v": v,
+                "t": u,
+                "row": float(row),
+                "sample": float(sample),
+                "rows": float(rows),
+                "samples": float(samples),
+                "pi": math.pi,
+                "tau": math.tau,
+                "min_x": min_x,
+                "max_x": max_x,
+                "min_y": min_y,
+                "max_y": max_y,
+                "width": width,
+                "depth": depth,
+                "center_x": center_x,
+                "center_y": center_y,
+                "row_y": row_y,
+                **numeric_params,
+            }
+            x = _eval_formula(x_expr, env, min_x + width * u)
+            y = _eval_formula(y_expr, env, row_y)
+            zz = _eval_formula(z_expr, env, z) if z_expr is not None else z
+            if (not clip) or _point_in_polygon((x, y), boundary):
+                current.append((x, y, zz))
+            else:
+                if len(current) >= 2:
+                    paths.append(current if (row % 2 == 0 or not reverse_alternate) else list(reversed(current)))
+                current = []
+        if len(current) >= 2:
+            paths.append(current if (row % 2 == 0 or not reverse_alternate) else list(reversed(current)))
+    return paths
+
+
+def _surface_formula_mesh(params: Dict[str, Any]) -> Mesh:
+    u_segments = max(1, int(params.get("u_segments", params.get("segments_u", params.get("columns", 32)))))
+    v_segments = max(1, int(params.get("v_segments", params.get("segments_v", params.get("rows", 12)))))
+    x_expr = params.get("x", params.get("formula_x", "(u-0.5)*width"))
+    y_expr = params.get("y", params.get("formula_y", "(v-0.5)*depth"))
+    z_expr = params.get("z", params.get("formula_z", "0"))
+    numeric_params = {
+        str(k): float(v)
+        for k, v in params.items()
+        if isinstance(k, str) and isinstance(v, (int, float))
+    }
+    defaults = {
+        "width": float(params.get("width", 2.0)),
+        "depth": float(params.get("depth", 1.0)),
+        "height": float(params.get("height", 1.0)),
+        "radius": float(params.get("radius", 1.0)),
+        "twist": float(params.get("twist", 0.0)),
+        "curl": float(params.get("curl", 0.0)),
+        "phase": float(params.get("phase", 0.0)),
+    }
+    numeric_params = {**defaults, **numeric_params}
+
+    mesh = Mesh()
+    for j in range(v_segments + 1):
+        v = j / v_segments
+        for i in range(u_segments + 1):
+            u = i / u_segments
+            env: Dict[str, float] = {
+                "u": u,
+                "v": v,
+                "i": float(i),
+                "j": float(j),
+                "u_segments": float(u_segments),
+                "v_segments": float(v_segments),
+                "pi": math.pi,
+                "tau": math.tau,
+                **numeric_params,
+            }
+            mesh.vertices.append((
+                _eval_formula(x_expr, env, 0.0),
+                _eval_formula(y_expr, env, 0.0),
+                _eval_formula(z_expr, env, 0.0),
+            ))
+    row_len = u_segments + 1
+    for j in range(v_segments):
+        for i in range(u_segments):
+            a = j * row_len + i + 1
+            b = a + 1
+            c = a + row_len + 1
+            d = a + row_len
+            mesh.faces.append([a, b, c, d])
+    return mesh
+
+
+def _surface_boundary_tubes(surface: Mesh, u_segments: int, v_segments: int, radius: float, sides: int) -> Mesh:
+    mesh = Mesh()
+    row_len = u_segments + 1
+
+    def vtx(i: int, j: int) -> Vec3:
+        return surface.vertices[j * row_len + i]
+
+    for i in range(u_segments):
+        mesh.extend(tube_between(vtx(i, 0), vtx(i + 1, 0), radius, sides))
+        mesh.extend(tube_between(vtx(i, v_segments), vtx(i + 1, v_segments), radius, sides))
+    for j in range(v_segments):
+        mesh.extend(tube_between(vtx(0, j), vtx(0, j + 1), radius, sides))
+        mesh.extend(tube_between(vtx(u_segments, j), vtx(u_segments, j + 1), radius, sides))
+    return mesh
+
+
+def _perforate_surface_grid(surface: Mesh, u_segments: int, v_segments: int, params: Dict[str, Any]) -> Mesh:
+    u_every = max(1, int(params.get("u_every", params.get("every_u", 4))))
+    v_every = max(1, int(params.get("v_every", params.get("every_v", 3))))
+    u_phase = int(params.get("u_phase", params.get("phase_u", 0)))
+    v_phase = int(params.get("v_phase", params.get("phase_v", 0)))
+    condition = params.get("condition", params.get("formula"))
+    keep_border = metadata_flag(params.get("keep_border")) is not False
+    out = Mesh(vertices=list(surface.vertices), faces=[])
+    for j in range(v_segments):
+        for i in range(u_segments):
+            face_index = j * u_segments + i
+            u = (i + 0.5) / max(1, u_segments)
+            v = (j + 0.5) / max(1, v_segments)
+            remove = ((i - u_phase) % u_every == 0) and ((j - v_phase) % v_every == 0)
+            if condition is not None:
+                env = {
+                    "i": float(i),
+                    "j": float(j),
+                    "u": u,
+                    "v": v,
+                    "u_segments": float(u_segments),
+                    "v_segments": float(v_segments),
+                    "pi": math.pi,
+                    "tau": math.tau,
+                }
+                for k, val in params.items():
+                    if isinstance(k, str) and isinstance(val, (int, float)):
+                        env[k] = float(val)
+                remove = _eval_formula(condition, env, 0.0) != 0.0
+            if keep_border and (i == 0 or j == 0 or i == u_segments - 1 or j == v_segments - 1):
+                remove = False
+            if not remove and 0 <= face_index < len(surface.faces):
+                out.faces.append(surface.faces[face_index])
+    return out
+
+
+def _recipe_boundary_from_op(op: Dict[str, Any]) -> List[Point2]:
+    kind = str(op.get("kind", op.get("shape", "capsule"))).lower()
+    if kind in {"capsule", "pill"}:
+        return _capsule_boundary(op)
+    if kind in {"rounded_rect", "rounded_rectangle", "roundrect", "rect", "rectangle"}:
+        return _rounded_rect_boundary(op)
+    if kind in {"circle", "disk"}:
+        return _circle_boundary(op)
+    pts = op.get("points")
+    if isinstance(pts, list):
+        out: List[Point2] = []
+        for p in pts:
+            if isinstance(p, (list, tuple)) and len(p) >= 2:
+                out.append((float(p[0]), float(p[1])))
+        if len(out) >= 3:
+            return out
+    return _capsule_boundary(op)
+
+
+@dataclass
+class SurfaceData:
+    mesh: Mesh
+    u_segments: int
+    v_segments: int
+
+
+@dataclass
+class GridData:
+    size: Tuple[int, int, int]
+    cell: float
+    origin: Vec3
+    occupied: set[Tuple[int, int, int]] = field(default_factory=set)
+
+
+@dataclass
+class FieldData:
+    kind: str
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ModuleData:
+    kind: str
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PlacementData:
+    position: Vec3
+    rotation: Vec3 = (0.0, 0.0, 0.0)
+    scale: Vec3 = (1.0, 1.0, 1.0)
+    tile: str = ""
+    attrs: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RecipeContext:
+    obn: Optional[Dict[str, LiveObject]] = None
+    boundaries: Dict[str, List[Point2]] = field(default_factory=dict)
+    curves: Dict[str, List[List[Vec3]]] = field(default_factory=dict)
+    surfaces: Dict[str, SurfaceData] = field(default_factory=dict)
+    points: Dict[str, List[Vec3]] = field(default_factory=dict)
+    grids: Dict[str, GridData] = field(default_factory=dict)
+    fields: Dict[str, FieldData] = field(default_factory=dict)
+    modules: Dict[str, ModuleData] = field(default_factory=dict)
+    sockets: Dict[str, set[str]] = field(default_factory=dict)
+    directional_sockets: Dict[str, Dict[str, set[str]]] = field(default_factory=dict)
+    placements: Dict[str, List[PlacementData]] = field(default_factory=dict)
+    meshes: Dict[str, Mesh] = field(default_factory=dict)
+    emitted: Mesh = field(default_factory=Mesh)
+
+
+def _recipe_warn(obj: LiveObject, message: str) -> None:
+    print(f"[live-obj] recipe '{obj.name}' {message}", file=sys.stderr)
+
+
+def _recipe_output_id(op: Dict[str, Any], fallback: str = "") -> str:
+    return str(op.get("id", op.get("name", fallback))).strip()
+
+
+def _recipe_source_id(op: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = op.get(key)
+        if value is not None:
+            return str(value).strip()
+    return ""
+
+
+def _recipe_op_boundary(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    if oid:
+        ctx.boundaries[oid] = _recipe_boundary_from_op(op)
+
+
+def _recipe_op_offset(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    source = _recipe_source_id(op, "from", "source")
+    if oid and source in ctx.boundaries:
+        ctx.boundaries[oid] = _offset_boundary(ctx.boundaries[source], float(op.get("amount", op.get("distance", -0.05))))
+    elif source:
+        _recipe_warn(obj, f"offset skipped missing boundary '{source}'")
+
+
+def _recipe_op_infill(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    source = _recipe_source_id(op, "inside", "boundary")
+    if oid and source in ctx.boundaries:
+        ctx.curves[oid] = _recipe_infill_paths(ctx.boundaries[source], op)
+    elif source:
+        _recipe_warn(obj, f"infill skipped missing boundary '{source}'")
+
+
+def _recipe_op_path_formula(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    source = _recipe_source_id(op, "inside", "boundary")
+    if oid and source in ctx.boundaries:
+        ctx.curves[oid] = _recipe_formula_paths(ctx.boundaries[source], op)
+    elif source:
+        cmd = str(op.get("cmd", op.get("op", "path_formula")))
+        _recipe_warn(obj, f"{cmd} skipped missing boundary '{source}'")
+
+
+def _recipe_curve_from_op(op: Dict[str, Any]) -> List[Vec3]:
+    kind = str(op.get("kind", op.get("shape", "polyline"))).strip().lower()
+    z = float(op.get("z", op.get("elevation", 0.0)))
+    if kind in {"circle", "loop", "ring"}:
+        cx, cy = _as_float2(op.get("center"), (0.0, 0.0))
+        radius = float(op.get("radius", 0.5))
+        count = max(8, int(op.get("points", op.get("segments", 48))))
+        return [(cx + math.cos(math.tau * i / count) * radius, cy + math.sin(math.tau * i / count) * radius, z) for i in range(count)]
+    if kind in {"capsule", "pill", "rounded_rect", "rounded_rectangle", "roundrect", "rect", "rectangle"}:
+        return [(x, y, z) for x, y in _recipe_boundary_from_op(op)]
+    pts = _coerce_point_list(op.get("points", []), z)
+    if pts:
+        return pts
+    return []
+
+
+def _recipe_op_curve(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    pts = _recipe_curve_from_op(op)
+    if oid and len(pts) >= 2:
+        ctx.curves[oid] = [pts]
+    elif oid:
+        _recipe_warn(obj, f"curve '{oid}' skipped because it has fewer than two points")
+
+
+def _recipe_op_points(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    if not oid:
+        return
+    count = max(0, int(op.get("count", op.get("points", 16))))
+    seed = int(op.get("seed", 1))
+    z = float(op.get("z", 0.0))
+    rng = random.Random(seed)
+    source = _recipe_source_id(op, "inside", "boundary")
+    pts: List[Vec3] = []
+    if source in ctx.boundaries:
+        boundary = ctx.boundaries[source]
+        min_x, min_y, max_x, max_y = _boundary_bbox(boundary)
+        attempts = 0
+        while len(pts) < count and attempts < count * 80:
+            attempts += 1
+            x = rng.uniform(min_x, max_x)
+            y = rng.uniform(min_y, max_y)
+            if _point_in_polygon((x, y), boundary):
+                pts.append((x, y, z))
+    elif source:
+        _recipe_warn(obj, f"points skipped missing boundary '{source}'")
+        return
+    else:
+        width = float(op.get("width", op.get("size", 1.0)))
+        depth = float(op.get("depth", width))
+        height = float(op.get("height", 0.0))
+        for _ in range(count):
+            pts.append((
+                rng.uniform(-width * 0.5, width * 0.5),
+                rng.uniform(-depth * 0.5, depth * 0.5),
+                z + rng.uniform(0.0, height),
+            ))
+    ctx.points[oid] = pts
+
+
+def _recipe_vec3(value: Any, default: Vec3 = (0.0, 0.0, 0.0)) -> Vec3:
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        return (float(value[0]), float(value[1]), float(value[2]))
+    if isinstance(value, (int, float)):
+        v = float(value)
+        return (v, v, v)
+    return default
+
+
+def _recipe_normalize(v: Vec3, default: Vec3 = (1.0, 0.0, 0.0)) -> Vec3:
+    x, y, z = v
+    d = math.sqrt(x * x + y * y + z * z)
+    if d < 1e-9:
+        return default
+    return (x / d, y / d, z / d)
+
+
+def _recipe_op_field(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    if not oid:
+        return
+    kind = str(op.get("kind", op.get("type", op.get("mode", "direction")))).strip().lower()
+    ctx.fields[oid] = FieldData(kind, dict(op))
+
+
+def _recipe_eval_field(field: FieldData, point: Vec3, step: int) -> Vec3:
+    p = field.params
+    kind = field.kind
+    x, y, z = point
+    strength = float(p.get("strength", 1.0))
+    center = _recipe_vec3(p.get("center"), (0.0, 0.0, 0.0))
+
+    if kind in {"direction", "linear", "constant"}:
+        direction = _recipe_normalize(_recipe_vec3(p.get("direction", p.get("vector")), (1.0, 0.0, 0.0)))
+        return (direction[0] * strength, direction[1] * strength, direction[2] * strength)
+
+    if kind in {"attractor", "attract"}:
+        direction = _recipe_normalize((center[0] - x, center[1] - y, center[2] - z))
+        return (direction[0] * strength, direction[1] * strength, direction[2] * strength)
+
+    if kind in {"radial", "repulsor", "repel"}:
+        direction = _recipe_normalize((x - center[0], y - center[1], z - center[2]))
+        return (direction[0] * strength, direction[1] * strength, direction[2] * strength)
+
+    if kind in {"swirl", "vortex", "orbit"}:
+        dx, dy = x - center[0], y - center[1]
+        tangent = _recipe_normalize((-dy, dx, 0.0), (0.0, 1.0, 0.0))
+        radial = _recipe_normalize((dx, dy, 0.0), (1.0, 0.0, 0.0))
+        outward = float(p.get("outward", p.get("radial", 0.0)))
+        upward = float(p.get("upward", p.get("lift", 0.0)))
+        v = (
+            tangent[0] + radial[0] * outward,
+            tangent[1] + radial[1] * outward,
+            upward,
+        )
+        direction = _recipe_normalize(v)
+        return (direction[0] * strength, direction[1] * strength, direction[2] * strength)
+
+    if kind in {"noise", "turbulence"}:
+        frequency = float(p.get("frequency", 1.0))
+        seed = int(p.get("seed", 1)) + step
+        v = (
+            noise3d(x * frequency, y * frequency, z * frequency, seed),
+            noise3d(x * frequency + 41.0, y * frequency, z * frequency, seed),
+            noise3d(x * frequency, y * frequency + 83.0, z * frequency, seed),
+        )
+        direction = _recipe_normalize(v)
+        return (direction[0] * strength, direction[1] * strength, direction[2] * strength)
+
+    if kind in {"curl_noise", "curl-noise", "curl"}:
+        frequency = float(p.get("frequency", 1.0))
+        seed = int(p.get("seed", 1))
+        eps = max(1e-4, float(p.get("epsilon", 0.01)))
+        t = seed + int(step * float(p.get("time_scale", 1.0)))
+        sx, sy, sz = x * frequency, y * frequency, z * frequency
+        d_bz_dy = (noise3d(sx, sy + eps, sz, t) - noise3d(sx, sy - eps, sz, t)) / (2 * eps)
+        d_by_dz = (noise3d(sx, sy, sz + eps, t + 101) - noise3d(sx, sy, sz - eps, t + 101)) / (2 * eps)
+        d_bx_dz = (noise3d(sx + 101, sy, sz + eps, t) - noise3d(sx + 101, sy, sz - eps, t)) / (2 * eps)
+        d_bz_dx = (noise3d(sx + eps, sy, sz, t) - noise3d(sx - eps, sy, sz, t)) / (2 * eps)
+        d_by_dx = (noise3d(sx + eps, sy, sz, t + 101) - noise3d(sx - eps, sy, sz, t + 101)) / (2 * eps)
+        d_bx_dy = (noise3d(sx + 101, sy + eps, sz, t) - noise3d(sx + 101, sy - eps, sz, t)) / (2 * eps)
+        direction = _recipe_normalize((d_bz_dy - d_by_dz, d_bx_dz - d_bz_dx, d_by_dx - d_bx_dy))
+        return (direction[0] * strength, direction[1] * strength, direction[2] * strength)
+
+    return (0.0, 0.0, 0.0)
+
+
+def _recipe_inside_bounds(point: Vec3, bounds: Any) -> bool:
+    if not (isinstance(bounds, list) and len(bounds) >= 2):
+        return True
+    mn = _recipe_vec3(bounds[0], (-float("inf"), -float("inf"), -float("inf")))
+    mx = _recipe_vec3(bounds[1], (float("inf"), float("inf"), float("inf")))
+    return mn[0] <= point[0] <= mx[0] and mn[1] <= point[1] <= mx[1] and mn[2] <= point[2] <= mx[2]
+
+
+def _recipe_op_trace_field(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    source = _recipe_source_id(op, "from", "points", "seeds")
+    field_name = _recipe_source_id(op, "field")
+    if not oid:
+        return
+    if source not in ctx.points:
+        _recipe_warn(obj, f"trace_field skipped missing point set '{source}'")
+        return
+    if field_name not in ctx.fields:
+        _recipe_warn(obj, f"trace_field skipped missing field '{field_name}'")
+        return
+
+    field = ctx.fields[field_name]
+    steps = max(1, int(op.get("steps", 80)))
+    step_size = float(op.get("step_size", op.get("distance", 0.05)))
+    sample_every = max(1, int(op.get("sample_every", 1)))
+    bounds = op.get("bounds")
+    curves: List[List[Vec3]] = []
+    for seed in ctx.points[source]:
+        current = seed
+        path = [current]
+        for step in range(steps):
+            v = _recipe_eval_field(field, current, step)
+            speed = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+            if speed < 1e-9:
+                break
+            current = (
+                current[0] + v[0] * step_size,
+                current[1] + v[1] * step_size,
+                current[2] + v[2] * step_size,
+            )
+            if not _recipe_inside_bounds(current, bounds):
+                break
+            if (step + 1) % sample_every == 0:
+                path.append(current)
+        if len(path) >= 2:
+            curves.append(path)
+    ctx.curves[oid] = curves
+
+
+def _recipe_op_module(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    if not oid:
+        return
+    kind = str(op.get("kind", op.get("type", op.get("primitive", "box")))).strip().lower()
+    ctx.modules[oid] = ModuleData(kind, dict(op))
+
+
+def _recipe_string_list(value: Any, default: Optional[List[str]] = None) -> List[str]:
+    if value is None:
+        return list(default or [])
+    if isinstance(value, (list, tuple, set)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        parts = [p.strip() for p in re.split(r"[,|]", value) if p.strip()]
+        return parts or list(default or [])
+    return [str(value).strip()] if str(value).strip() else list(default or [])
+
+
+def _recipe_float_list(value: Any, default: Optional[List[float]] = None) -> List[float]:
+    if value is None:
+        return list(default or [])
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, (list, tuple)):
+        return [float(v) for v in value]
+    if isinstance(value, str):
+        parts = [p.strip() for p in re.split(r"[,|]", value) if p.strip()]
+        if parts:
+            return [float(p) for p in parts]
+    return list(default or [])
+
+
+def _recipe_tile_value(op: Dict[str, Any], tile: str, key: str, default: Any = None) -> Any:
+    if tile:
+        tile_key = f"{tile}_{key}"
+        if tile_key in op:
+            return op[tile_key]
+    return op.get(key, default)
+
+
+def _recipe_random_scale(op: Dict[str, Any], rng: random.Random) -> Vec3:
+    if op.get("scale") is not None:
+        return _recipe_vec3(op.get("scale"), (1.0, 1.0, 1.0))
+    lo = float(op.get("scale_min", op.get("min_scale", 1.0)))
+    hi = float(op.get("scale_max", op.get("max_scale", lo)))
+    if hi < lo:
+        lo, hi = hi, lo
+    s = rng.uniform(lo, hi)
+    return (s, s, s)
+
+
+def _recipe_random_rotation(op: Dict[str, Any], rng: random.Random, x: float, y: float, z: float) -> Vec3:
+    raw = op.get("rotation", op.get("rotate", op.get("rotation_z", 0.0)))
+    mode = str(raw).strip().lower() if isinstance(raw, str) else ""
+    if mode in {"random", "rand"}:
+        angle = rng.uniform(0.0, 360.0)
+    elif mode in {"noise", "field"}:
+        frequency = float(op.get("rotation_frequency", op.get("frequency", 1.0)))
+        angle = (noise3d(x * frequency, y * frequency, z * frequency, int(op.get("seed", 1))) * 0.5 + 0.5) * 360.0
+    else:
+        angle = float(raw or 0.0)
+    step = float(op.get("rotation_step", op.get("angle_step", 0.0)))
+    if step > 0:
+        angle = round(angle / step) * step
+    return (float(op.get("rotation_x", 0.0)), float(op.get("rotation_y", 0.0)), angle)
+
+
+def _recipe_tile_rotation(op: Dict[str, Any], tile: str, rng: random.Random, x: float, y: float, z: float) -> Vec3:
+    raw = _recipe_tile_value(op, tile, "rotation", None)
+    if raw is None:
+        raw = _recipe_tile_value(op, tile, "rotation_z", None)
+    if raw is None:
+        return _recipe_random_rotation(op, rng, x, y, z)
+    if isinstance(raw, (list, tuple)):
+        return _recipe_vec3(raw, (0.0, 0.0, 0.0))
+    return (0.0, 0.0, float(raw or 0.0))
+
+
+def _recipe_op_socket(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    tile = _recipe_source_id(op, "module", "tile", "for")
+    if not tile:
+        return
+    accepts = set(_recipe_string_list(op.get("accepts", op.get("neighbors", op.get("connects"))), []))
+    if accepts:
+        ctx.sockets[tile] = accepts
+        for other in accepts:
+            ctx.sockets.setdefault(other, set()).add(tile)
+    direction_aliases = {
+        "east": "east",
+        "e": "east",
+        "west": "west",
+        "w": "west",
+        "north": "north",
+        "n": "north",
+        "south": "south",
+        "s": "south",
+        "up": "up",
+        "u": "up",
+        "top": "up",
+        "down": "down",
+        "d": "down",
+        "bottom": "down",
+    }
+    for key, direction in direction_aliases.items():
+        if key not in op:
+            continue
+        allowed = set(_recipe_string_list(op.get(key), []))
+        if allowed:
+            ctx.directional_sockets.setdefault(tile, {}).setdefault(direction, set()).update(allowed)
+
+
+def _recipe_grid_cell_center(grid: GridData, ix: int, iy: int, iz: int) -> Vec3:
+    return (
+        grid.origin[0] + (ix + 0.5) * grid.cell,
+        grid.origin[1] + (iy + 0.5) * grid.cell,
+        grid.origin[2] + (iz + 0.5) * grid.cell,
+    )
+
+
+def _recipe_op_scatter(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    if not oid:
+        return
+    seed = int(op.get("seed", 1))
+    rng = random.Random(seed)
+    source = _recipe_source_id(op, "from", "points", "grid")
+    inside = _recipe_source_id(op, "inside", "boundary")
+    count = max(0, int(op.get("count", op.get("points", 32))))
+    z = float(op.get("z", 0.0))
+    min_distance = max(0.0, float(op.get("min_distance", op.get("spacing", 0.0))))
+    jitter = float(op.get("jitter", 0.0))
+    tile = str(op.get("tile", op.get("module", ""))).strip()
+    mode = str(op.get("mode", op.get("distribution", "random"))).strip().lower()
+    frequency = float(op.get("frequency", 1.0))
+    threshold = float(op.get("threshold", -1.0 if mode != "noise" else 0.0))
+    placements: List[PlacementData] = []
+
+    def maybe_add(point: Vec3) -> None:
+        x, y, pz = point
+        if jitter > 0:
+            x += rng.uniform(-jitter, jitter)
+            y += rng.uniform(-jitter, jitter)
+        if threshold > -1.0:
+            n = noise3d(x * frequency, y * frequency, pz * frequency, seed)
+            if n < threshold:
+                return
+        if min_distance > 0:
+            min_d2 = min_distance * min_distance
+            for existing in placements:
+                dx = existing.position[0] - x
+                dy = existing.position[1] - y
+                dz = existing.position[2] - pz
+                if dx * dx + dy * dy + dz * dz < min_d2:
+                    return
+        placements.append(PlacementData(
+            position=(x, y, pz),
+            rotation=_recipe_random_rotation(op, rng, x, y, pz),
+            scale=_recipe_random_scale(op, rng),
+            tile=tile,
+        ))
+
+    if source in ctx.points:
+        for point in ctx.points[source]:
+            maybe_add(point)
+            if count and len(placements) >= count:
+                break
+    elif source in ctx.grids:
+        grid = ctx.grids[source]
+        for ix, iy, iz in sorted(grid.occupied):
+            maybe_add(_recipe_grid_cell_center(grid, ix, iy, iz))
+            if count and len(placements) >= count:
+                break
+    elif inside in ctx.boundaries:
+        boundary = ctx.boundaries[inside]
+        min_x, min_y, max_x, max_y = _boundary_bbox(boundary)
+        attempts = 0
+        max_attempts = max(count * 160, 200)
+        while len(placements) < count and attempts < max_attempts:
+            attempts += 1
+            x = rng.uniform(min_x, max_x)
+            y = rng.uniform(min_y, max_y)
+            if _point_in_polygon((x, y), boundary):
+                maybe_add((x, y, z))
+    else:
+        width = float(op.get("width", op.get("size", 1.0)))
+        depth = float(op.get("depth", width))
+        height = float(op.get("height", 0.0))
+        for _ in range(count):
+            maybe_add((
+                rng.uniform(-width * 0.5, width * 0.5),
+                rng.uniform(-depth * 0.5, depth * 0.5),
+                z + rng.uniform(0.0, height),
+            ))
+
+    ctx.placements[oid] = placements
+
+
+def _recipe_arch_module_mesh(params: Dict[str, Any]) -> Mesh:
+    size = _recipe_vec3(params.get("size"), (
+        float(params.get("width", 0.16)),
+        float(params.get("depth", 0.035)),
+        float(params.get("height", 0.28)),
+    ))
+    width, depth, height = size
+    opening_width = min(width * 0.82, float(params.get("opening_width", width * 0.46)))
+    spring_height = min(height * 0.8, float(params.get("spring_height", height * 0.45)))
+    arch_thickness = max(width * 0.04, float(params.get("arch_thickness", width * 0.09)))
+    radius_inner = opening_width * 0.5
+    radius_mid = radius_inner + arch_thickness * 0.5
+    crown_z = spring_height + radius_inner + arch_thickness
+    side_width = max(width * 0.05, (width - opening_width) * 0.5)
+    mesh = Mesh()
+
+    if side_width > 1e-6 and spring_height > 1e-6:
+        mesh.extend(box_mesh((-(opening_width + side_width) * 0.5, 0.0, spring_height * 0.5), (side_width, depth, spring_height)))
+        mesh.extend(box_mesh(((opening_width + side_width) * 0.5, 0.0, spring_height * 0.5), (side_width, depth, spring_height)))
+    if crown_z < height:
+        top_h = height - crown_z
+        mesh.extend(box_mesh((0.0, 0.0, crown_z + top_h * 0.5), (width, depth, top_h)))
+
+    segments = max(5, int(params.get("arch_segments", params.get("segments", 10))))
+    block_w = max(arch_thickness * 0.75, math.pi * radius_mid / segments * 0.9)
+    block_h = arch_thickness
+    for i in range(segments + 1):
+        theta = math.pi * i / segments
+        x = math.cos(theta) * radius_mid
+        z = spring_height + math.sin(theta) * radius_mid
+        block = box_mesh((0.0, 0.0, 0.0), (block_w, depth * 1.04, block_h))
+        block = apply_transform(block, {
+            "position": [x, 0.0, z],
+            "rotation": [0.0, 90.0 - math.degrees(theta), 0.0],
+            "scale": [1.0, 1.0, 1.0],
+        })
+        mesh.extend(block)
+
+    return mesh
+
+
+def _recipe_window_module_mesh(params: Dict[str, Any]) -> Mesh:
+    size = _recipe_vec3(params.get("size"), (
+        float(params.get("width", 0.16)),
+        float(params.get("depth", 0.035)),
+        float(params.get("height", 0.28)),
+    ))
+    width, depth, height = size
+    opening_width = min(width * 0.85, float(params.get("opening_width", width * 0.45)))
+    opening_height = min(height * 0.85, float(params.get("opening_height", height * 0.46)))
+    sill_height = min(height * 0.7, float(params.get("sill_height", height * 0.28)))
+    side_width = max(width * 0.04, (width - opening_width) * 0.5)
+    top_h = max(0.0, height - (sill_height + opening_height))
+    mesh = Mesh()
+    if sill_height > 0:
+        mesh.extend(box_mesh((0.0, 0.0, sill_height * 0.5), (width, depth, sill_height)))
+    mesh.extend(box_mesh((-(opening_width + side_width) * 0.5, 0.0, sill_height + opening_height * 0.5), (side_width, depth, opening_height)))
+    mesh.extend(box_mesh(((opening_width + side_width) * 0.5, 0.0, sill_height + opening_height * 0.5), (side_width, depth, opening_height)))
+    if top_h > 0:
+        mesh.extend(box_mesh((0.0, 0.0, sill_height + opening_height + top_h * 0.5), (width, depth, top_h)))
+    return mesh
+
+
+def _recipe_object_template_mesh(params: Dict[str, Any], obn: Optional[Dict[str, LiveObject]]) -> Mesh:
+    ref = str(params.get("ref", params.get("object", params.get("template", "")))).strip()
+    if not ref or not obn or ref not in obn:
+        return Mesh()
+    template = obn[ref]
+    if template.mesh.vertices:
+        return template.mesh.copy()
+    source = str(template.meta.get("source", "")).lower()
+    try:
+        if source == "procedural":
+            base = generate_procedural(template, obn)
+            return apply_ops(base, template, obn, "") if base.vertices else Mesh()
+        if source == "sdf":
+            return generate_sdf(template)
+        if source == "simulation":
+            return generate_simulation(template, obn)
+        if source == "recipe":
+            return generate_recipe(template, obn)
+    except Exception as exc:
+        print(f"[live-obj] recipe object template '{ref}' skipped: {exc}", file=sys.stderr)
+    return Mesh()
+
+
+def _recipe_apply_module_origin(mesh: Mesh, origin: Any) -> Mesh:
+    mode = str(origin or "").strip().lower()
+    if not mode or not mesh.vertices:
+        return mesh
+    bbox = compute_bbox(mesh)
+    if bbox is None:
+        return mesh
+    min_x, max_x, min_y, max_y, min_z, max_z = bbox
+    if mode in {"center", "centroid", "middle"}:
+        anchor = ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5, (min_z + max_z) * 0.5)
+    elif mode in {"center_bottom", "bottom_center", "base", "base_center", "origin"}:
+        anchor = ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5, min_z)
+    elif mode in {"min", "min_corner", "corner"}:
+        anchor = (min_x, min_y, min_z)
+    elif isinstance(origin, (list, tuple)) and len(origin) >= 3:
+        anchor = (float(origin[0]), float(origin[1]), float(origin[2]))
+    else:
+        return mesh
+    return translate_mesh(mesh, (-anchor[0], -anchor[1], -anchor[2]))
+
+
+def _recipe_module_mesh(module: ModuleData, obn: Optional[Dict[str, LiveObject]] = None) -> Mesh:
+    params = module.params
+    kind = module.kind
+    if kind in {"object", "ref", "template"} or params.get("ref") or params.get("object") or params.get("template"):
+        mesh = _recipe_object_template_mesh(params, obn)
+        if mesh.vertices:
+            return _recipe_apply_module_origin(mesh, params.get("origin", params.get("anchor_origin")))
+    size = _recipe_vec3(params.get("size"), (
+        float(params.get("width", 0.1)),
+        float(params.get("depth", 0.1)),
+        float(params.get("height", 0.1)),
+    ))
+    if kind in {"arch", "arched_wall", "arch_wall", "portal"}:
+        return _recipe_apply_module_origin(_recipe_arch_module_mesh(params), params.get("origin"))
+    if kind in {"window", "window_wall", "facade"}:
+        return _recipe_apply_module_origin(_recipe_window_module_mesh(params), params.get("origin"))
+    if kind in {"column", "pillar", "post"}:
+        radius = float(params.get("radius", min(size[0], size[1]) * 0.5))
+        height = float(params.get("height", size[2]))
+        return _recipe_apply_module_origin(cylinder_mesh("z", (0.0, 0.0, height * 0.5), radius, height, max(8, int(params.get("segments", 12)))), params.get("origin"))
+    if kind in {"cylinder", "tube"}:
+        radius = float(params.get("radius", min(size[0], size[1]) * 0.5))
+        height = float(params.get("height", size[2]))
+        return _recipe_apply_module_origin(cylinder_mesh("z", (0.0, 0.0, height * 0.5), radius, height, max(6, int(params.get("segments", 12)))), params.get("origin"))
+    if kind in {"sphere", "ball"}:
+        radius = float(params.get("radius", max(size) * 0.5))
+        return _recipe_apply_module_origin(sphere_mesh((0.0, 0.0, radius), radius, max(8, int(params.get("segments", 10)))), params.get("origin"))
+    return _recipe_apply_module_origin(box_mesh((0.0, 0.0, size[2] * 0.5), size), params.get("origin"))
+
+
+def _recipe_primitive_instance_mesh(op: Dict[str, Any], placement: PlacementData) -> Mesh:
+    tile = placement.tile
+    primitive = str(_recipe_tile_value(op, tile, "primitive", op.get("shape", "box"))).strip().lower()
+    anchor = str(_recipe_tile_value(op, tile, "anchor", op.get("anchor", "base"))).strip().lower()
+    size = _recipe_vec3(_recipe_tile_value(op, tile, "size", op.get("size", [0.1, 0.1, 0.1])), (0.1, 0.1, 0.1))
+    if primitive in {"cylinder", "tube"}:
+        radius = float(_recipe_tile_value(op, tile, "radius", min(size[0], size[1]) * 0.5))
+        height = float(_recipe_tile_value(op, tile, "height", size[2]))
+        center = (0.0, 0.0, height * 0.5) if anchor in {"base", "bottom"} else (0.0, 0.0, 0.0)
+        mesh = cylinder_mesh("z", center, radius, height, max(6, int(op.get("segments", 12))))
+    elif primitive in {"sphere", "ball"}:
+        radius = float(_recipe_tile_value(op, tile, "radius", max(size) * 0.5))
+        center = (0.0, 0.0, radius) if anchor in {"base", "bottom"} else (0.0, 0.0, 0.0)
+        mesh = sphere_mesh(center, radius, max(8, int(op.get("segments", 10))))
+    else:
+        center = (0.0, 0.0, size[2] * 0.5) if anchor in {"base", "bottom"} else (0.0, 0.0, 0.0)
+        mesh = box_mesh(center, size)
+
+    transform = {
+        "position": list(placement.position),
+        "rotation": list(placement.rotation),
+        "scale": list(placement.scale),
+    }
+    return apply_transform(mesh, transform)
+
+
+def _recipe_instance_mesh(ctx: RecipeContext, op: Dict[str, Any], placement: PlacementData) -> Mesh:
+    requested_module = str(op.get("module", op.get("ref", ""))).strip()
+    module_id = ""
+    if requested_module in {"tile", "by_tile", "$tile"}:
+        module_id = placement.tile
+    elif requested_module:
+        module_id = requested_module
+    elif placement.tile in ctx.modules:
+        module_id = placement.tile
+
+    if module_id and module_id in ctx.modules:
+        mesh = _recipe_module_mesh(ctx.modules[module_id], ctx.obn)
+        transform = {
+            "position": list(placement.position),
+            "rotation": list(placement.rotation),
+            "scale": list(placement.scale),
+        }
+        return apply_transform(mesh, transform)
+    return _recipe_primitive_instance_mesh(op, placement)
+
+
+def _recipe_op_instance(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    source = _recipe_source_id(op, "from", "placements", "points")
+    if source in ctx.placements:
+        placements = ctx.placements[source]
+    elif source in ctx.points:
+        placements = [PlacementData(position=p) for p in ctx.points[source]]
+    elif source in ctx.grids:
+        grid = ctx.grids[source]
+        placements = [PlacementData(position=_recipe_grid_cell_center(grid, ix, iy, iz)) for ix, iy, iz in sorted(grid.occupied)]
+    else:
+        if source:
+            _recipe_warn(obj, f"instance skipped missing placements '{source}'")
+        return
+
+    skip_tiles = set(_recipe_string_list(op.get("skip", op.get("skip_tiles")), []))
+    mesh = Mesh()
+    for placement in placements:
+        if placement.tile and placement.tile in skip_tiles:
+            continue
+        mesh.extend(_recipe_instance_mesh(ctx, op, placement))
+
+    target = _recipe_output_id(op)
+    if target and target != source:
+        ctx.meshes[target] = mesh
+    if metadata_flag(op.get("emit")) is not False:
+        ctx.emitted.extend(mesh)
+        material_name = op.get("material")
+        if material_name:
+            obj.meta["material"] = str(material_name)
+
+
+def _recipe_int_set(value: Any, default: set[int]) -> set[int]:
+    if value is None:
+        return set(default)
+    if isinstance(value, (int, float)):
+        return {int(value)}
+    if isinstance(value, (list, tuple, set)):
+        return {int(v) for v in value}
+    if isinstance(value, str):
+        parts = [p.strip() for p in re.split(r"[, ]+", value) if p.strip()]
+        if parts:
+            return {int(float(p)) for p in parts}
+    return set(default)
+
+
+def _recipe_grid_size(value: Any) -> Tuple[int, int, int]:
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        return (max(1, int(value[0])), max(1, int(value[1])), max(1, int(value[2])))
+    if isinstance(value, (int, float)):
+        n = max(1, int(value))
+        return (n, n, n)
+    return (16, 16, 8)
+
+
+def _recipe_grid_neighborhood(kind: Any) -> List[Tuple[int, int, int]]:
+    k = str(kind or "moore").strip().lower()
+    if k in {"6", "von_neumann", "von-neumann", "axis"}:
+        return [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+    return [
+        (dx, dy, dz)
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+        for dz in (-1, 0, 1)
+        if not (dx == 0 and dy == 0 and dz == 0)
+    ]
+
+
+def _recipe_op_grid(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    if not oid:
+        return
+    nx, ny, nz = _recipe_grid_size(op.get("size", op.get("grid", op.get("dims", [16, 16, 8]))))
+    cell = float(op.get("cell", 0.1))
+    raw_origin = op.get("origin")
+    if isinstance(raw_origin, (list, tuple)) and len(raw_origin) >= 3:
+        origin = (float(raw_origin[0]), float(raw_origin[1]), float(raw_origin[2]))
+    else:
+        origin = (-nx * cell * 0.5, -ny * cell * 0.5, 0.0)
+    seed = int(op.get("seed", 1))
+    rng = random.Random(seed)
+    init = str(op.get("init", op.get("mode", "seed_cluster"))).strip().lower()
+    fill = float(op.get("fill", 0.0))
+    occupied: set[Tuple[int, int, int]] = set()
+
+    if init in {"random", "noise"} or fill > 0:
+        chance = fill if fill > 0 else 0.14
+        for ix in range(nx):
+            for iy in range(ny):
+                for iz in range(nz):
+                    if rng.random() <= chance:
+                        occupied.add((ix, iy, iz))
+
+    if init in {"sphere", "ball"}:
+        cx, cy, cz = nx * 0.5, ny * 0.5, nz * 0.5
+        radius = float(op.get("radius", min(nx, ny, nz) * 0.22))
+        for ix in range(nx):
+            for iy in range(ny):
+                for iz in range(nz):
+                    dx, dy, dz = ix + 0.5 - cx, iy + 0.5 - cy, iz + 0.5 - cz
+                    if math.sqrt(dx * dx + dy * dy + dz * dz) <= radius:
+                        occupied.add((ix, iy, iz))
+
+    if not occupied or init in {"seed_cluster", "cluster", "center"}:
+        cx, cy = nx // 2, ny // 2
+        seed_count = max(1, int(op.get("seed_count", max(6, nx // 3))))
+        seed_radius = max(0, int(op.get("seed_radius", 2)))
+        seed_z = max(0, min(nz - 1, int(op.get("seed_z", 0))))
+        seed_z_span = max(0, int(op.get("seed_z_span", min(2, nz - 1))))
+        for _ in range(seed_count):
+            ix = max(0, min(nx - 1, cx + rng.randint(-seed_radius, seed_radius)))
+            iy = max(0, min(ny - 1, cy + rng.randint(-seed_radius, seed_radius)))
+            iz = max(0, min(nz - 1, seed_z + rng.randint(0, seed_z_span)))
+            occupied.add((ix, iy, iz))
+
+    ctx.grids[oid] = GridData((nx, ny, nz), cell, origin, occupied)
+
+
+def _recipe_parse_wfc_rules(value: Any, tiles: List[str]) -> Dict[str, set[str]]:
+    rules: Dict[str, set[str]] = {tile: set(tiles) for tile in tiles}
+    if not value:
+        return rules
+    parsed: Dict[str, set[str]] = {tile: set() for tile in tiles}
+    if isinstance(value, str):
+        chunks = [chunk.strip() for chunk in value.split(";") if chunk.strip()]
+        for chunk in chunks:
+            if ":" not in chunk:
+                continue
+            tile, allowed_raw = chunk.split(":", 1)
+            tile = tile.strip()
+            if tile not in parsed:
+                continue
+            allowed = {v for v in _recipe_string_list(allowed_raw) if v in parsed}
+            parsed[tile].update(allowed)
+            for neighbor in allowed:
+                parsed[neighbor].add(tile)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and ":" in item:
+                tile, allowed_raw = item.split(":", 1)
+                tile = tile.strip()
+                if tile in parsed:
+                    allowed = {v for v in _recipe_string_list(allowed_raw) if v in parsed}
+                    parsed[tile].update(allowed)
+                    for neighbor in allowed:
+                        parsed[neighbor].add(tile)
+    for tile in tiles:
+        if parsed[tile]:
+            rules[tile] = parsed[tile]
+    return rules
+
+
+def _recipe_weighted_choice(options: List[str], weights: Dict[str, float], rng: random.Random) -> str:
+    if not options:
+        return ""
+    total = sum(max(0.0, weights.get(option, 1.0)) for option in options)
+    if total <= 0:
+        return rng.choice(options)
+    pick = rng.random() * total
+    running = 0.0
+    for option in options:
+        running += max(0.0, weights.get(option, 1.0))
+        if pick <= running:
+            return option
+    return options[-1]
+
+
+RECIPE_WFC_DIRECTION_OFFSETS: Dict[str, Tuple[int, int, int]] = {
+    "east": (1, 0, 0),
+    "west": (-1, 0, 0),
+    "north": (0, 1, 0),
+    "south": (0, -1, 0),
+    "up": (0, 0, 1),
+    "down": (0, 0, -1),
+}
+
+RECIPE_WFC_INVERSE_DIRECTIONS: Dict[str, str] = {
+    "east": "west",
+    "west": "east",
+    "north": "south",
+    "south": "north",
+    "up": "down",
+    "down": "up",
+}
+
+
+def _recipe_wfc_neighbor_items(size: Tuple[int, int, int], cell: Tuple[int, int, int], neighborhood: str) -> List[Tuple[Tuple[int, int, int], str]]:
+    nx, ny, nz = size
+    ix, iy, iz = cell
+    if neighborhood in {"moore", "8", "26"}:
+        offsets: List[Tuple[int, int, int, str]] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in ((-1, 0, 1) if nz > 1 else (0,)):
+                    if dx == 0 and dy == 0 and dz == 0:
+                        continue
+                    direction = "any"
+                    for name, offset in RECIPE_WFC_DIRECTION_OFFSETS.items():
+                        if offset == (dx, dy, dz):
+                            direction = name
+                            break
+                    offsets.append((dx, dy, dz, direction))
+    else:
+        offsets = [(1, 0, 0, "east"), (-1, 0, 0, "west"), (0, 1, 0, "north"), (0, -1, 0, "south")]
+        if nz > 1:
+            offsets.extend([(0, 0, 1, "up"), (0, 0, -1, "down")])
+    out: List[Tuple[Tuple[int, int, int], str]] = []
+    for dx, dy, dz, direction in offsets:
+        nx_, ny_, nz_ = ix + dx, iy + dy, iz + dz
+        if 0 <= nx_ < nx and 0 <= ny_ < ny and 0 <= nz_ < nz:
+            out.append(((nx_, ny_, nz_), direction))
+    return out
+
+
+def _recipe_wfc_allowed_neighbors(
+    ctx: RecipeContext,
+    tile: str,
+    direction: str,
+    generic_rules: Dict[str, set[str]],
+    tiles: List[str],
+) -> set[str]:
+    if direction != "any":
+        directional = ctx.directional_sockets.get(tile, {})
+        if direction in directional:
+            return {other for other in directional[direction] if other in tiles}
+    return set(generic_rules.get(tile, set(tiles)))
+
+
+def _recipe_wfc_tiles_compatible(
+    ctx: RecipeContext,
+    tile: str,
+    neighbor_tile: str,
+    direction: str,
+    generic_rules: Dict[str, set[str]],
+    tiles: List[str],
+) -> bool:
+    if neighbor_tile not in _recipe_wfc_allowed_neighbors(ctx, tile, direction, generic_rules, tiles):
+        return False
+    inverse = RECIPE_WFC_INVERSE_DIRECTIONS.get(direction)
+    if inverse:
+        inverse_rules = ctx.directional_sockets.get(neighbor_tile, {})
+        if inverse in inverse_rules and tile not in inverse_rules[inverse]:
+            return False
+    return True
+
+
+def _recipe_parse_wfc_forced(value: Any, tiles: List[str]) -> Dict[Tuple[int, int, int], str]:
+    forced: Dict[Tuple[int, int, int], str] = {}
+    if not value:
+        return forced
+    chunks: List[Any]
+    if isinstance(value, str):
+        chunks = [chunk.strip() for chunk in value.split(";") if chunk.strip()]
+    elif isinstance(value, list):
+        chunks = value
+    else:
+        chunks = [value]
+    for chunk in chunks:
+        if isinstance(chunk, str):
+            sep = ":" if ":" in chunk else "=" if "=" in chunk else ""
+            if not sep:
+                continue
+            cell_raw, tile = chunk.split(sep, 1)
+            coords = [int(float(part.strip())) for part in cell_raw.split(",") if part.strip()]
+            tile = tile.strip()
+        elif isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
+            coords = [int(float(chunk[0])), int(float(chunk[1]))]
+            if len(chunk) >= 4 and isinstance(chunk[3], str):
+                coords.append(int(float(chunk[2])))
+                tile = str(chunk[3]).strip()
+            else:
+                tile = str(chunk[2]).strip()
+        else:
+            continue
+        if len(coords) == 2:
+            coords.append(0)
+        if len(coords) >= 3 and tile in tiles:
+            forced[(coords[0], coords[1], coords[2])] = tile
+    return forced
+
+
+def _recipe_op_wfc(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    if not oid:
+        return
+    tiles = _recipe_string_list(op.get("tiles"), ["empty", "solid"])
+    if not tiles:
+        return
+    raw_weights = _recipe_float_list(op.get("weights"), [1.0] * len(tiles))
+    weights = {tile: raw_weights[i] if i < len(raw_weights) else 1.0 for i, tile in enumerate(tiles)}
+    raw_rules = op.get("rules", op.get("adjacency"))
+    rules = _recipe_parse_wfc_rules(raw_rules, tiles)
+    if not raw_rules and ctx.sockets:
+        for tile in tiles:
+            if tile in ctx.sockets:
+                rules[tile] = {other for other in ctx.sockets[tile] if other in tiles}
+    nx, ny, nz = _recipe_grid_size(op.get("size", op.get("grid", [8, 8, 1])))
+    cell_size = float(op.get("cell", 0.1))
+    origin = _recipe_vec3(op.get("origin"), (-nx * cell_size * 0.5, -ny * cell_size * 0.5, 0.0))
+    neighborhood = str(op.get("neighborhood", "von_neumann")).strip().lower()
+    rng = random.Random(int(op.get("seed", 1)))
+    cells = [(ix, iy, iz) for ix in range(nx) for iy in range(ny) for iz in range(nz)]
+    domains: Dict[Tuple[int, int, int], set[str]] = {cell: set(tiles) for cell in cells}
+
+    border_tile = str(op.get("border", "")).strip()
+    if border_tile in tiles:
+        for ix, iy, iz in cells:
+            if ix == 0 or iy == 0 or iz == 0 or ix == nx - 1 or iy == ny - 1 or iz == nz - 1:
+                domains[(ix, iy, iz)] = {border_tile}
+    forced_cells = _recipe_parse_wfc_forced(op.get("force", op.get("constraints", op.get("pins"))), tiles)
+    locked_cells = set()
+    for cell, tile in forced_cells.items():
+        if cell in domains:
+            domains[cell] = {tile}
+            locked_cells.add(cell)
+
+    def propagate(start: Tuple[int, int, int]) -> None:
+        queue = [start]
+        while queue:
+            current = queue.pop()
+            for neighbor, direction in _recipe_wfc_neighbor_items((nx, ny, nz), current, neighborhood):
+                if neighbor in locked_cells:
+                    continue
+                allowed = set()
+                for tile in domains[current]:
+                    for candidate in _recipe_wfc_allowed_neighbors(ctx, tile, direction, rules, tiles):
+                        if _recipe_wfc_tiles_compatible(ctx, tile, candidate, direction, rules, tiles):
+                            allowed.add(candidate)
+                if not allowed:
+                    allowed = set(tiles)
+                narrowed = domains[neighbor].intersection(allowed)
+                if not narrowed:
+                    narrowed = {_recipe_weighted_choice(sorted(allowed), weights, rng)}
+                if narrowed != domains[neighbor]:
+                    domains[neighbor] = narrowed
+                    queue.append(neighbor)
+
+    for cell in cells:
+        if len(domains[cell]) == 1:
+            propagate(cell)
+
+    while True:
+        open_cells = [cell for cell in cells if len(domains[cell]) > 1]
+        if not open_cells:
+            break
+        open_cells.sort(key=lambda c: (len(domains[c]), rng.random()))
+        cell = open_cells[0]
+        choice = _recipe_weighted_choice(sorted(domains[cell]), weights, rng)
+        domains[cell] = {choice}
+        propagate(cell)
+
+    skip_tiles = set(_recipe_string_list(op.get("skip", op.get("skip_tiles")), ["empty", "void", "air", "none"]))
+    placements: List[PlacementData] = []
+    for ix, iy, iz in cells:
+        tile = next(iter(domains[(ix, iy, iz)]))
+        if tile in skip_tiles:
+            continue
+        pos = (
+            origin[0] + (ix + 0.5) * cell_size,
+            origin[1] + (iy + 0.5) * cell_size,
+            origin[2] + (iz + 0.5) * cell_size,
+        )
+        placements.append(PlacementData(
+            position=pos,
+            rotation=_recipe_tile_rotation(op, tile, rng, *pos),
+            scale=_recipe_vec3(_recipe_tile_value(op, tile, "scale", op.get("scale")), (1.0, 1.0, 1.0)),
+            tile=tile,
+            attrs={"cell": (ix, iy, iz)},
+        ))
+    ctx.placements[oid] = placements
+
+
+def _recipe_op_surface_formula(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    oid = _recipe_output_id(op)
+    if oid:
+        u_segments = max(1, int(op.get("u_segments", op.get("segments_u", op.get("columns", 32)))))
+        v_segments = max(1, int(op.get("v_segments", op.get("segments_v", op.get("rows", 12)))))
+        ctx.surfaces[oid] = SurfaceData(_surface_formula_mesh(op), u_segments, v_segments)
+
+
+def _recipe_op_perforate_surface(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    source = _recipe_source_id(op, "surface", "from")
+    target = _recipe_output_id(op, source)
+    if source in ctx.surfaces and target:
+        data = ctx.surfaces[source]
+        ctx.surfaces[target] = SurfaceData(
+            _perforate_surface_grid(data.mesh, data.u_segments, data.v_segments, op),
+            data.u_segments,
+            data.v_segments,
+        )
+    elif source:
+        _recipe_warn(obj, f"perforate_surface skipped missing surface '{source}'")
+
+
+def _recipe_step_cellular_automata(grid: GridData, op: Dict[str, Any]) -> GridData:
+    nx, ny, nz = grid.size
+    neigh = _recipe_grid_neighborhood(op.get("neighborhood", op.get("neighbors", "moore")))
+    mode = str(op.get("mode", op.get("style", "life"))).strip().lower()
+    if mode in {"growth", "grow", "coral"}:
+        default_birth = {1, 2, 3}
+        default_survive = set(range(27))
+    else:
+        default_birth = {5}
+        default_survive = {4, 5, 6}
+    birth = _recipe_int_set(op.get("birth", op.get("birth_rules")), default_birth)
+    survive = _recipe_int_set(op.get("survive", op.get("survival", op.get("survival_rules"))), default_survive)
+    max_fill = max(0.0, min(1.0, float(op.get("max_fill", 0.35))))
+    total = max(1, nx * ny * nz)
+    occupied = set(grid.occupied)
+
+    for _ in range(max(0, int(op.get("steps", 1)))):
+        candidates = set(occupied)
+        for ix, iy, iz in occupied:
+            for dx, dy, dz in neigh:
+                nx_, ny_, nz_ = ix + dx, iy + dy, iz + dz
+                if 0 <= nx_ < nx and 0 <= ny_ < ny and 0 <= nz_ < nz:
+                    candidates.add((nx_, ny_, nz_))
+
+        next_occupied: set[Tuple[int, int, int]] = set(occupied) if mode in {"growth", "grow", "coral"} else set()
+        for ix, iy, iz in candidates:
+            count = sum((ix + dx, iy + dy, iz + dz) in occupied for dx, dy, dz in neigh)
+            alive = (ix, iy, iz) in occupied
+            if alive and count in survive:
+                next_occupied.add((ix, iy, iz))
+            elif not alive and count in birth:
+                next_occupied.add((ix, iy, iz))
+
+        occupied = next_occupied
+        if max_fill > 0 and len(occupied) / total > max_fill:
+            break
+
+    return GridData(grid.size, grid.cell, grid.origin, occupied)
+
+
+def _recipe_op_iterate(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    rule = str(op.get("rule", op.get("mode", ""))).strip().lower()
+    source = _recipe_source_id(op, "target", "from", "grid", "curve", "curves")
+    target = _recipe_output_id(op, source)
+    steps = max(0, int(op.get("steps", 1)))
+    if rule in {"cellular_automata", "cellular", "ca"}:
+        if source not in ctx.grids:
+            _recipe_warn(obj, f"iterate skipped missing grid target '{source}'")
+            return
+        if target:
+            ctx.grids[target] = _recipe_step_cellular_automata(ctx.grids[source], op)
+        return
+    if rule not in {"differential_growth", "growth", "curve_growth"}:
+        _recipe_warn(obj, f"iterate skipped unsupported rule '{rule}'")
+        return
+    if source not in ctx.curves:
+        _recipe_warn(obj, f"iterate skipped missing curve target '{source}'")
+        return
+
+    grown: List[List[Vec3]] = []
+    for curve in ctx.curves[source]:
+        if len(curve) < 3:
+            continue
+        pts = list(curve)
+        for _ in range(steps):
+            pts = _differential_growth_step(pts, op)
+        smooth_iterations = max(0, int(op.get("smooth_iterations", op.get("smooth", 0))))
+        if smooth_iterations > 0:
+            pts = _smooth_closed_polyline(pts, smooth_iterations, float(op.get("smooth_strength", 0.35)))
+        grown.append(pts)
+    if target and grown:
+        ctx.curves[target] = grown
+
+
+def _normal_from_points(a: Vec3, b: Vec3, c: Vec3) -> Vec3:
+    ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+    nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+    d = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if d < 1e-9:
+        return (0.0, 0.0, 1.0)
+    return (nx / d, ny / d, nz / d)
+
+
+def _recipe_panel_mesh(surface: SurfaceData, op: Dict[str, Any]) -> Mesh:
+    scale = max(0.05, min(1.0, float(op.get("scale", op.get("panel_scale", 0.82)))))
+    offset = float(op.get("offset", op.get("normal_offset", 0.0)))
+    thickness = max(0.0, float(op.get("thickness", 0.0)))
+    mesh = Mesh()
+
+    for face in surface.mesh.faces:
+        if len(face) < 3:
+            continue
+        pts = [surface.mesh.vertices[i - 1] for i in face if 1 <= i <= len(surface.mesh.vertices)]
+        if len(pts) < 3:
+            continue
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        cz = sum(p[2] for p in pts) / len(pts)
+        normal = _normal_from_points(pts[0], pts[1], pts[2])
+        top = [
+            (
+                cx + (p[0] - cx) * scale + normal[0] * (offset + thickness * 0.5),
+                cy + (p[1] - cy) * scale + normal[1] * (offset + thickness * 0.5),
+                cz + (p[2] - cz) * scale + normal[2] * (offset + thickness * 0.5),
+            )
+            for p in pts
+        ]
+        base = len(mesh.vertices) + 1
+        mesh.vertices.extend(top)
+        mesh.faces.append([base + i for i in range(len(top))])
+        if thickness <= 0:
+            continue
+        bottom = [
+            (
+                cx + (p[0] - cx) * scale + normal[0] * (offset - thickness * 0.5),
+                cy + (p[1] - cy) * scale + normal[1] * (offset - thickness * 0.5),
+                cz + (p[2] - cz) * scale + normal[2] * (offset - thickness * 0.5),
+            )
+            for p in pts
+        ]
+        bottom_base = len(mesh.vertices) + 1
+        mesh.vertices.extend(bottom)
+        mesh.faces.append([bottom_base + i for i in range(len(bottom) - 1, -1, -1)])
+        for i in range(len(top)):
+            j = (i + 1) % len(top)
+            mesh.faces.append([base + i, base + j, bottom_base + j, bottom_base + i])
+    return mesh
+
+
+def _recipe_op_panelize_surface(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    source = _recipe_source_id(op, "surface", "from")
+    target = _recipe_output_id(op, source)
+    if source in ctx.surfaces and target:
+        ctx.meshes[target] = _recipe_panel_mesh(ctx.surfaces[source], op)
+    elif source:
+        _recipe_warn(obj, f"panelize_surface skipped missing surface '{source}'")
+
+
+def _grid_to_smooth_mesh(grid: GridData, resolution: float) -> Mesh:
+    class GridSDF(SDFExpr):
+        def __init__(self, g: GridData):
+            self.g = g
+
+        def dist(self, p: Vec3) -> float:
+            px, py, pz = p
+            gx = int(round((px - self.g.origin[0]) / self.g.cell))
+            gy = int(round((py - self.g.origin[1]) / self.g.cell))
+            gz = int(round((pz - self.g.origin[2]) / self.g.cell))
+            min_dist = float("inf")
+            for ix, iy, iz in self.g.occupied:
+                cx = self.g.origin[0] + ix * self.g.cell
+                cy = self.g.origin[1] + iy * self.g.cell
+                cz = self.g.origin[2] + iz * self.g.cell
+                dist = math.sqrt((px - cx) ** 2 + (py - cy) ** 2 + (pz - cz) ** 2) - self.g.cell * 0.55
+                if dist < min_dist:
+                    min_dist = dist
+            if min_dist == float("inf"):
+                return self.g.cell
+            if (gx, gy, gz) in self.g.occupied:
+                return -abs(min_dist)
+            return min_dist
+
+    nx, ny, nz = grid.size
+    pad = max(grid.cell * 2.0, resolution * 3.0)
+    bounds = [
+        [grid.origin[0] - pad, grid.origin[1] - pad, grid.origin[2] - pad],
+        [grid.origin[0] + nx * grid.cell + pad, grid.origin[1] + ny * grid.cell + pad, grid.origin[2] + nz * grid.cell + pad],
+    ]
+    return sdf_to_marching_cubes_mesh(GridSDF(grid), bounds, max(1e-4, resolution))
+
+
+def _recipe_op_emit_volume(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    source = _recipe_source_id(op, "grid", "from", "volume")
+    if source not in ctx.grids:
+        if source:
+            _recipe_warn(obj, f"emit_volume skipped missing grid '{source}'")
+        return
+    grid = ctx.grids[source]
+    method = str(op.get("method", "voxels")).strip().lower()
+    if method in {"smooth", "marching_cubes", "marching", "mc"}:
+        resolution = float(op.get("resolution", grid.cell * 0.75))
+        mesh = _grid_to_smooth_mesh(grid, resolution)
+    else:
+        mesh = mesh_from_voxels(grid.occupied, grid.origin, grid.cell)
+        if mesh.vertices:
+            mesh = weld_vertices(mesh, epsilon=grid.cell * 0.001)
+    ctx.emitted.extend(mesh)
+    material_name = op.get("material")
+    if material_name:
+        obj.meta["material"] = str(material_name)
+
+
+def _recipe_op_emit_mesh(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    source = _recipe_source_id(op, "mesh", "from", "panels")
+    if source in ctx.meshes:
+        ctx.emitted.extend(ctx.meshes[source])
+        material_name = op.get("material")
+        if material_name:
+            obj.meta["material"] = str(material_name)
+    elif source:
+        _recipe_warn(obj, f"emit_mesh skipped missing mesh '{source}'")
+
+
+def _recipe_op_emit_surface(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    source = _recipe_source_id(op, "surface", "from") or _recipe_output_id(op)
+    if source in ctx.surfaces:
+        data = ctx.surfaces[source]
+        ctx.emitted.extend(data.mesh)
+        rim_radius = float(op.get("rim_radius", op.get("edge_radius", 0.0)))
+        if rim_radius > 0:
+            sides = max(5, int(op.get("rim_segments", 8)))
+            ctx.emitted.extend(_surface_boundary_tubes(data.mesh, data.u_segments, data.v_segments, rim_radius, sides))
+        material_name = op.get("material")
+        if material_name:
+            obj.meta["material"] = str(material_name)
+    elif source:
+        _recipe_warn(obj, f"emit_surface skipped missing surface '{source}'")
+
+
+def _recipe_op_emit_tubes(ctx: RecipeContext, obj: LiveObject, op: Dict[str, Any]) -> None:
+    source = _recipe_source_id(op, "paths", "curves", "curve", "from")
+    radius = float(op.get("radius", op.get("tube_radius", 0.025)))
+    sides = max(5, int(op.get("segments", op.get("tube_segments", 8))))
+    z_offset = float(op.get("z", 0.0))
+    close_curves = metadata_flag(op.get("closed", op.get("close"))) is True
+    if source in ctx.curves:
+        for path in ctx.curves[source]:
+            shifted = [(x, y, z + z_offset) for x, y, z in path]
+            if close_curves and len(shifted) > 2:
+                pairs = zip(shifted, shifted[1:] + [shifted[0]])
+            else:
+                pairs = zip(shifted, shifted[1:])
+            for a, b in pairs:
+                ctx.emitted.extend(tube_between(a, b, radius, sides))
+        material_name = op.get("material")
+        if material_name:
+            obj.meta["material"] = str(material_name)
+    elif source:
+        _recipe_warn(obj, f"emit_tubes skipped missing paths '{source}'")
+
+
+RECIPE_OP_HANDLERS = {
+    "boundary": _recipe_op_boundary,
+    "offset": _recipe_op_offset,
+    "infill": _recipe_op_infill,
+    "path_formula": _recipe_op_path_formula,
+    "formula_path": _recipe_op_path_formula,
+    "path_field": _recipe_op_path_formula,
+    "curve": _recipe_op_curve,
+    "points": _recipe_op_points,
+    "field": _recipe_op_field,
+    "vector_field": _recipe_op_field,
+    "trace_field": _recipe_op_trace_field,
+    "field_trace": _recipe_op_trace_field,
+    "trace": _recipe_op_trace_field,
+    "module": _recipe_op_module,
+    "socket": _recipe_op_socket,
+    "grid": _recipe_op_grid,
+    "scatter": _recipe_op_scatter,
+    "scatter_points": _recipe_op_scatter,
+    "wfc": _recipe_op_wfc,
+    "wave_function_collapse": _recipe_op_wfc,
+    "surface_formula": _recipe_op_surface_formula,
+    "formula_surface": _recipe_op_surface_formula,
+    "ribbon_formula": _recipe_op_surface_formula,
+    "ribbon": _recipe_op_surface_formula,
+    "perforate_surface": _recipe_op_perforate_surface,
+    "surface_perforation": _recipe_op_perforate_surface,
+    "perforate": _recipe_op_perforate_surface,
+    "iterate": _recipe_op_iterate,
+    "panelize_surface": _recipe_op_panelize_surface,
+    "panelize": _recipe_op_panelize_surface,
+    "emit_surface": _recipe_op_emit_surface,
+    "surface": _recipe_op_emit_surface,
+    "emit_tubes": _recipe_op_emit_tubes,
+    "tubes": _recipe_op_emit_tubes,
+    "emit_volume": _recipe_op_emit_volume,
+    "volume": _recipe_op_emit_volume,
+    "instance": _recipe_op_instance,
+    "instances": _recipe_op_instance,
+    "emit_instances": _recipe_op_instance,
+    "emit_mesh": _recipe_op_emit_mesh,
+    "emit_panels": _recipe_op_emit_mesh,
+}
+
+
+def _recipe_param_env(obj: LiveObject) -> Dict[str, Any]:
+    raw = obj.meta.get("params") or {}
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        return assembly_params_eval_env(raw, {obj.name: obj})
+    except Exception:
+        return {str(k): v for k, v in raw.items() if isinstance(v, (int, float))}
+
+
+def _recipe_resolve_op_value(value: Any, env: Dict[str, Any], obj: LiveObject) -> Any:
+    if isinstance(value, str):
+        try:
+            return eval_mixed_value(value, env, {obj.name: obj})
+        except Exception:
+            return value
+    if isinstance(value, list):
+        return [_recipe_resolve_op_value(v, env, obj) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_recipe_resolve_op_value(v, env, obj) for v in value)
+    return value
+
+
+def _recipe_resolve_op(op: Dict[str, Any], env: Dict[str, Any], obj: LiveObject) -> Dict[str, Any]:
+    return {key: _recipe_resolve_op_value(value, env, obj) for key, value in op.items()}
+
+
+def generate_recipe(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = None) -> Mesh:
+    ctx = RecipeContext(obn=obn)
+    env = _recipe_param_env(obj)
+    for op in obj.recipe_ops:
+        resolved_op = _recipe_resolve_op(op, env, obj)
+        cmd = str(resolved_op.get("cmd", resolved_op.get("op", ""))).lower()
+        handler = RECIPE_OP_HANDLERS.get(cmd)
+        if handler is None:
+            _recipe_warn(obj, f"skipped unsupported op '{cmd}'")
+            continue
+        handler(ctx, obj, resolved_op)
+    return ctx.emitted
+
+
 def differential_growth_mesh(params: Dict[str, Any]) -> Mesh:
     radius = float(params.get("radius", 1.0))
     n = int(params.get("points", 32))
@@ -2639,6 +4574,1536 @@ def differential_growth_mesh(params: Dict[str, Any]) -> Mesh:
     mesh = Mesh()
     for i in range(len(pts)):
         mesh.extend(tube_between(pts[i], pts[(i+1)%len(pts)], thickness, 8))
+    return mesh
+
+
+def _param_bool(params: Dict[str, Any], key: str, default: bool) -> bool:
+    value = params.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _closed_polyline_length(points: List[Vec3]) -> float:
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for i, p in enumerate(points):
+        q = points[(i + 1) % len(points)]
+        total += math.sqrt((q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2)
+    return total
+
+
+def _coerce_point_list(raw: Any, z: float = 0.0) -> List[Vec3]:
+    pts: List[Vec3] = []
+    if not isinstance(raw, list):
+        return pts
+    for p in raw:
+        if isinstance(p, list) and len(p) >= 2:
+            pts.append((float(p[0]), float(p[1]), float(p[2]) if len(p) >= 3 else z))
+        elif isinstance(p, tuple) and len(p) >= 2:
+            pts.append((float(p[0]), float(p[1]), float(p[2]) if len(p) >= 3 else z))
+    return pts
+
+
+def _polyline_centroid(points: List[Vec3]) -> Vec3:
+    if not points:
+        return (0.0, 0.0, 0.0)
+    return (
+        sum(p[0] for p in points) / len(points),
+        sum(p[1] for p in points) / len(points),
+        sum(p[2] for p in points) / len(points),
+    )
+
+
+def _resample_closed_polyline(points: List[Vec3], count: int) -> List[Vec3]:
+    if not points:
+        return []
+    count = max(3, int(count))
+    perimeter = _closed_polyline_length(points)
+    if perimeter < 1e-9:
+        return [points[0] for _ in range(count)]
+
+    targets = [perimeter * i / count for i in range(count)]
+    result: List[Vec3] = []
+    edge_index = 0
+    travelled = 0.0
+    for target in targets:
+        while edge_index < len(points):
+            p = points[edge_index]
+            q = points[(edge_index + 1) % len(points)]
+            edge_len = math.sqrt((q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2)
+            if travelled + edge_len >= target or edge_len < 1e-9:
+                t = 0.0 if edge_len < 1e-9 else (target - travelled) / edge_len
+                result.append((
+                    p[0] + (q[0] - p[0]) * t,
+                    p[1] + (q[1] - p[1]) * t,
+                    p[2] + (q[2] - p[2]) * t,
+                ))
+                break
+            travelled += edge_len
+            edge_index += 1
+    return result
+
+
+def _rectangle_profile(width: float, depth: float, count: int) -> List[Vec3]:
+    w = max(1e-6, width) * 0.5
+    d = max(1e-6, depth) * 0.5
+    corners: List[Vec3] = [(-w, -d, 0.0), (w, -d, 0.0), (w, d, 0.0), (-w, d, 0.0)]
+    return _resample_closed_polyline(corners, count)
+
+
+def _boundary_points_from_params(params: Dict[str, Any], z: float = 0.0) -> List[Vec3]:
+    return _coerce_point_list(params.get("boundary_points", params.get("contour_points")), z)
+
+
+def _initial_growth_profile(params: Dict[str, Any], rng: random.Random) -> List[Vec3]:
+    profile = str(params.get("profile", "circle")).strip().lower()
+    n = max(4, int(params.get("points", 48)))
+    jitter = max(0.0, float(params.get("jitter", params.get("initial_jitter", 0.01))))
+
+    if profile in {"rectangle", "rect", "square"}:
+        width = float(params.get("width", params.get("radius", 0.5) * 2.0))
+        depth = float(params.get("depth", params.get("radius", 0.5) * 2.0))
+        pts = _rectangle_profile(width, depth, n)
+    elif profile == "custom":
+        raw = params.get("profile_points", params.get("points_profile", []))
+        pts = []
+        if isinstance(raw, list):
+            for p in raw:
+                if isinstance(p, list) and len(p) >= 2:
+                    pts.append((float(p[0]), float(p[1]), float(p[2]) if len(p) >= 3 else 0.0))
+        if len(pts) < 3:
+            pts = _rectangle_profile(1.0, 1.0, n)
+        else:
+            pts = _resample_closed_polyline(pts, max(n, len(pts)))
+    else:
+        radius = float(params.get("radius", 0.5))
+        pts = [
+            (math.cos(2 * math.pi * i / n) * radius, math.sin(2 * math.pi * i / n) * radius, 0.0)
+            for i in range(n)
+        ]
+
+    if jitter > 0:
+        jittered = []
+        for x, y, z in pts:
+            length = math.sqrt(x * x + y * y) or 1.0
+            amount = rng.uniform(-jitter, jitter)
+            jittered.append((x + x / length * amount, y + y / length * amount, z))
+        return jittered
+    return pts
+
+
+def _signed_area_xy(points: List[Vec3]) -> float:
+    area = 0.0
+    for i, p in enumerate(points):
+        q = points[(i + 1) % len(points)]
+        area += p[0] * q[1] - q[0] * p[1]
+    return area * 0.5
+
+
+def _differential_growth_step(points: List[Vec3], params: Dict[str, Any]) -> List[Vec3]:
+    split_distance = float(params.get("split_distance", 0.16))
+    repel_radius = float(params.get("repel_radius", 0.22))
+    attraction = float(params.get("attraction", 0.03))
+    repulsion = float(params.get("repulsion", 0.015))
+    outward = float(params.get("outward", params.get("growth_rate", 0.0)))
+    normal_pressure = float(params.get("normal_pressure", params.get("curve_pressure", 0.0)))
+    max_points = int(params.get("max_points", 700))
+    max_step_value = params.get("max_step")
+    max_step = float(max_step_value) if max_step_value is not None else 0.0
+
+    pts = points
+    avg_edge_len = _closed_polyline_length(pts) / max(1, len(pts))
+    if "repel_skip_neighbors" in params:
+        repel_skip_neighbors = max(0, int(params.get("repel_skip_neighbors", 0)))
+    else:
+        repel_skip_neighbors = max(1, min(32, int(round(repel_radius / max(avg_edge_len, 1e-6) * 0.75))))
+    forces = [[0.0, 0.0, 0.0] for _ in pts]
+    cx = sum(p[0] for p in pts) / max(1, len(pts))
+    cy = sum(p[1] for p in pts) / max(1, len(pts))
+    area_sign = -1.0 if _signed_area_xy(pts) < 0 else 1.0
+
+    for i, p in enumerate(pts):
+        prev = pts[(i - 1) % len(pts)]
+        nxt = pts[(i + 1) % len(pts)]
+        forces[i][0] += (prev[0] + nxt[0] - 2 * p[0]) * attraction
+        forces[i][1] += (prev[1] + nxt[1] - 2 * p[1]) * attraction
+        if normal_pressure:
+            tx, ty = nxt[0] - prev[0], nxt[1] - prev[1]
+            tl = math.sqrt(tx * tx + ty * ty) + 1e-6
+            nx, ny = area_sign * ty / tl, -area_sign * tx / tl
+            forces[i][0] += nx * normal_pressure
+            forces[i][1] += ny * normal_pressure
+        if outward:
+            dx, dy = p[0] - cx, p[1] - cy
+            d = math.sqrt(dx * dx + dy * dy) + 1e-6
+            forces[i][0] += dx / d * outward
+            forces[i][1] += dy / d * outward
+
+    cell_size = max(repel_radius, 1e-6)
+    grid: Dict[Tuple[int, int, int], List[int]] = {}
+    for i, p in enumerate(pts):
+        key = (math.floor(p[0] / cell_size), math.floor(p[1] / cell_size), math.floor(p[2] / cell_size))
+        grid.setdefault(key, []).append(i)
+
+    for i, p in enumerate(pts):
+        cx0, cy0, cz0 = math.floor(p[0] / cell_size), math.floor(p[1] / cell_size), math.floor(p[2] / cell_size)
+        for ox in (-1, 0, 1):
+            for oy in (-1, 0, 1):
+                for oz in (-1, 0, 1):
+                    for j in grid.get((cx0 + ox, cy0 + oy, cz0 + oz), []):
+                        if j <= i:
+                            continue
+                        ring_gap = abs(j - i)
+                        ring_gap = min(ring_gap, len(pts) - ring_gap)
+                        if ring_gap <= repel_skip_neighbors:
+                            continue
+                        dx, dy, dz = p[0] - pts[j][0], p[1] - pts[j][1], p[2] - pts[j][2]
+                        d = math.sqrt(dx * dx + dy * dy + dz * dz) + 1e-6
+                        if d < repel_radius:
+                            mag = (repel_radius - d) / repel_radius * repulsion
+                            fx, fy = dx / d * mag, dy / d * mag
+                            forces[i][0] += fx
+                            forces[i][1] += fy
+                            forces[j][0] -= fx
+                            forces[j][1] -= fy
+
+    moved = []
+    for i, p in enumerate(pts):
+        fx, fy, fz = forces[i]
+        if max_step > 0:
+            length = math.sqrt(fx * fx + fy * fy + fz * fz)
+            if length > max_step:
+                scale = max_step / length
+                fx, fy, fz = fx * scale, fy * scale, fz * scale
+        moved.append((p[0] + fx, p[1] + fy, p[2] + fz))
+
+    new_pts: List[Vec3] = []
+    for i, p in enumerate(moved):
+        q = moved[(i + 1) % len(moved)]
+        new_pts.append(p)
+        d = math.sqrt((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 + (p[2] - q[2]) ** 2)
+        if d > split_distance and len(moved) + len(new_pts) < max_points:
+            new_pts.append(((p[0] + q[0]) / 2, (p[1] + q[1]) / 2, (p[2] + q[2]) / 2))
+    return new_pts
+
+
+def _smooth_closed_polyline(points: List[Vec3], iterations: int, strength: float = 0.5) -> List[Vec3]:
+    out = list(points)
+    strength = max(0.0, min(1.0, strength))
+    for _ in range(max(0, iterations)):
+        if len(out) < 3:
+            return out
+        smoothed = []
+        for i, p in enumerate(out):
+            prev = out[(i - 1) % len(out)]
+            nxt = out[(i + 1) % len(out)]
+            avg = ((prev[0] + nxt[0]) * 0.5, (prev[1] + nxt[1]) * 0.5, (prev[2] + nxt[2]) * 0.5)
+            smoothed.append((
+                p[0] * (1.0 - strength) + avg[0] * strength,
+                p[1] * (1.0 - strength) + avg[1] * strength,
+                p[2] * (1.0 - strength) + avg[2] * strength,
+            ))
+        out = smoothed
+    return out
+
+
+def _profile_outline_points(params: Dict[str, Any], count: int, z: float = 0.0, inset: float = 0.0) -> List[Vec3]:
+    boundary_points = _boundary_points_from_params(params, z)
+    if len(boundary_points) >= 3:
+        pts = [(x, y, z) for x, y, _ in boundary_points]
+        if inset > 0:
+            cx, cy, _ = _polyline_centroid(pts)
+            inset_pts: List[Vec3] = []
+            for x, y, _ in pts:
+                dx, dy = x - cx, y - cy
+                d = math.sqrt(dx * dx + dy * dy) + 1e-6
+                inset_pts.append((x - dx / d * inset, y - dy / d * inset, z))
+            pts = inset_pts
+        return _resample_closed_polyline(pts, count)
+
+    profile = str(params.get("profile", "circle")).strip().lower()
+    count = max(4, int(count))
+    inset = max(0.0, float(inset))
+    if profile in {"rectangle", "rect", "square"}:
+        width = max(1e-6, float(params.get("width", params.get("radius", 0.5) * 2.0)) - inset * 2.0)
+        depth = max(1e-6, float(params.get("depth", params.get("radius", 0.5) * 2.0)) - inset * 2.0)
+        corner_radius = max(0.0, float(params.get("corner_radius", params.get("rounding", 0.0))) - inset)
+        if corner_radius <= 1e-6:
+            return [(x, y, z) for x, y, _ in _rectangle_profile(width, depth, count)]
+        r = min(corner_radius, width * 0.5 - 1e-6, depth * 0.5 - 1e-6)
+        hw = width * 0.5
+        hd = depth * 0.5
+        per_corner = max(3, count // 4)
+        pts: List[Vec3] = []
+        corners = [
+            (hw - r, hd - r, 0.0, math.pi / 2.0),
+            (-(hw - r), hd - r, math.pi / 2.0, math.pi),
+            (-(hw - r), -(hd - r), math.pi, math.pi * 1.5),
+            (hw - r, -(hd - r), math.pi * 1.5, math.pi * 2.0),
+        ]
+        for cx, cy, a0, a1 in corners:
+            for i in range(per_corner):
+                t = i / max(1, per_corner - 1)
+                a = a0 + (a1 - a0) * t
+                pts.append((cx + math.cos(a) * r, cy + math.sin(a) * r, z))
+        return _resample_closed_polyline(pts, count)
+    if profile == "custom":
+        raw = params.get("profile_points", params.get("points_profile", []))
+        pts = []
+        if isinstance(raw, list):
+            for p in raw:
+                if isinstance(p, list) and len(p) >= 2:
+                    pts.append((float(p[0]), float(p[1]), z))
+        if len(pts) >= 3:
+            if inset > 0:
+                cx = sum(p[0] for p in pts) / len(pts)
+                cy = sum(p[1] for p in pts) / len(pts)
+                inset_pts = []
+                for x, y, _ in pts:
+                    dx, dy = x - cx, y - cy
+                    d = math.sqrt(dx * dx + dy * dy) + 1e-6
+                    inset_pts.append((x - dx / d * inset, y - dy / d * inset, z))
+                pts = inset_pts
+            return _resample_closed_polyline(pts, count)
+    radius = max(1e-6, float(params.get("radius", 0.5)) - inset)
+    return [
+        (math.cos(2 * math.pi * i / count) * radius, math.sin(2 * math.pi * i / count) * radius, z)
+        for i in range(count)
+    ]
+
+
+def _smooth_open_polyline(points: List[Vec3], iterations: int) -> List[Vec3]:
+    out = list(points)
+    for _ in range(max(0, iterations)):
+        if len(out) < 3:
+            return out
+        smoothed = [out[0]]
+        for a, b in zip(out, out[1:]):
+            smoothed.append((a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25, a[2] * 0.75 + b[2] * 0.25))
+            smoothed.append((a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75, a[2] * 0.25 + b[2] * 0.75))
+        smoothed.append(out[-1])
+        out = smoothed
+    return out
+
+
+def _open_polyline_length(points: List[Vec3]) -> float:
+    total = 0.0
+    for a, b in zip(points, points[1:]):
+        total += math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2)
+    return total
+
+
+def _resample_open_polyline(points: List[Vec3], count: int) -> List[Vec3]:
+    if len(points) <= 2:
+        return list(points)
+    count = max(2, int(count))
+    total = _open_polyline_length(points)
+    if total < 1e-9:
+        return [points[0] for _ in range(count)]
+    result = [points[0]]
+    target_index = 1
+    travelled = 0.0
+    a = points[0]
+    for b in points[1:]:
+        segment = math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2)
+        while target_index < count - 1 and travelled + segment >= total * target_index / (count - 1):
+            target = total * target_index / (count - 1)
+            t = 0.0 if segment < 1e-9 else (target - travelled) / segment
+            result.append((
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t,
+            ))
+            target_index += 1
+        travelled += segment
+        a = b
+    result.append(points[-1])
+    return result
+
+
+def _point_in_polygon_2d(x: float, y: float, polygon: List[Vec3]) -> bool:
+    inside = False
+    n = len(polygon)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi, _ = polygon[i]
+        xj, yj, _ = polygon[j]
+        if ((yi > y) != (yj > y)) and x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _profile_outline_cached(params: Dict[str, Any], count: int, z: float, inset: float) -> List[Vec3]:
+    raw_boundary = _boundary_points_from_params(params, z)
+    if len(raw_boundary) >= 3 and params.get("boundary_samples") is None and params.get("contour_points_count") is None:
+        count = len(raw_boundary)
+    cache = params.get("_profile_outline_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        params["_profile_outline_cache"] = cache
+    key = (max(3, int(count)), round(float(z), 6), round(float(inset), 6))
+    cached = cache.get(key)
+    if isinstance(cached, list):
+        return cached
+    outline = _profile_outline_points(params, key[0], z, inset)
+    cache[key] = outline
+    return outline
+
+
+def _point_inside_profile(params: Dict[str, Any], x: float, y: float, inset: float) -> bool:
+    if len(_boundary_points_from_params(params)) >= 3:
+        outline = _profile_outline_cached(params, max(32, int(params.get("section_points", 96))), 0.0, inset)
+        return _point_in_polygon_2d(x, y, outline)
+
+    profile = str(params.get("profile", "circle")).strip().lower()
+    if profile in {"rectangle", "rect", "square"}:
+        width = max(1e-6, float(params.get("width", params.get("radius", 0.5) * 2.0)) - inset * 2.0)
+        depth = max(1e-6, float(params.get("depth", params.get("radius", 0.5) * 2.0)) - inset * 2.0)
+        corner_radius = max(0.0, float(params.get("corner_radius", params.get("rounding", 0.0))) - inset)
+        hw = width * 0.5
+        hd = depth * 0.5
+        if abs(x) > hw or abs(y) > hd:
+            return False
+        r = min(corner_radius, hw, hd)
+        if r <= 1e-6:
+            return True
+        qx = abs(x) - (hw - r)
+        qy = abs(y) - (hd - r)
+        return max(qx, 0.0) ** 2 + max(qy, 0.0) ** 2 <= r * r
+    if profile == "custom":
+        outline = _profile_outline_cached(params, max(32, int(params.get("section_points", 96))), 0.0, inset)
+        return _point_in_polygon_2d(x, y, outline)
+    radius = max(1e-6, float(params.get("radius", 0.5)) - inset)
+    return x * x + y * y <= radius * radius
+
+
+def _project_point_inside_profile(params: Dict[str, Any], point: Vec3, inset: float) -> Vec3:
+    x, y, z = point
+    if _point_inside_profile(params, x, y, inset):
+        return point
+    if len(_boundary_points_from_params(params)) >= 3:
+        outline = _profile_outline_cached(params, max(32, int(params.get("section_points", 96))), 0.0, inset)
+        cx = sum(p[0] for p in outline) / len(outline)
+        cy = sum(p[1] for p in outline) / len(outline)
+        lo, hi = 0.0, 1.0
+        for _ in range(18):
+            mid = (lo + hi) * 0.5
+            tx = cx + (x - cx) * mid
+            ty = cy + (y - cy) * mid
+            if _point_in_polygon_2d(tx, ty, outline):
+                lo = mid
+            else:
+                hi = mid
+        return (cx + (x - cx) * lo, cy + (y - cy) * lo, z)
+
+    profile = str(params.get("profile", "circle")).strip().lower()
+    if profile in {"rectangle", "rect", "square"}:
+        width = max(1e-6, float(params.get("width", params.get("radius", 0.5) * 2.0)) - inset * 2.0)
+        depth = max(1e-6, float(params.get("depth", params.get("radius", 0.5) * 2.0)) - inset * 2.0)
+        corner_radius = max(0.0, float(params.get("corner_radius", params.get("rounding", 0.0))) - inset)
+        hw = width * 0.5
+        hd = depth * 0.5
+        r = min(corner_radius, hw, hd)
+        if r <= 1e-6:
+            return (max(-hw, min(hw, x)), max(-hd, min(hd, y)), z)
+        clamped_x = max(-(hw - r), min(hw - r, x))
+        clamped_y = max(-(hd - r), min(hd - r, y))
+        dx, dy = x - clamped_x, y - clamped_y
+        d = math.sqrt(dx * dx + dy * dy)
+        if d <= r:
+            return (max(-hw, min(hw, x)), max(-hd, min(hd, y)), z)
+        return (clamped_x + dx / d * r, clamped_y + dy / d * r, z)
+    if profile == "custom":
+        outline = _profile_outline_cached(params, max(32, int(params.get("section_points", 96))), 0.0, inset)
+        cx = sum(p[0] for p in outline) / len(outline)
+        cy = sum(p[1] for p in outline) / len(outline)
+        lo, hi = 0.0, 1.0
+        for _ in range(18):
+            mid = (lo + hi) * 0.5
+            tx = cx + (x - cx) * mid
+            ty = cy + (y - cy) * mid
+            if _point_in_polygon_2d(tx, ty, outline):
+                lo = mid
+            else:
+                hi = mid
+        return (cx + (x - cx) * lo, cy + (y - cy) * lo, z)
+    radius = max(1e-6, float(params.get("radius", 0.5)) - inset)
+    d = math.sqrt(x * x + y * y)
+    if d <= radius:
+        return point
+    return (x / d * radius, y / d * radius, z)
+
+
+def _profile_bounds(points: List[Vec3]) -> Tuple[float, float, float, float]:
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def _serpentine_infill_path(params: Dict[str, Any], z: float, layer_index: int) -> List[Vec3]:
+    thickness = float(params.get("thickness", params.get("section_thickness", 0.015)))
+    repel_radius = float(params.get("repel_radius", 0.08))
+    spacing = float(params.get("infill_spacing", max(thickness * 3.2, repel_radius)))
+    wall_thickness = float(params.get("wall_thickness", max(thickness * 2.5, 0.035)))
+    inset = float(params.get("infill_margin", wall_thickness + thickness * 1.7))
+    smooth_iterations = int(params.get("path_smooth", params.get("smooth_path", 3)))
+    sample_count = max(80, int(params.get("infill_resolution", 180)))
+    max_path_points = max(24, int(params.get("max_path_points", 420)))
+    wave_amplitude = float(params.get("wave_amplitude", spacing * 0.18))
+    wave_frequency = float(params.get("wave_frequency", 1.25))
+
+    outline = _profile_outline_points(params, max(64, int(params.get("section_points", 96))), 0.0, inset)
+    min_x, max_x, min_y, max_y = _profile_bounds(outline)
+    if max_x - min_x < spacing or max_y - min_y < spacing:
+        return [(x, y, z) for x, y, _ in outline]
+
+    row_count = max(2, int((max_y - min_y) / spacing) + 1)
+    rows = [min_y + (max_y - min_y) * i / max(1, row_count - 1) for i in range(row_count)]
+    points: List[Vec3] = []
+    reverse = False
+    phase = layer_index * 0.67 + float(params.get("phase", 0.0))
+
+    for row_index, y in enumerate(rows):
+        samples = []
+        inside = False
+        start_x = min_x
+        last_x = min_x
+        for i in range(sample_count + 1):
+            x = min_x + (max_x - min_x) * i / sample_count
+            ok = _point_inside_profile(params, x, y, inset)
+            if ok and not inside:
+                start_x = x
+                inside = True
+            if inside and (not ok or i == sample_count):
+                end_x = last_x if not ok else x
+                if end_x - start_x > spacing * 1.5:
+                    samples.append((start_x, end_x))
+                inside = False
+            last_x = x
+        if not samples:
+            continue
+        start_x, end_x = max(samples, key=lambda interval: interval[1] - interval[0])
+        segment_points = max(8, int((end_x - start_x) / max(spacing * 0.55, 1e-6)))
+        row_pts: List[Vec3] = []
+        for i in range(segment_points + 1):
+            t = i / max(1, segment_points)
+            x = start_x + (end_x - start_x) * t
+            yy = y + math.sin(t * math.pi * 2.0 * wave_frequency + phase + row_index * 0.55) * wave_amplitude
+            if not _point_inside_profile(params, x, yy, inset):
+                yy = y
+            row_pts.append((x, yy, z))
+        if reverse:
+            row_pts.reverse()
+        points.extend(row_pts)
+        reverse = not reverse
+
+    points = _smooth_open_polyline(points, smooth_iterations)
+    if len(points) > max_path_points:
+        points = _resample_open_polyline(points, max_path_points)
+    return points
+
+
+def _dist_sq(a: Vec3, b: Vec3) -> float:
+    return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+
+
+def _smooth_section_stack(
+    sections: List[List[Vec3]],
+    iterations: int,
+    strength: float = 0.35,
+    preserve_ends: bool = True,
+) -> List[List[Vec3]]:
+    if len(sections) < 3 or not sections[0] or iterations <= 0:
+        return sections
+    out = [[p for p in section] for section in sections]
+    strength = max(0.0, min(1.0, strength))
+    for _ in range(iterations):
+        next_out = [[p for p in section] for section in out]
+        start = 1 if preserve_ends else 0
+        stop = len(out) - 1 if preserve_ends else len(out)
+        for level in range(start, stop):
+            prev_section = out[(level - 1) % len(out)]
+            section = out[level]
+            next_section = out[(level + 1) % len(out)]
+            if len(prev_section) != len(section) or len(next_section) != len(section):
+                continue
+            smoothed: List[Vec3] = []
+            for j, p in enumerate(section):
+                avg_x = (prev_section[j][0] + next_section[j][0]) * 0.5
+                avg_y = (prev_section[j][1] + next_section[j][1]) * 0.5
+                # Keep each section's Z plane fixed; only fair sideways drift.
+                smoothed.append((p[0] * (1.0 - strength) + avg_x * strength, p[1] * (1.0 - strength) + avg_y * strength, p[2]))
+            next_out[level] = smoothed
+        out = next_out
+    return out
+
+
+def _limit_section_delta(sections: List[List[Vec3]], max_delta: float) -> List[List[Vec3]]:
+    if len(sections) < 2 or max_delta <= 0:
+        return sections
+    out = [[p for p in section] for section in sections]
+    for level in range(1, len(out)):
+        prev_section = out[level - 1]
+        section = out[level]
+        if len(prev_section) != len(section):
+            continue
+        limited: List[Vec3] = []
+        for p, prev in zip(section, prev_section):
+            dx = p[0] - prev[0]
+            dy = p[1] - prev[1]
+            d = math.sqrt(dx * dx + dy * dy)
+            if d > max_delta:
+                scale = max_delta / max(d, 1e-9)
+                limited.append((prev[0] + dx * scale, prev[1] + dy * scale, p[2]))
+            else:
+                limited.append(p)
+        out[level] = limited
+    return out
+
+
+def _add_section_loft(mesh: Mesh, sections: List[List[Vec3]], cap_ends: bool = False, triangulate: bool = False) -> None:
+    if len(sections) < 2 or not sections[0]:
+        return
+    section_count = len(sections[0])
+    base_index = len(mesh.vertices) + 1
+    for section in sections:
+        mesh.vertices.extend(section)
+    for level in range(len(sections) - 1):
+        row = base_index + level * section_count
+        nxt = row + section_count
+        for j in range(section_count):
+            a_idx = row + j
+            b_idx = row + (j + 1) % section_count
+            c_idx = nxt + (j + 1) % section_count
+            d_idx = nxt + j
+            if not triangulate:
+                mesh.faces.append([a_idx, b_idx, c_idx, d_idx])
+                continue
+            a = mesh.vertices[a_idx - 1]
+            b = mesh.vertices[b_idx - 1]
+            c = mesh.vertices[c_idx - 1]
+            d = mesh.vertices[d_idx - 1]
+            if _dist_sq(a, c) <= _dist_sq(b, d):
+                mesh.faces.append([a_idx, b_idx, c_idx])
+                mesh.faces.append([a_idx, c_idx, d_idx])
+            else:
+                mesh.faces.append([a_idx, b_idx, d_idx])
+                mesh.faces.append([b_idx, c_idx, d_idx])
+    if cap_ends:
+        mesh.faces.append([base_index + i for i in range(section_count - 1, -1, -1)])
+        top = base_index + (len(sections) - 1) * section_count
+        mesh.faces.append([top + i for i in range(section_count)])
+
+
+def _add_profile_wall(mesh: Mesh, params: Dict[str, Any], levels: int, z0: float, layer_height: float, section_count: int) -> None:
+    outer_sections = [
+        _profile_outline_points(params, section_count, z0 + i * layer_height, 0.0)
+        for i in range(levels)
+    ]
+    _add_section_loft(mesh, outer_sections, False)
+
+    wall_thickness = float(params.get("wall_thickness", 0.0))
+    if wall_thickness <= 0:
+        return
+    inner_sections = [
+        _profile_outline_points(params, section_count, z0 + i * layer_height, wall_thickness)
+        for i in range(levels)
+    ]
+    inner_base = len(mesh.vertices) + 1
+    for section in inner_sections:
+        mesh.vertices.extend(section)
+    for level in range(levels - 1):
+        row = inner_base + level * section_count
+        nxt = row + section_count
+        for j in range(section_count):
+            mesh.faces.append([row + j, nxt + j, nxt + (j + 1) % section_count, row + (j + 1) % section_count])
+    outer_base = inner_base - levels * section_count
+    top_outer = outer_base + (levels - 1) * section_count
+    top_inner = inner_base + (levels - 1) * section_count
+    bottom_outer = outer_base
+    bottom_inner = inner_base
+    for j in range(section_count):
+        mesh.faces.append([top_outer + j, top_outer + (j + 1) % section_count, top_inner + (j + 1) % section_count, top_inner + j])
+        mesh.faces.append([bottom_outer + j, bottom_inner + j, bottom_inner + (j + 1) % section_count, bottom_outer + (j + 1) % section_count])
+
+
+def _scale_points_xy(points: List[Vec3], scale: float) -> List[Vec3]:
+    cx = sum(p[0] for p in points) / max(1, len(points))
+    cy = sum(p[1] for p in points) / max(1, len(points))
+    return [(cx + (p[0] - cx) * scale, cy + (p[1] - cy) * scale, p[2]) for p in points]
+
+
+def _align_closed_polyline_to_reference(points: List[Vec3], reference: List[Vec3]) -> List[Vec3]:
+    if len(points) != len(reference) or len(points) < 4:
+        return points
+    count = len(points)
+    stride = max(1, count // 80)
+    best_shift = 0
+    best_score = float("inf")
+    for shift in range(count):
+        score = 0.0
+        for i in range(0, count, stride):
+            p = points[(i + shift) % count]
+            q = reference[i]
+            dx = p[0] - q[0]
+            dy = p[1] - q[1]
+            score += dx * dx + dy * dy
+        if score < best_score:
+            best_score = score
+            best_shift = shift
+    if best_shift == 0:
+        return points
+    return points[best_shift:] + points[:best_shift]
+
+
+def _nearest_profile_boundary_vector(params: Dict[str, Any], point: Vec3, boundary_inset: float) -> Tuple[float, float, float]:
+    has_boundary_points = len(_boundary_points_from_params(params)) >= 3
+    profile = str(params.get("profile", "circle")).strip().lower()
+    x, y, _ = point
+    if (not has_boundary_points) and profile in {"rectangle", "rect", "square"}:
+        width = max(1e-6, float(params.get("width", params.get("radius", 0.5) * 2.0)) - boundary_inset * 2.0)
+        depth = max(1e-6, float(params.get("depth", params.get("radius", 0.5) * 2.0)) - boundary_inset * 2.0)
+        hw = width * 0.5
+        hd = depth * 0.5
+        distances = [
+            (hw - x, -1.0, 0.0),
+            (x + hw, 1.0, 0.0),
+            (hd - y, 0.0, -1.0),
+            (y + hd, 0.0, 1.0),
+        ]
+        dist, vx, vy = min(distances, key=lambda item: item[0])
+        return (max(0.0, dist), vx, vy)
+    if (not has_boundary_points) and profile not in {"custom"}:
+        radius = max(1e-6, float(params.get("radius", 0.5)) - boundary_inset)
+        d = math.sqrt(x * x + y * y)
+        if d <= 1e-9:
+            return (radius, 0.0, 0.0)
+        return (max(0.0, radius - d), -x / d, -y / d)
+
+    raw_boundary = _boundary_points_from_params(params)
+    if len(raw_boundary) >= 3:
+        outline_count = max(64, int(params.get("boundary_samples", params.get("section_points", 160))))
+        outline = _profile_outline_cached(params, outline_count, 0.0, boundary_inset)
+    else:
+        outline_count = max(64, int(params.get("boundary_samples", params.get("section_points", 160))))
+        outline = _profile_outline_cached(params, outline_count, 0.0, boundary_inset)
+    if len(outline) < 2:
+        return (float("inf"), 0.0, 0.0)
+    best_dist_sq = float("inf")
+    best_x = outline[0][0]
+    best_y = outline[0][1]
+    for i, a in enumerate(outline):
+        b = outline[(i + 1) % len(outline)]
+        ax, ay = a[0], a[1]
+        bx, by = b[0], b[1]
+        vx, vy = bx - ax, by - ay
+        denom = vx * vx + vy * vy
+        t = 0.0 if denom <= 1e-12 else max(0.0, min(1.0, ((x - ax) * vx + (y - ay) * vy) / denom))
+        px = ax + vx * t
+        py = ay + vy * t
+        dx = x - px
+        dy = y - py
+        dist_sq = dx * dx + dy * dy
+        if dist_sq < best_dist_sq:
+            best_dist_sq = dist_sq
+            best_x = px
+            best_y = py
+    dist = math.sqrt(best_dist_sq)
+    if dist <= 1e-9:
+        cx = sum(p[0] for p in outline) / len(outline)
+        cy = sum(p[1] for p in outline) / len(outline)
+        dx = cx - x
+        dy = cy - y
+        length = math.sqrt(dx * dx + dy * dy) + 1e-6
+        return (0.0, dx / length, dy / length)
+    return (dist, (x - best_x) / dist, (y - best_y) / dist)
+
+
+def _vector_growth_candidate_is_clear(
+    candidate: Vec3,
+    points: List[Vec3],
+    index: int,
+    params: Dict[str, Any],
+    boundary_inset: float,
+    min_spacing: float,
+    boundary_clearance: float,
+    skip_neighbors: int,
+    grid: Dict[Tuple[int, int], List[int]],
+    cell_size: float,
+) -> bool:
+    if not _point_inside_profile(params, candidate[0], candidate[1], boundary_inset):
+        return False
+    boundary_dist, _, _ = _nearest_profile_boundary_vector(params, candidate, boundary_inset)
+    if boundary_dist < boundary_clearance:
+        return False
+    min_spacing_sq = min_spacing * min_spacing
+    count = len(points)
+    cx = math.floor(candidate[0] / cell_size)
+    cy = math.floor(candidate[1] / cell_size)
+    for ox in (-1, 0, 1):
+        for oy in (-1, 0, 1):
+            for j in grid.get((cx + ox, cy + oy), []):
+                if j == index:
+                    continue
+                ring_gap = abs(j - index)
+                ring_gap = min(ring_gap, count - ring_gap)
+                if ring_gap <= skip_neighbors:
+                    continue
+                q = points[j]
+                dx = candidate[0] - q[0]
+                dy = candidate[1] - q[1]
+                if dx * dx + dy * dy < min_spacing_sq:
+                    return False
+    return True
+
+
+def _vector_growth_step(points: List[Vec3], params: Dict[str, Any], boundary_inset: float, step: int = 0) -> List[Vec3]:
+    if len(points) < 4:
+        return points
+    target_spacing = max(1e-4, float(params.get("target_spacing", params.get("split_distance", 0.035))))
+    step_size = float(params.get("vector_step", params.get("growth_step", target_spacing * 0.055)))
+    ramp_steps = int(params.get("growth_ramp_steps", params.get("ramp_steps", 0)))
+    if ramp_steps > 0:
+        ramp_exponent = max(0.1, float(params.get("growth_ramp_exponent", 1.0)))
+        step_size *= min(1.0, max(0.0, step / max(1, ramp_steps))) ** ramp_exponent
+    if step_size <= 0:
+        return points
+
+    avg_edge_len = _closed_polyline_length(points) / max(1, len(points))
+    skip_neighbors = int(params.get("repel_skip_neighbors", max(1, min(32, int(round(target_spacing / max(avg_edge_len, 1e-6) * 0.75))))))
+    neighbor_radius = float(params.get("vector_neighbor_radius", params.get("neighbor_radius", target_spacing * 1.65)))
+    min_spacing = float(params.get("collision_spacing", params.get("min_spacing", target_spacing * 0.72)))
+    boundary_clearance = float(params.get("boundary_clearance", params.get("edge_clearance", target_spacing * 0.45)))
+    boundary_avoid_radius = float(params.get("boundary_avoid_radius", target_spacing * 1.5))
+    boundary_weight = float(params.get("boundary_weight", 1.35))
+    neighbor_weight = float(params.get("neighbor_weight", 0.85))
+    tension_weight = float(params.get("tension_weight", 0.18))
+    direction = str(params.get("growth_direction", "outward")).strip().lower()
+    direction_sign = -1.0 if direction in {"inward", "inside", "interior"} else 1.0
+    area_sign = -1.0 if _signed_area_xy(points) < 0 else 1.0
+    cell_size = max(neighbor_radius, min_spacing, boundary_clearance, 1e-6)
+    grid: Dict[Tuple[int, int], List[int]] = {}
+    for i, p in enumerate(points):
+        key = (math.floor(p[0] / cell_size), math.floor(p[1] / cell_size))
+        grid.setdefault(key, []).append(i)
+
+    out: List[Vec3] = []
+    count = len(points)
+    for i, p in enumerate(points):
+        prev = points[(i - 1) % count]
+        nxt = points[(i + 1) % count]
+        tx, ty = nxt[0] - prev[0], nxt[1] - prev[1]
+        tangent_len = math.sqrt(tx * tx + ty * ty) + 1e-6
+        nx = area_sign * ty / tangent_len * direction_sign
+        ny = -area_sign * tx / tangent_len * direction_sign
+        vx = nx
+        vy = ny
+
+        # Mild curve fairing keeps the path smooth without a physical relaxation jump.
+        vx += (prev[0] + nxt[0] - 2.0 * p[0]) / max(target_spacing, 1e-6) * tension_weight
+        vy += (prev[1] + nxt[1] - 2.0 * p[1]) / max(target_spacing, 1e-6) * tension_weight
+
+        boundary_dist, bx, by = _nearest_profile_boundary_vector(params, p, boundary_inset)
+        if boundary_dist < boundary_avoid_radius:
+            strength = (1.0 - boundary_dist / max(boundary_avoid_radius, 1e-6)) ** 2
+            vx += bx * strength * boundary_weight
+            vy += by * strength * boundary_weight
+
+        cx = math.floor(p[0] / cell_size)
+        cy = math.floor(p[1] / cell_size)
+        for ox in (-1, 0, 1):
+            for oy in (-1, 0, 1):
+                for j in grid.get((cx + ox, cy + oy), []):
+                    if j == i:
+                        continue
+                    ring_gap = abs(j - i)
+                    ring_gap = min(ring_gap, count - ring_gap)
+                    if ring_gap <= skip_neighbors:
+                        continue
+                    q = points[j]
+                    dx = p[0] - q[0]
+                    dy = p[1] - q[1]
+                    d = math.sqrt(dx * dx + dy * dy) + 1e-6
+                    if d < neighbor_radius:
+                        strength = (1.0 - d / max(neighbor_radius, 1e-6)) ** 2
+                        vx += dx / d * strength * neighbor_weight
+                        vy += dy / d * strength * neighbor_weight
+
+        length = math.sqrt(vx * vx + vy * vy)
+        if length <= 1e-9:
+            out.append(p)
+            continue
+
+        accepted = p
+        ux, uy = vx / length, vy / length
+        for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
+            candidate = (p[0] + ux * step_size * scale, p[1] + uy * step_size * scale, p[2])
+            candidate = _project_point_inside_profile(params, candidate, boundary_inset)
+            if _vector_growth_candidate_is_clear(candidate, points, i, params, boundary_inset, min_spacing, boundary_clearance, skip_neighbors, grid, cell_size):
+                accepted = candidate
+                break
+        out.append(accepted)
+
+    smooth_each_step = int(params.get("vector_smooth", params.get("growth_smooth", 1)))
+    if smooth_each_step > 0:
+        smooth_strength = float(params.get("vector_smooth_strength", params.get("smooth_strength", 0.22)))
+        out = _smooth_closed_polyline(out, smooth_each_step, smooth_strength)
+        out = [_project_point_inside_profile(params, p, boundary_inset) for p in out]
+    return out
+
+
+def _limit_vec2(x: float, y: float, limit: float) -> Tuple[float, float]:
+    length = math.sqrt(x * x + y * y)
+    if limit <= 0 or length <= limit or length <= 1e-9:
+        return (x, y)
+    scale = limit / length
+    return (x * scale, y * scale)
+
+
+def _random_unit_vec2(rng: random.Random) -> Tuple[float, float]:
+    angle = rng.random() * math.tau
+    return (math.cos(angle), math.sin(angle))
+
+
+def _node_growth_grid(points: List[Vec3], cell_size: float) -> Dict[Tuple[int, int], List[int]]:
+    grid: Dict[Tuple[int, int], List[int]] = {}
+    for i, p in enumerate(points):
+        key = (math.floor(p[0] / cell_size), math.floor(p[1] / cell_size))
+        grid.setdefault(key, []).append(i)
+    return grid
+
+
+def _node_growth_neighbors(point: Vec3, grid: Dict[Tuple[int, int], List[int]], cell_size: float) -> List[int]:
+    cx = math.floor(point[0] / cell_size)
+    cy = math.floor(point[1] / cell_size)
+    out: List[int] = []
+    for ox in (-1, 0, 1):
+        for oy in (-1, 0, 1):
+            out.extend(grid.get((cx + ox, cy + oy), []))
+    return out
+
+
+def _p5_node_growth_step(
+    points: List[Vec3],
+    velocities: List[Tuple[float, float]],
+    max_speeds: List[float],
+    max_forces: List[float],
+    params: Dict[str, Any],
+    boundary_inset: float,
+    rng: random.Random,
+) -> Tuple[List[Vec3], List[Tuple[float, float]], List[float], List[float]]:
+    if len(points) < 3:
+        return points, velocities, max_speeds, max_forces
+
+    target_spacing = max(1e-4, float(params.get("target_spacing", params.get("split_distance", 0.035))))
+    min_separation = float(params.get("min_separation", params.get("separation_distance", target_spacing * 1.15)))
+    neighbor_dist = float(params.get("neighbor_dist", params.get("cohesion_distance", target_spacing * 3.0)))
+    separate_weight = float(params.get("separate_weight", params.get("separation_weight", 1.5)))
+    cohesion_weight = float(params.get("cohesion_weight", 0.25))
+    max_speed_default = float(params.get("max_speed", params.get("node_max_speed", target_spacing * 0.16)))
+    max_force_default = float(params.get("max_force", params.get("node_max_force", max_speed_default * 1.25)))
+    max_edge_length = float(params.get("max_edge_length", params.get("split_distance", target_spacing * 1.22)))
+    max_nodes = max(3, int(params.get("max_nodes", params.get("max_points", 500))))
+    boundary_clearance = float(params.get("boundary_clearance", params.get("edge_clearance", target_spacing * 0.45)))
+    boundary_dist = float(params.get("boundary_avoid_distance", params.get("boundary_avoid_radius", target_spacing * 2.0)))
+    boundary_weight = float(params.get("boundary_weight", 1.2))
+    allow_boundary_slide = _param_bool(params, "allow_boundary_slide", True)
+
+    cell_size = max(min_separation, neighbor_dist, boundary_dist, 1e-6)
+    grid = _node_growth_grid(points, cell_size)
+    next_points: List[Vec3] = []
+    next_velocities: List[Tuple[float, float]] = []
+
+    for i, p in enumerate(points):
+        vx, vy = velocities[i] if i < len(velocities) else _random_unit_vec2(rng)
+        max_speed = max_speeds[i] if i < len(max_speeds) else max_speed_default
+        max_force = max_forces[i] if i < len(max_forces) else max_force_default
+
+        sep_x = 0.0
+        sep_y = 0.0
+        coh_x = 0.0
+        coh_y = 0.0
+        coh_count = 0
+        for j in _node_growth_neighbors(p, grid, cell_size):
+            if j == i:
+                continue
+            q = points[j]
+            dx = p[0] - q[0]
+            dy = p[1] - q[1]
+            d = math.sqrt(dx * dx + dy * dy) + 1e-6
+            if d < min_separation:
+                sep_x += dx / (d * d)
+                sep_y += dy / (d * d)
+            if d < neighbor_dist:
+                coh_x += q[0]
+                coh_y += q[1]
+                coh_count += 1
+
+        if sep_x * sep_x + sep_y * sep_y > 1e-12:
+            sep_len = math.sqrt(sep_x * sep_x + sep_y * sep_y)
+            sep_x = sep_x / sep_len * max_speed - vx
+            sep_y = sep_y / sep_len * max_speed - vy
+            sep_x, sep_y = _limit_vec2(sep_x, sep_y, max_force)
+
+        if coh_count > 0:
+            coh_x = coh_x / coh_count - p[0]
+            coh_y = coh_y / coh_count - p[1]
+            coh_len = math.sqrt(coh_x * coh_x + coh_y * coh_y)
+            if coh_len > 1e-9:
+                coh_x = coh_x / coh_len * max_speed - vx
+                coh_y = coh_y / coh_len * max_speed - vy
+                coh_x, coh_y = _limit_vec2(coh_x, coh_y, max_force)
+            else:
+                coh_x = 0.0
+                coh_y = 0.0
+
+        force_x = sep_x * separate_weight + coh_x * cohesion_weight
+        force_y = sep_y * separate_weight + coh_y * cohesion_weight
+
+        dist_to_boundary, bx, by = _nearest_profile_boundary_vector(params, p, boundary_inset)
+        if dist_to_boundary < boundary_dist:
+            strength = (1.0 - dist_to_boundary / max(boundary_dist, 1e-6)) ** 2
+            force_x += bx * max_force * boundary_weight * strength
+            force_y += by * max_force * boundary_weight * strength
+
+        nvx, nvy = _limit_vec2(vx + force_x, vy + force_y, max_speed)
+        candidate = (p[0] + nvx, p[1] + nvy, p[2])
+        if not _point_inside_profile(params, candidate[0], candidate[1], boundary_inset):
+            if allow_boundary_slide:
+                candidate = _project_point_inside_profile(params, candidate, boundary_inset + boundary_clearance)
+                nvx = candidate[0] - p[0]
+                nvy = candidate[1] - p[1]
+            else:
+                candidate = p
+                nvx = 0.0
+                nvy = 0.0
+        else:
+            candidate_dist, _, _ = _nearest_profile_boundary_vector(params, candidate, boundary_inset)
+            if candidate_dist < boundary_clearance:
+                candidate = p
+                nvx = 0.0
+                nvy = 0.0
+        next_points.append(candidate)
+        next_velocities.append((nvx, nvy))
+
+    grown_points: List[Vec3] = []
+    grown_velocities: List[Tuple[float, float]] = []
+    grown_speeds: List[float] = []
+    grown_forces: List[float] = []
+    for i, p in enumerate(next_points):
+        j = (i + 1) % len(next_points)
+        q = next_points[j]
+        grown_points.append(p)
+        grown_velocities.append(next_velocities[i])
+        grown_speeds.append(max_speeds[i] if i < len(max_speeds) else max_speed_default)
+        grown_forces.append(max_forces[i] if i < len(max_forces) else max_force_default)
+        d = math.sqrt((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 + (p[2] - q[2]) ** 2)
+        if d > max_edge_length and len(grown_points) < max_nodes:
+            mx = (p[0] + q[0]) * 0.5
+            my = (p[1] + q[1]) * 0.5
+            mz = (p[2] + q[2]) * 0.5
+            rvx, rvy = _random_unit_vec2(rng)
+            speed = ((max_speeds[i] if i < len(max_speeds) else max_speed_default) + (max_speeds[j] if j < len(max_speeds) else max_speed_default)) * 0.5
+            force = ((max_forces[i] if i < len(max_forces) else max_force_default) + (max_forces[j] if j < len(max_forces) else max_force_default)) * 0.5
+            grown_points.append((mx, my, mz))
+            grown_velocities.append((rvx * speed, rvy * speed))
+            grown_speeds.append(speed)
+            grown_forces.append(force)
+
+    return grown_points, grown_velocities, grown_speeds, grown_forces
+
+
+def _contour_points_from_object(ref_name: str, obn: Optional[Dict[str, LiveObject]], count: int) -> List[Vec3]:
+    if not ref_name or not obn:
+        return []
+    contour_obj = obn.get(ref_name)
+    if contour_obj is None:
+        return []
+    params = contour_obj.meta.get("params", {}) or {}
+    raw = params.get("boundary_points", params.get("contour_points", params.get("profile_points", params.get("points"))))
+    pts = _coerce_point_list(raw)
+    if pts:
+        transform = contour_obj.meta.get("transform")
+        if isinstance(transform, dict):
+            pts = [apply_transform_to_point(p, transform) for p in pts]
+        if count > 0:
+            return _resample_closed_polyline(pts, max(3, count))
+        return pts
+    if contour_obj.mesh and contour_obj.mesh.vertices:
+        if count > 0:
+            return _resample_closed_polyline(contour_obj.mesh.vertices, max(3, count))
+        return contour_obj.mesh.vertices
+    return []
+
+
+def _apply_contour_reference_params(params: Dict[str, Any], obn: Optional[Dict[str, LiveObject]]) -> Dict[str, Any]:
+    ref = params.get("contour", params.get("boundary_object", params.get("contour_object")))
+    if not ref:
+        return params
+    # Keep explicit contour objects lightweight by default. A rectangle contour
+    # should stay four boundary edges for containment math; section_points is a
+    # loft/rendering detail and should not silently turn the boundary into
+    # hundreds of collision segments.
+    contour_count = 0
+    if params.get("contour_points_count") is not None or params.get("boundary_samples") is not None:
+        contour_count = max(16, int(params.get("contour_points_count", params.get("boundary_samples", 160))))
+    pts = _contour_points_from_object(str(ref), obn, contour_count)
+    if len(pts) < 3:
+        return params
+    out = dict(params)
+    out["boundary_points"] = [[x, y, z] for x, y, z in pts]
+    cx, cy, cz = _polyline_centroid(pts)
+    out.setdefault("boundary_center", [cx, cy, cz])
+    return out
+
+
+def _apply_growth_curl(points: List[Vec3], params: Dict[str, Any], boundary_inset: float, step: int) -> List[Vec3]:
+    curl_strength = float(params.get("curl_strength", params.get("curviness", 0.0)))
+    if curl_strength <= 0 or len(points) < 4:
+        return points
+
+    spacing = float(params.get("target_spacing", params.get("split_distance", 0.035)))
+    frequency = float(params.get("curl_frequency", max(3.0, len(points) / 18.0)))
+    phase_speed = float(params.get("curl_phase_speed", 0.12))
+    amount = curl_strength * spacing
+    center_x = sum(p[0] for p in points) / len(points)
+    center_y = sum(p[1] for p in points) / len(points)
+
+    curled: List[Vec3] = []
+    for i, p in enumerate(points):
+        prev = points[(i - 1) % len(points)]
+        nxt = points[(i + 1) % len(points)]
+        tx, ty = nxt[0] - prev[0], nxt[1] - prev[1]
+        length = math.sqrt(tx * tx + ty * ty) + 1e-6
+        nx, ny = -ty / length, tx / length
+        # Keep the normal facing consistently relative to the profile center so the
+        # sinusoid creates alternating inward/outward lobes instead of drifting.
+        radial_x, radial_y = p[0] - center_x, p[1] - center_y
+        if nx * radial_x + ny * radial_y < 0:
+            nx, ny = -nx, -ny
+        wave = math.sin((i / max(1, len(points))) * math.tau * frequency + step * phase_speed)
+        curled.append(_project_point_inside_profile(params, (p[0] + nx * wave * amount, p[1] + ny * wave * amount, p[2]), boundary_inset))
+    return curled
+
+
+def _constrained_growth_step(points: List[Vec3], params: Dict[str, Any], boundary_inset: float, step: int = 0) -> List[Vec3]:
+    local_params = dict(params)
+    target_spacing_value = local_params.get("target_spacing")
+    if target_spacing_value is not None:
+        target_spacing = max(1e-4, float(target_spacing_value))
+        local_params.setdefault("split_distance", target_spacing * 1.18)
+        local_params.setdefault("repel_radius", target_spacing * 1.55)
+        local_params.setdefault("max_step", target_spacing * 0.18)
+        local_params.setdefault("attraction", 0.055)
+        local_params.setdefault("repulsion", 0.006)
+    if "normal_pressure" not in local_params and "curve_pressure" not in local_params:
+        pressure = float(local_params.get("growth_pressure", 0.55))
+        spacing = float(local_params.get("target_spacing", local_params.get("split_distance", 0.035)))
+        local_params["normal_pressure"] = max(0.0, pressure) * spacing * 0.10
+    direction = str(local_params.get("growth_direction", "outward")).strip().lower()
+    normal_pressure = float(local_params.get("normal_pressure", local_params.get("curve_pressure", 0.0)))
+    if direction in {"inward", "inside", "interior"}:
+        normal_pressure = -abs(normal_pressure)
+    elif direction in {"outward", "outside", "exterior"}:
+        normal_pressure = abs(normal_pressure)
+    ramp_steps = int(local_params.get("growth_ramp_steps", local_params.get("ramp_steps", 0)))
+    ramp = 1.0
+    if ramp_steps > 0:
+        ramp_exponent = max(0.1, float(local_params.get("growth_ramp_exponent", 1.0)))
+        ramp = min(1.0, max(0.0, step / max(1, ramp_steps))) ** ramp_exponent
+        normal_pressure *= ramp
+    local_params["normal_pressure"] = normal_pressure
+    repulsion_ramp_steps = int(local_params.get("repulsion_ramp_steps", local_params.get("force_ramp_steps", ramp_steps)))
+    if repulsion_ramp_steps > 0:
+        repulsion_ramp_exponent = max(0.1, float(local_params.get("repulsion_ramp_exponent", local_params.get("growth_ramp_exponent", 1.0))))
+        repulsion_ramp = min(1.0, max(0.0, step / max(1, repulsion_ramp_steps))) ** repulsion_ramp_exponent
+        local_params["repulsion"] = float(local_params.get("repulsion", 0.015)) * repulsion_ramp
+    if "outward" not in local_params and "growth_rate" not in local_params:
+        local_params["outward"] = 0.0
+    next_points = _differential_growth_step(points, local_params)
+    projected = [_project_point_inside_profile(params, p, boundary_inset) for p in next_points]
+    projected = _apply_growth_curl(projected, params, boundary_inset, step)
+    smooth_each_step = int(params.get("smooth_each_step", params.get("growth_smooth", 1)))
+    smooth_strength = float(params.get("smooth_strength", 0.35))
+    if smooth_each_step > 0:
+        projected = _smooth_closed_polyline(projected, smooth_each_step, smooth_strength)
+        projected = [_project_point_inside_profile(params, p, boundary_inset) for p in projected]
+    return projected
+
+
+def differential_growth_constrained_stack_mesh(params: Dict[str, Any], obn: Optional[Dict[str, LiveObject]] = None) -> Mesh:
+    params = dict(params)
+    params = _apply_contour_reference_params(params, obn)
+    growth_solver = str(params.get("growth_solver", params.get("solver", "force"))).strip().lower()
+    unified_points = params.get("curve_points", params.get("profile_resolution", params.get("resolution")))
+    if unified_points is not None:
+        point_count = max(8, int(unified_points))
+        params["section_points"] = point_count
+        if growth_solver in {"node", "p5", "p5_node", "differential_node"}:
+            params.setdefault("points", int(params.get("nodes_start", params.get("initial_nodes", 10))))
+            params.setdefault("max_points", int(params.get("max_nodes", 500)))
+        else:
+            params["points"] = point_count
+            params.setdefault("max_points", max(point_count, int(point_count * 1.45)))
+    elif "points" in params:
+        params["section_points"] = max(8, int(params.get("points", 160)))
+
+    target_spacing_value = params.get("target_spacing")
+    if target_spacing_value is not None:
+        target_spacing = max(1e-4, float(target_spacing_value))
+        params.setdefault("split_distance", target_spacing * 1.18)
+        params.setdefault("repel_radius", target_spacing * 1.55)
+        params.setdefault("max_step", target_spacing * 0.18)
+        params.setdefault("section_points", max(96, min(220, int(round(_closed_polyline_length(_profile_outline_points(params, 96)) / target_spacing * 1.15)))))
+        params.setdefault("max_points", max(240, min(720, int(round(_closed_polyline_length(_profile_outline_points(params, 96)) / target_spacing * 6.0)))))
+
+    rng = random.Random(int(params.get("seed", 1)))
+    steps = max(0, int(params.get("steps", 120)))
+    sample_every = max(1, int(params.get("sample_every", params.get("section_every", 10))))
+    section_count = max(8, int(params.get("section_points", 160)))
+    thickness = float(params.get("thickness", params.get("section_thickness", 0.015)))
+    tube_segments = max(6, int(params.get("tube_segments", 10)))
+    make_surface = _param_bool(params, "loft", _param_bool(params, "surface", True))
+    show_sections = _param_bool(params, "show_sections", True)
+    cap_ends = _param_bool(params, "cap_ends", False)
+    boundary_inset = float(params.get("boundary_margin", params.get("infill_margin", max(thickness * 1.75, 0.015))))
+    seed_scale = float(params.get("seed_scale", params.get("infill_seed_scale", 0.28)))
+    seed_scale = max(0.05, min(0.98, seed_scale))
+    max_points = int(params.get("max_points", max(section_count, 900)))
+    show_seed_section = _param_bool(params, "show_seed_section", _param_bool(params, "show_initial_section", False))
+    progressive = _param_bool(params, "progressive", show_seed_section)
+    fixed_point_count = _param_bool(params, "fixed_point_count", progressive)
+    warmup_steps = max(0, int(params.get("warmup_steps", params.get("start_after_steps", params.get("skip_initial_steps", 0)))))
+    if progressive:
+        warmup_steps = 0
+
+    seed_params = dict(params)
+    seed_params["jitter"] = params.get("jitter", 0.0)
+    pts = _scale_points_xy(_initial_growth_profile(seed_params, rng), seed_scale)
+    seed_center = params.get("seed_center", params.get("boundary_center"))
+    if isinstance(seed_center, list) and len(seed_center) >= 2:
+        cx = sum(p[0] for p in pts) / max(1, len(pts))
+        cy = sum(p[1] for p in pts) / max(1, len(pts))
+        cz = sum(p[2] for p in pts) / max(1, len(pts))
+        sx, sy, sz = float(seed_center[0]), float(seed_center[1]), float(seed_center[2]) if len(seed_center) >= 3 else 0.0
+        pts = [(x + sx - cx, y + sy - cy, z + sz - cz) for x, y, z in pts]
+    pts = [_project_point_inside_profile(params, p, boundary_inset) for p in pts]
+    seed_smooth = max(0, int(params.get("seed_smooth", params.get("initial_smooth", 2))))
+    if seed_smooth > 0:
+        seed_smooth_strength = float(params.get("seed_smooth_strength", params.get("initial_smooth_strength", 0.35)))
+        pts = _smooth_closed_polyline(pts, seed_smooth, seed_smooth_strength)
+        pts = [_project_point_inside_profile(params, p, boundary_inset) for p in pts]
+    if fixed_point_count and growth_solver not in {"node", "p5", "p5_node", "differential_node"}:
+        pts = _resample_closed_polyline(pts, section_count)
+
+    snapshots: List[List[Vec3]] = []
+    if show_seed_section:
+        snapshots.append(list(pts))
+
+    velocities: List[Tuple[float, float]] = []
+    max_speeds: List[float] = []
+    max_forces: List[float] = []
+    if growth_solver in {"node", "p5", "p5_node", "differential_node"}:
+        target_spacing = max(1e-4, float(params.get("target_spacing", params.get("split_distance", 0.035))))
+        default_speed = float(params.get("max_speed", params.get("node_max_speed", target_spacing * 0.16)))
+        default_force = float(params.get("max_force", params.get("node_max_force", default_speed * 1.25)))
+        velocities = []
+        for _ in pts:
+            ux, uy = _random_unit_vec2(rng)
+            velocities.append((ux * default_speed, uy * default_speed))
+        max_speeds = [default_speed for _ in pts]
+        max_forces = [default_force for _ in pts]
+
+    for warmup_step in range(1, warmup_steps + 1):
+        step_params = dict(params)
+        step_params["max_points"] = max_points
+        if growth_solver in {"node", "p5", "p5_node", "differential_node"}:
+            pts, velocities, max_speeds, max_forces = _p5_node_growth_step(pts, velocities, max_speeds, max_forces, step_params, boundary_inset, rng)
+        elif growth_solver in {"vector", "step", "incremental", "conservative"}:
+            pts = _vector_growth_step(pts, step_params, boundary_inset, warmup_step)
+        else:
+            pts = _constrained_growth_step(pts, step_params, boundary_inset, warmup_step)
+        if fixed_point_count and growth_solver not in {"node", "p5", "p5_node", "differential_node"}:
+            pts = _resample_closed_polyline(pts, section_count)
+
+    if (not show_seed_section) or warmup_steps > 0:
+        snapshots.append(list(pts))
+    for step in range(1, steps + 1):
+        step_params = dict(params)
+        step_params["max_points"] = max_points
+        if growth_solver in {"node", "p5", "p5_node", "differential_node"}:
+            pts, velocities, max_speeds, max_forces = _p5_node_growth_step(pts, velocities, max_speeds, max_forces, step_params, boundary_inset, rng)
+        elif growth_solver in {"vector", "step", "incremental", "conservative"}:
+            pts = _vector_growth_step(pts, step_params, boundary_inset, warmup_steps + step)
+        else:
+            pts = _constrained_growth_step(pts, step_params, boundary_inset, warmup_steps + step)
+        if fixed_point_count and growth_solver not in {"node", "p5", "p5_node", "differential_node"}:
+            pts = _resample_closed_polyline(pts, section_count)
+        if step % sample_every == 0 or step == steps:
+            snapshots.append(list(pts))
+
+    if len(snapshots) < 2:
+        snapshots.append(list(pts))
+
+    height = params.get("height")
+    if height is not None:
+        layer_height = float(height) / max(1, len(snapshots) - 1)
+    else:
+        layer_height = float(params.get("layer_height", 0.05))
+    z0 = float(params.get("start_z", 0.0))
+
+    section_smooth = int(params.get("section_smooth", 2))
+    section_smooth_strength = float(params.get("section_smooth_strength", 0.32))
+    sections: List[List[Vec3]] = []
+    previous_section: Optional[List[Vec3]] = None
+    for i, section in enumerate(snapshots):
+        z = z0 + i * layer_height
+        resampled = _resample_closed_polyline(section, section_count)
+        if section_smooth > 0:
+            resampled = _smooth_closed_polyline(resampled, section_smooth, section_smooth_strength)
+        next_section = [_project_point_inside_profile(params, (x, y, z), boundary_inset) for x, y, _ in resampled]
+        if previous_section is not None:
+            next_section = _align_closed_polyline_to_reference(next_section, previous_section)
+        sections.append(next_section)
+        previous_section = next_section
+
+    max_section_delta = float(params.get("max_section_delta", params.get("loft_max_delta", 0.0)))
+    if max_section_delta > 0:
+        sections = _limit_section_delta(sections, max_section_delta)
+    vertical_smooth = int(params.get("vertical_smooth", params.get("loft_smooth", 0)))
+    if vertical_smooth > 0:
+        vertical_strength = float(params.get("vertical_smooth_strength", params.get("loft_smooth_strength", 0.35)))
+        sections = _smooth_section_stack(sections, vertical_smooth, vertical_strength, _param_bool(params, "preserve_ends", True))
+
+    mesh = Mesh()
+    if make_surface and len(sections) >= 2:
+        triangulate_loft = _param_bool(params, "triangulate_loft", _param_bool(params, "loft_triangles", False))
+        _add_section_loft(mesh, sections, cap_ends, triangulate_loft)
+
+    if show_sections and thickness > 0:
+        for section in sections:
+            for i, p in enumerate(section):
+                mesh.extend(tube_between(p, section[(i + 1) % len(section)], thickness, tube_segments))
+
+    return mesh
+
+
+def differential_growth_infill_stack_mesh(params: Dict[str, Any]) -> Mesh:
+    steps = max(0, int(params.get("steps", 120)))
+    sample_every = max(1, int(params.get("sample_every", params.get("section_every", 10))))
+    section_count = max(16, int(params.get("section_points", 128)))
+    thickness = float(params.get("thickness", params.get("section_thickness", 0.015)))
+    tube_segments = max(6, int(params.get("tube_segments", 10)))
+    make_wall = _param_bool(params, "loft", _param_bool(params, "surface", True))
+    show_infill = _param_bool(params, "show_infill", True)
+    layer_stride = max(1, int(params.get("infill_layer_stride", params.get("visible_every", 1))))
+
+    layers = max(2, steps // sample_every + 1)
+    if steps % sample_every:
+        layers += 1
+    height = params.get("height")
+    if height is not None:
+        layer_height = float(height) / max(1, layers - 1)
+    else:
+        layer_height = float(params.get("layer_height", 0.05))
+    z0 = float(params.get("start_z", 0.0))
+
+    mesh = Mesh()
+    if make_wall:
+        _add_profile_wall(mesh, params, layers, z0, layer_height, section_count)
+
+    if show_infill and thickness > 0:
+        for layer_index in range(layers):
+            if layer_index % layer_stride != 0 and layer_index != layers - 1:
+                continue
+            z = z0 + layer_index * layer_height
+            path = _serpentine_infill_path(params, z, layer_index)
+            for a, b in zip(path, path[1:]):
+                mesh.extend(tube_between(a, b, thickness, tube_segments))
+
+    return mesh
+
+
+def _radial_scaled_section(section: List[Vec3], offset: float) -> List[Vec3]:
+    if not section:
+        return []
+    cx = sum(p[0] for p in section) / len(section)
+    cy = sum(p[1] for p in section) / len(section)
+    out: List[Vec3] = []
+    for x, y, z in section:
+        dx, dy = x - cx, y - cy
+        d = math.sqrt(dx * dx + dy * dy) + 1e-6
+        out.append((x + dx / d * offset, y + dy / d * offset, z))
+    return out
+
+
+def _pleat_section(params: Dict[str, Any], count: int, z: float, t: float) -> List[Vec3]:
+    base = _profile_outline_points(params, count, z, 0.0)
+    cx = sum(p[0] for p in base) / len(base)
+    cy = sum(p[1] for p in base) / len(base)
+    amplitude = float(params.get("pleat_amplitude", params.get("curl_amplitude", 0.045)))
+    frequency = float(params.get("pleat_frequency", params.get("curl_frequency", 10.0)))
+    phase = float(params.get("phase", 0.0)) + math.tau * float(params.get("twist", 0.0)) * t
+    secondary_amp = float(params.get("secondary_amplitude", amplitude * 0.22))
+    secondary_freq = float(params.get("secondary_frequency", frequency * 2.0 + 1.0))
+    vertical_amp = float(params.get("vertical_wave_amplitude", 0.0))
+    vertical_freq = float(params.get("vertical_wave_frequency", 2.0))
+    flare = float(params.get("flare", 0.0))
+    waist = float(params.get("waist", 0.0))
+
+    section: List[Vec3] = []
+    for i, p in enumerate(base):
+        x, y, _ = p
+        dx, dy = x - cx, y - cy
+        d = math.sqrt(dx * dx + dy * dy) + 1e-6
+        nx, ny = dx / d, dy / d
+        u = i / max(1, count)
+        wave = math.sin(math.tau * frequency * u + phase) * amplitude
+        wave += math.sin(math.tau * secondary_freq * u - phase * 0.65) * secondary_amp
+        wave += math.sin(math.tau * vertical_freq * t + phase) * vertical_amp
+        scale_offset = flare * t + waist * math.sin(math.pi * t)
+        section.append((x + nx * (wave + scale_offset), y + ny * (wave + scale_offset), z))
+    return section
+
+
+def pleated_wall_stack_mesh(params: Dict[str, Any]) -> Mesh:
+    section_count = max(16, int(params.get("section_points", 180)))
+    height = float(params.get("height", 0.5))
+    levels = params.get("levels")
+    if levels is None:
+        sample_every = max(1, int(params.get("sample_every", 10)))
+        levels = max(3, int(params.get("steps", 180)) // sample_every + 1)
+    level_count = max(2, int(levels))
+    wall_thickness = float(params.get("wall_thickness", max(float(params.get("thickness", 0.012)) * 2.6, 0.03)))
+    z0 = float(params.get("start_z", 0.0))
+    cap_bottom = _param_bool(params, "cap_bottom", True)
+    rim_thickness = float(params.get("rim_thickness", wall_thickness * 1.15))
+
+    outer_sections: List[List[Vec3]] = []
+    inner_sections: List[List[Vec3]] = []
+    for level in range(level_count):
+        t = level / max(1, level_count - 1)
+        z = z0 + height * t
+        outer = _pleat_section(params, section_count, z, t)
+        inner = _radial_scaled_section(outer, -wall_thickness)
+        outer_sections.append(outer)
+        inner_sections.append(inner)
+
+    mesh = Mesh()
+    outer_base = len(mesh.vertices) + 1
+    for section in outer_sections:
+        mesh.vertices.extend(section)
+    for level in range(level_count - 1):
+        row = outer_base + level * section_count
+        nxt = row + section_count
+        for j in range(section_count):
+            mesh.faces.append([row + j, row + (j + 1) % section_count, nxt + (j + 1) % section_count, nxt + j])
+
+    inner_base = len(mesh.vertices) + 1
+    for section in inner_sections:
+        mesh.vertices.extend(section)
+    for level in range(level_count - 1):
+        row = inner_base + level * section_count
+        nxt = row + section_count
+        for j in range(section_count):
+            mesh.faces.append([row + j, nxt + j, nxt + (j + 1) % section_count, row + (j + 1) % section_count])
+
+    top_outer = outer_base + (level_count - 1) * section_count
+    top_inner = inner_base + (level_count - 1) * section_count
+    bottom_outer = outer_base
+    bottom_inner = inner_base
+    for j in range(section_count):
+        mesh.faces.append([top_outer + j, top_outer + (j + 1) % section_count, top_inner + (j + 1) % section_count, top_inner + j])
+        if cap_bottom:
+            mesh.faces.append([bottom_outer + j, bottom_inner + j, bottom_inner + (j + 1) % section_count, bottom_outer + (j + 1) % section_count])
+
+    if rim_thickness > wall_thickness:
+        rim_outer = _radial_scaled_section(outer_sections[-1], rim_thickness - wall_thickness)
+        rim_base = len(mesh.vertices) + 1
+        mesh.vertices.extend(rim_outer)
+        for j in range(section_count):
+            mesh.faces.append([top_outer + j, rim_base + j, rim_base + (j + 1) % section_count, top_outer + (j + 1) % section_count])
+
+    return mesh
+
+
+def differential_growth_stack_mesh(params: Dict[str, Any], obn: Optional[Dict[str, LiveObject]] = None) -> Mesh:
+    mode = str(params.get("mode", params.get("style", "boundary"))).strip().lower()
+    if mode in {"pleated_wall", "pleated", "folded_wall", "vase"}:
+        return pleated_wall_stack_mesh(params)
+    if mode in {"infill", "interior", "constrained", "growth_infill", "space_filling"}:
+        return differential_growth_constrained_stack_mesh(params, obn)
+    if mode in {"path_infill", "serpentine", "print_infill"}:
+        return differential_growth_infill_stack_mesh(params)
+
+    rng = random.Random(int(params.get("seed", 1)))
+    steps = max(0, int(params.get("steps", 120)))
+    sample_every = max(1, int(params.get("sample_every", params.get("section_every", 10))))
+    section_count = max(8, int(params.get("section_points", 96)))
+    thickness = float(params.get("thickness", params.get("section_thickness", 0.015)))
+    tube_segments = max(4, int(params.get("tube_segments", 8)))
+    show_sections = _param_bool(params, "show_sections", True)
+    make_surface = _param_bool(params, "loft", _param_bool(params, "surface", True))
+    cap_ends = _param_bool(params, "cap_ends", False)
+
+    pts = _initial_growth_profile(params, rng)
+    snapshots: List[List[Vec3]] = [list(pts)]
+    for step in range(1, steps + 1):
+        pts = _differential_growth_step(pts, params)
+        if step % sample_every == 0 or step == steps:
+            snapshots.append(list(pts))
+
+    if len(snapshots) < 2:
+        snapshots.append(list(pts))
+
+    height = params.get("height")
+    if height is not None:
+        layer_height = float(height) / max(1, len(snapshots) - 1)
+    else:
+        layer_height = float(params.get("layer_height", 0.05))
+    z0 = float(params.get("start_z", 0.0))
+
+    sections: List[List[Vec3]] = []
+    for i, section in enumerate(snapshots):
+        z = z0 + i * layer_height
+        resampled = _resample_closed_polyline(section, section_count)
+        sections.append([(x, y, z) for x, y, _ in resampled])
+
+    mesh = Mesh()
+
+    if make_surface and len(sections) >= 2:
+        base_index = len(mesh.vertices) + 1
+        for section in sections:
+            mesh.vertices.extend(section)
+        for level in range(len(sections) - 1):
+            row = base_index + level * section_count
+            nxt = row + section_count
+            for j in range(section_count):
+                mesh.faces.append([
+                    row + j,
+                    row + (j + 1) % section_count,
+                    nxt + (j + 1) % section_count,
+                    nxt + j,
+                ])
+        if cap_ends:
+            mesh.faces.append([base_index + i for i in range(section_count - 1, -1, -1)])
+            top = base_index + (len(sections) - 1) * section_count
+            mesh.faces.append([top + i for i in range(section_count)])
+
+    if show_sections and thickness > 0:
+        for section in sections:
+            for i, p in enumerate(section):
+                mesh.extend(tube_between(p, section[(i + 1) % len(section)], thickness, tube_segments))
+
     return mesh
 
 
@@ -4077,6 +7542,9 @@ def generate_procedural(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         p = dict(params)
         along = p.get("along")
         if along and obn is not None:
+            curve_mesh = curve_path_sweep_mesh(p, center, obn)
+            if curve_mesh is not None:
+                return curve_mesh
             p = merge_sweep_params_with_along_helix(p, along, obn)
         path_k = str(p.get("path", p.get("shape", "line"))).lower()
         if path_k == "helix" or p.get("path_radius") is not None or bool(along and obn is not None):
@@ -4319,12 +7787,49 @@ def generate_simulation(obj: LiveObject, obn: Optional[Dict[str, LiveObject]] = 
         return cellular_automata_instances_mesh(params, obn)
     if sim == "differential_growth":
         return differential_growth_mesh(params)
+    if sim == "differential_growth_stack":
+        return differential_growth_stack_mesh(params, obn)
     if sim == "boids":
         return boids_mesh(params)
     if sim == "flow_field":
         return flow_field_mesh(params)
 
     return obj.mesh.copy()
+
+
+def is_curve_path_reference(obj: LiveObject, obn: Dict[str, LiveObject]) -> bool:
+    if is_explicitly_visible(obj):
+        return False
+    if str(obj.meta.get("source", "")).lower() != "procedural":
+        return False
+    if str(obj.meta.get("type", "")).lower() != "curve":
+        return False
+    for other in obn.values():
+        if other is obj:
+            continue
+        if str(other.meta.get("source", "")).lower() != "procedural":
+            continue
+        if str(other.meta.get("type", "")).lower() == "sweep":
+            params = other.meta.get("params", {}) or {}
+            if isinstance(params, dict) and str(params.get("along", "")).strip() == obj.name:
+                return True
+        for op in other.ops:
+            if str(op.get("cmd", "")).lower() == "sweep" and str(op.get("along", "")).strip() == obj.name:
+                return True
+    return False
+
+
+def is_metadata_only_curve_reference(obj: LiveObject, obn: Dict[str, LiveObject]) -> bool:
+    if not (is_render_hidden(obj) or is_curve_path_reference(obj, obn)):
+        return False
+    if str(obj.meta.get("source", "")).lower() != "procedural":
+        return False
+    if str(obj.meta.get("type", "")).lower() != "curve":
+        return False
+    params = obj.meta.get("params", {}) or {}
+    if not isinstance(params, dict):
+        return False
+    return any(k in params for k in ("points", "boundary_points", "contour_points", "profile_points", "kind"))
 
 
 def execute_scene(scene: Scene) -> Scene:
@@ -4358,12 +7863,16 @@ def execute_scene(scene: Scene) -> Scene:
         if source == "procedural":
             oldp = obj.meta.get("params")
             resolved_params = get_effective_params(obj, obn)
-            if kernel_default and not str(resolved_params.get("kernel", "")).strip():
+            metadata_only_curve = is_metadata_only_curve_reference(obj, obn)
+            if kernel_default and not metadata_only_curve and not str(resolved_params.get("kernel", "")).strip():
                 resolved_params["kernel"] = kernel_default
             obj.meta["params"] = resolved_params
             try:
-                base = generate_procedural(obj, obn)
-                base = apply_meta_instancing(base, obj, obn)
+                if metadata_only_curve:
+                    base = Mesh()
+                else:
+                    base = generate_procedural(obj, obn)
+                    base = apply_meta_instancing(base, obj, obn)
             finally:
                 if oldp is not None:
                     obj.meta["params"] = oldp
@@ -4371,6 +7880,8 @@ def execute_scene(scene: Scene) -> Scene:
             base = generate_sdf(obj, obn)
         elif source == "simulation":
             base = generate_simulation(obj, obn)
+        elif source == "recipe":
+            base = generate_recipe(obj, obn)
         else:
             base = obj.mesh.copy()
 
@@ -4387,18 +7898,24 @@ def serialize_scene(scene: Scene) -> str:
     # Remove trailing empty lines from header
     while lines and not lines[-1].strip():
         lines.pop()
+    existing_materials = set()
+    for line in lines:
+        t = line.strip()
+        if t.startswith("#@material_preset:"):
+            parts = t.split(":", 1)[1].strip().split()
+            if parts:
+                existing_materials.add(parts[0])
     # Output material presets
     for name, params in scene.materials.items():
+        if name in existing_materials:
+            continue
         param_str = " ".join([f"{k}={v}" for k, v in params.items()])
         lines.append(f"#@material_preset: {name} {param_str}")
     global_index = 1
     first_object = True
+    obn: Dict[str, LiveObject] = {o.name: o for o in scene.objects}
 
     for obj in scene.objects:
-        # Skip helper objects (used only as boolean operands)
-        if obj.meta.get("helper") or obj.meta.get("hidden"):
-            continue
-
         # Only add empty line before object if it's not the first object
         if not first_object:
             lines.append("")
@@ -4407,6 +7924,13 @@ def serialize_scene(scene: Scene) -> str:
         lines.append(f"{obj.declaration} {obj.name}")
         # Filter out old runtime debug messages
         lines.extend([l for l in obj.meta_lines if not l.strip().startswith("#@runtime:")])
+
+        # Keep hidden/helper objects editable in the executed source, but do not
+        # serialize their geometry. The UI can still expose their metadata while
+        # the canvas has no v/f cache to render for them.
+        if is_render_hidden(obj) or is_curve_path_reference(obj, obn):
+            continue
+
         # Add material metadata if present
         material_name = obj.meta.get("material")
         if material_name and material_name in scene.materials:
@@ -4439,7 +7963,8 @@ def main() -> None:
     output.write_text(serialize_scene(scene), encoding="utf-8")
 
     # Count only non-helper objects for output stats
-    visible_objects = [o for o in scene.objects if not (o.meta.get("helper") or o.meta.get("hidden"))]
+    obn = {o.name: o for o in scene.objects}
+    visible_objects = [o for o in scene.objects if not (is_render_hidden(o) or is_curve_path_reference(o, obn))]
     print(f"Wrote {output}")
     print(f"Objects: {len(visible_objects)}")
     print(f"Vertices: {sum(len(o.mesh.vertices) for o in visible_objects)}")
