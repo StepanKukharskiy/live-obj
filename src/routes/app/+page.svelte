@@ -456,9 +456,12 @@ o cube
 			const materialToStandard = (material: THREE.Material): THREE.MeshStandardMaterial => {
 				const base = material as THREE.MeshPhongMaterial & { name?: string };
 				const taggedMaterial = o.name ? materialTagsByObject.get(o.name) : null;
-				const colorName = hasPerObjectMaterials ? base.name : o.name;
 				const taggedPreset = taggedMaterial ? materialPresets.get(taggedMaterial) : undefined;
-				const colorValue = taggedPreset?.color;
+				const useMtlPreset =
+					hasPerObjectMaterials && base.name ? materialPresets.get(base.name) : undefined;
+				const preset = taggedPreset ?? useMtlPreset;
+				const colorName = taggedMaterial ?? (hasPerObjectMaterials ? base.name : o.name);
+				const colorValue = preset?.color;
 				const color = colorValue
 					? new THREE.Color(colorValue)
 					: colorName
@@ -466,10 +469,10 @@ o cube
 						: new THREE.Color(objectColor);
 				return new THREE.MeshStandardMaterial({
 					color,
-					metalness: taggedPreset?.metalness ?? 0.12,
-					roughness: taggedPreset?.roughness ?? 0.48,
+					metalness: preset?.metalness ?? 0.12,
+					roughness: preset?.roughness ?? 0.48,
 					side: THREE.DoubleSide,
-					flatShading: taggedPreset?.shadeSmooth === false,
+					flatShading: preset?.shadeSmooth === false,
 					wireframe
 				});
 			};

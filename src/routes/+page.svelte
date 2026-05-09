@@ -1,4 +1,6 @@
 <script lang="ts">
+	import gehryVideo from '$lib/assets/Gehry.mp4';
+
 	function goToApp() {
 		window.location.href = '/app';
 	}
@@ -91,10 +93,15 @@
 			<div class="video-section">
 				<div class="video-background-text">{backgroundText}</div>
 				<div class="video-placeholder">
-					<div class="video-placeholder-content">
-						<div class="play-icon">▶</div>
-						<p>Watch it in action</p>
-					</div>
+					<video
+						class="hero-video"
+						src={gehryVideo}
+						autoplay
+						muted
+						loop
+						playsinline
+						aria-label="Spellshape generating a Gehry-inspired pavilion"
+					></video>
 				</div>
 			</div>
 
@@ -173,15 +180,20 @@
 		width: 100%;
 		max-width: 800px;
 		aspect-ratio: 16/9;
-		background: linear-gradient(135deg, #0000eb 0%, #0000a8 100%);
+		background: #0f1117;
 		border-radius: 16px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
 		margin: 0 auto;
 		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
 		position: relative;
 		z-index: 1;
+		overflow: hidden;
+	}
+
+	.hero-video {
+		display: block;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
 	}
 
 	.landing-header {
@@ -264,29 +276,11 @@
 		width: 100%;
 		max-width: 800px;
 		aspect-ratio: 16/9;
-		background: linear-gradient(135deg, #0000eb 0%, #0000a8 100%);
+		background: #0f1117;
 		border-radius: 16px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
 		margin: 0 auto 48px auto;
 		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-	}
-
-	.video-placeholder-content {
-		text-align: center;
-		color: white;
-	}
-
-	.play-icon {
-		font-size: 64px;
-		margin-bottom: 16px;
-	}
-
-	.video-placeholder-content p {
-		font-size: 18px;
-		font-weight: 500;
-		margin: 0;
+		overflow: hidden;
 	}
 
 	.cta-button {
