@@ -141,6 +141,31 @@ Part rules:
 - Prefer one named object per requested part. Use multiple named objects only when the part naturally has a few major sub-parts.
 - Add #@post comments only as generic refinement intent; do not invent custom executor ops.`;
 
+const RAW_OBJ_ITERATIVE_PART_SYSTEM_PROMPT = `You generate one raw OBJ part for an iterative scene builder.
+
+Return only OBJ text for the requested part. Do not return JSON, Markdown, a scene header, or explanations.
+
+Critical OBJ indexing rule:
+- Use local vertex numbering in your returned part. The first vertex you emit is v 1 for face purposes.
+- Face lines must reference only vertices defined in this returned part, starting at 1.
+- The server will remap indices when appending to the full scene.
+
+Raw-first part rules:
+- Use #@source: llm_mesh for the generated object/group.
+- Include #@editable, #@semantic, #@part_of, and #@depends_on metadata where useful.
+- Generate only the requested part, not the whole scene.
+- Fit the part to the existing scene summary and dependencies.
+- Use y as the vertical/up axis unless the current scene summary says otherwise.
+- Keep geometry compact and low-poly: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell.
+- Prefer quads and simple polygons. Avoid dense grids, seam networks, individual fasteners, tiny bolts, repeated micro-panels, or context clutter in the first pass.
+- Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
+- If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
+- Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
+- Use #@post: for raw-post modifier intent. Supported #@post ops are symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
+- Put material and tag assignments inside #@post blocks. Do not use #@ops in raw-first mode.
+- Always use block syntax: #@post: then lines like #@ - material name=mat_id. Do not emit inline #@post material id=... lines.`;
+
 export type LiveObjLlmResult = {
 	content: string;
 	usage?: TokenUsage;
@@ -297,9 +322,10 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 	const modeHint =
 		options?.currentSceneMode === 'raw_obj'
 			? [
-					'Current scene mode: raw OBJ / tools-off output.',
-					'Important: existing v/f mesh blocks are source geometry, not disposable cache. Preserve existing mesh object blocks unless the user asks to replace them.',
-					'For duplication/mirroring requests on raw OBJ scenes, prefer adding #@ops array/transform metadata to existing mesh objects or adding separate copied object blocks; do not convert the whole scene to procedural metadata.'
+					'Current scene mode: raw OBJ / raw-post output.',
+					'Important: existing v/f mesh blocks are source base geometry, not disposable cache. Preserve existing mesh object blocks unless the user asks to replace them.',
+					'For cleanup, symmetry, repetition, material, or tag edits on raw OBJ scenes, prefer adding or editing #@post blocks. Do not add #@ops and do not convert the whole scene to procedural metadata.',
+					'Supported #@post ops include symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.'
 				].join('\n')
 			: [
 					'Current scene mode: Live OBJ / tools-on output.',
@@ -364,6 +390,7 @@ export async function requestLiveObjPartPlanFromLlm(
 		imageDataUrl?: string;
 		imageDataUrls?: string[];
 		currentLiveObjSummary?: string;
+		useProcedural?: boolean;
 	}
 ): Promise<LiveObjLlmResult> {
 	const imageDataUrls = normalizeImageDataUrls([
@@ -372,6 +399,9 @@ export async function requestLiveObjPartPlanFromLlm(
 	]);
 	const prompt = [
 		`User request: ${userMessage.trim() || IMAGE_ONLY_USER_HINT}`,
+		options?.useProcedural === false
+			? 'Generation mode: raw-first OBJ with per-part raw meshes and optional #@post modifier stacks.'
+			: 'Generation mode: Live OBJ with procedural/recipe/raw mesh parts as appropriate.',
 		options?.currentLiveObjSummary
 			? `Current scene summary:\n${options.currentLiveObjSummary}`
 			: 'Current scene summary: (empty scene)',
@@ -399,7 +429,7 @@ export async function requestLiveObjPartFromLlm(
 		currentLiveObjSummary: string;
 	},
 	model: string = DEFAULT_LIVE_OBJ_MODEL,
-	options?: { imageDataUrl?: string; imageDataUrls?: string[] }
+	options?: { imageDataUrl?: string; imageDataUrls?: string[]; useProcedural?: boolean }
 ): Promise<LiveObjLlmResult> {
 	const imageDataUrls = normalizeImageDataUrls([
 		...(options?.imageDataUrls ?? []),
@@ -418,9 +448,13 @@ export async function requestLiveObjPartFromLlm(
 	]
 		.filter(Boolean)
 		.join('\n');
+	const systemPrompt =
+		options?.useProcedural === false
+			? RAW_OBJ_ITERATIVE_PART_SYSTEM_PROMPT
+			: LIVE_OBJ_ITERATIVE_PART_SYSTEM_PROMPT;
 	const { content, usage } = await requestChatCompletion({
 		messages: [
-			{ role: 'system', content: LIVE_OBJ_ITERATIVE_PART_SYSTEM_PROMPT },
+			{ role: 'system', content: systemPrompt },
 			{ role: 'user', content: userMessageContent(prompt, imageDataUrls) }
 		],
 		model: model || DEFAULT_LIVE_OBJ_MODEL,

@@ -3,7 +3,11 @@ import type { RequestHandler } from './$types';
 import { DEFAULT_LIVE_OBJ_MODEL, requestLiveObjPartFromLlm } from '$lib/server/llm/liveObjChat';
 import { withLlmRequestOverrides } from '$lib/server/llm/chat';
 import type { TokenUsage } from '$lib/server/llm/chat';
-import { expandLiveObjWithExecutor, stripCodeFences } from '$lib/server/liveObj/pipeline';
+import {
+	expandLiveObjWithExecutor,
+	expandRawObjWithPostExecutor,
+	stripCodeFences
+} from '$lib/server/liveObj/pipeline';
 import {
 	appendGeneratedPart,
 	summarizeLiveObjForPlanning,
@@ -23,6 +27,7 @@ type Body = {
 	model?: string;
 	apiKey?: string;
 	apiUrl?: string;
+	useProcedural?: boolean;
 };
 
 function normalizeImageUrls(...groups: Array<string | string[] | undefined>): string[] {
@@ -73,6 +78,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const model = body.model?.trim() || DEFAULT_LIVE_OBJ_MODEL;
 	const reqApiKey = body.apiKey?.trim() || undefined;
 	const reqApiUrl = body.apiUrl?.trim() || undefined;
+	const useProcedural = body.useProcedural !== false;
 	let part: IterativePartSpec;
 	try {
 		part = resolvePart(body);
@@ -98,7 +104,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							currentLiveObjSummary
 						},
 						model,
-						{ imageDataUrls: imageUrls }
+						{ imageDataUrls: imageUrls, useProcedural }
 					)
 			);
 			if (llmResult.usage) usages.push(llmResult.usage);
@@ -133,6 +139,8 @@ export const POST: RequestHandler = async ({ request }) => {
 					`Validation errors: ${validation.errors.join('; ')}`,
 					'Return the same requested part again as valid OBJ/Live OBJ only.',
 					'Use a unique object name, include vertices, and ensure all faces reference existing local vertices.',
+					'Every raw mesh object/group with vertices must include faces. Do not emit vertices-only logs, rings, supports, lattices, or usemtl-only groups.',
+					'If you model logs or beams as rings/sections, connect each adjacent section with side faces and cap the ends.',
 					'Previous invalid output:',
 					rawPart
 				].join('\n')
@@ -157,7 +165,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		let executedObj = appended.liveObj;
 		let executorWarnings: string[] = [];
 		try {
-			const executed = await expandLiveObjWithExecutor(appended.liveObj);
+			const executed = useProcedural
+				? await expandLiveObjWithExecutor(appended.liveObj)
+				: await expandRawObjWithPostExecutor(appended.liveObj);
 			executedObj = executed.executedObj;
 			executorWarnings = executed.warnings;
 		} catch (e) {

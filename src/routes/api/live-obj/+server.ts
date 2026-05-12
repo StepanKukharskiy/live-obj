@@ -8,7 +8,11 @@ import {
 	requestLiveObjSurgicalPatchFromLlm
 } from '$lib/server/llm/liveObjChat';
 import { withLlmRequestOverrides } from '$lib/server/llm/chat';
-import { expandLiveObjWithExecutor, stripCodeFences } from '$lib/server/liveObj/pipeline';
+import {
+	expandLiveObjWithExecutor,
+	expandRawObjWithPostExecutor,
+	stripCodeFences
+} from '$lib/server/liveObj/pipeline';
 import {
 	applyLiveObjSurgicalPatch,
 	parseLiveObjSurgicalPatch
@@ -150,6 +154,18 @@ const KNOWN_RECIPE_OPS = new Set([
 	'emit_mesh',
 	'emit_panels'
 ]);
+const KNOWN_POST_OPS = new Set([
+	'symmetrize',
+	'mirror',
+	'array',
+	'subdivide',
+	'smooth',
+	'simplify',
+	'snap_to_ground',
+	'center_origin',
+	'material',
+	'tag'
+]);
 const KNOWN_SOURCES = new Set([
 	'procedural',
 	'llm_mesh',
@@ -216,8 +232,16 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 	const unknown = new Set<string>();
 	// Track which `#@` block the current `#@ - …` line belongs to so SDF ops
 	// don't get flagged as if they were top-level mesh ops.
-	let block: 'ops' | 'sdf' | 'recipe' | 'anchors' | 'params' | 'placement' | 'controls' | 'other' =
-		'other';
+	let block:
+		| 'ops'
+		| 'sdf'
+		| 'recipe'
+		| 'post'
+		| 'anchors'
+		| 'params'
+		| 'placement'
+		| 'controls'
+		| 'other' = 'other';
 	for (const rawLine of liveObj.split('\n')) {
 		const line = rawLine.trim();
 		if (!line.startsWith('#@')) {
@@ -237,6 +261,19 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 		}
 		if (body.startsWith('recipe:')) {
 			block = 'recipe';
+			continue;
+		}
+		if (body.startsWith('post:')) {
+			block = 'post';
+			continue;
+		}
+		if (body.startsWith('post ')) {
+			const opToken = body.slice('post '.length).trim().split(/\s+/)[0] ?? '';
+			if (opToken) {
+				const op = opToken.toLowerCase();
+				if (!KNOWN_POST_OPS.has(op)) unknown.add(`post:${op}`);
+			}
+			block = 'other';
 			continue;
 		}
 		if (body.startsWith('anchors:')) {
@@ -270,6 +307,8 @@ function unknownOpsInLiveObj(liveObj: string): string[] {
 				if (!KNOWN_SDF_OPS.has(op)) unknown.add(`sdf:${op}`);
 			} else if (block === 'recipe') {
 				if (!KNOWN_RECIPE_OPS.has(op)) unknown.add(`recipe:${op}`);
+			} else if (block === 'post') {
+				if (!KNOWN_POST_OPS.has(op)) unknown.add(`post:${op}`);
 			} else {
 				if (!KNOWN_OPS.has(op)) unknown.add(op);
 			}
@@ -421,7 +460,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	const reqApiUrl = body.apiUrl?.trim() || undefined;
 	try {
 		if (useSurgicalEdit) {
-			const baseLiveObj = applyKernelDefaultHeader(currentLiveObj, kernelDefault);
+			const baseLiveObj = useProcedural
+				? applyKernelDefaultHeader(currentLiveObj, kernelDefault)
+				: currentLiveObj;
 			const patchResult = await requestAndApplySurgicalPatch({
 				userMessage,
 				baseLiveObj,
@@ -449,7 +490,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			rawLlm = llmResult.content;
 			if (llmResult.usage) llmUsages.push(llmResult.usage);
 			correctedLiveObj = stripCodeFences(rawLlm);
-			correctedLiveObj = applyKernelDefaultHeader(correctedLiveObj, kernelDefault);
+			if (useProcedural)
+				correctedLiveObj = applyKernelDefaultHeader(correctedLiveObj, kernelDefault);
 		}
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
@@ -464,7 +506,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	let executorWarnings: string[] = [];
 	let executorError: string | undefined;
 	try {
-		const result = await expandLiveObjWithExecutor(correctedLiveObj);
+		const result = useProcedural
+			? await expandLiveObjWithExecutor(correctedLiveObj)
+			: await expandRawObjWithPostExecutor(correctedLiveObj);
 		executedObj = result.executedObj;
 		executorWarnings = result.warnings;
 	} catch (e) {
@@ -491,7 +535,9 @@ export const POST: RequestHandler = async ({ request }) => {
 					reqApiUrl
 				});
 				llmUsages = [...llmUsages, ...correctionPatch.usages];
-				const retryResult = await expandLiveObjWithExecutor(correctionPatch.liveObj);
+				const retryResult = useProcedural
+					? await expandLiveObjWithExecutor(correctionPatch.liveObj)
+					: await expandRawObjWithPostExecutor(correctionPatch.liveObj);
 				const assistantMessage = await requestAssistantChatMessage({
 					userMessage,
 					previousLiveObj: currentLiveObj,
@@ -528,13 +574,16 @@ export const POST: RequestHandler = async ({ request }) => {
 						requestLiveObjFromLlm(
 							correctionPrompt,
 							[...history, { role: 'assistant', content: correctedLiveObj }],
-							model
+							model,
+							{ useProcedural }
 						)
 				);
 				if (correctedResult.usage) llmUsages.push(correctedResult.usage);
 				const retryLiveObj = stripCodeFences(correctedResult.content);
 				try {
-					const retryResult = await expandLiveObjWithExecutor(retryLiveObj);
+					const retryResult = useProcedural
+						? await expandLiveObjWithExecutor(retryLiveObj)
+						: await expandRawObjWithPostExecutor(retryLiveObj);
 					const assistantMessage = await requestAssistantChatMessage({
 						userMessage,
 						previousLiveObj: currentLiveObj,

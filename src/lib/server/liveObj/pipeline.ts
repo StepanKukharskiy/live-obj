@@ -14,6 +14,12 @@ function resolveExecutorScript(): string {
 	return path.join(process.cwd(), 'src/routes/api/executor/live_obj_executor_v02.py');
 }
 
+function resolveRawPostExecutorScript(): string {
+	const env = process.env.RAW_OBJ_POST_EXECUTOR_PATH;
+	if (env) return env;
+	return path.join(process.cwd(), 'src/routes/api/executor/raw_obj_post_executor.py');
+}
+
 /** Interpreters to try, in order. GUI-launched Node often has no PATH entry for python3 — use absolute fallbacks. */
 function pythonInterpreterCandidates(): string[] {
 	const fromEnv = process.env.LIVE_OBJ_PYTHON?.trim();
@@ -60,7 +66,11 @@ async function probeCadQuery(cmd: string): Promise<string> {
 	}
 }
 
-async function runPythonOnFile(script: string, inputPath: string, outputPath: string): Promise<string> {
+async function runPythonOnFile(
+	script: string,
+	inputPath: string,
+	outputPath: string
+): Promise<string> {
 	const args = [script, inputPath, '-o', outputPath];
 	const tried = pythonInterpreterCandidates();
 	let lastEnoent: unknown;
@@ -81,11 +91,7 @@ async function runPythonOnFile(script: string, inputPath: string, outputPath: st
 		}
 	}
 	const tail =
-		lastEnoent instanceof Error
-			? lastEnoent.message
-			: lastEnoent != null
-				? String(lastEnoent)
-				: '';
+		lastEnoent instanceof Error ? lastEnoent.message : lastEnoent != null ? String(lastEnoent) : '';
 	throw new Error(
 		`No Python interpreter found (tried: ${tried.join(', ')}). Set LIVE_OBJ_PYTHON to your python3 executable; LIVE_OBJ_EXECUTOR_PATH only sets the script path. ${tail}`.trim()
 	);
@@ -117,6 +123,26 @@ export async function expandLiveObjWithExecutor(liveObjText: string): Promise<Ex
 	const outputPath = path.join(dir, 'scene.executed.obj');
 	try {
 		await writeFile(inputPath, liveObjText, 'utf-8');
+		const stderr = await runPythonOnFile(script, inputPath, outputPath);
+		const executedObj = await readFile(outputPath, 'utf-8');
+		return { executedObj, warnings: parseExecutorWarnings(stderr) };
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Run `raw_obj_post_executor.py` on raw LLM OBJ text; returns the OBJ with the
+ * `#@post:` modifier stack applied. This is separate from the Live OBJ executor
+ * so raw-first experiments do not change metadata-driven execution semantics.
+ */
+export async function expandRawObjWithPostExecutor(rawObjText: string): Promise<ExecutorResult> {
+	const script = resolveRawPostExecutorScript();
+	const dir = await mkdtemp(path.join(tmpdir(), 'raw-obj-post-'));
+	const inputPath = path.join(dir, 'scene.obj');
+	const outputPath = path.join(dir, 'scene.post.obj');
+	try {
+		await writeFile(inputPath, rawObjText, 'utf-8');
 		const stderr = await runPythonOnFile(script, inputPath, outputPath);
 		const executedObj = await readFile(outputPath, 'utf-8');
 		return { executedObj, warnings: parseExecutorWarnings(stderr) };

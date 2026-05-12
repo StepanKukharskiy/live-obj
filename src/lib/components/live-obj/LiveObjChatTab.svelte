@@ -575,7 +575,7 @@ f 90 81 161 170`
 		onSend,
 		onLaunchObjExample,
 		input = $bindable(''),
-		useProcedural = $bindable(true),
+		useProcedural = $bindable(false),
 		feedbackLoop = $bindable(false),
 		feedbackPasses = $bindable(3),
 		attachedDataUrl = $bindable<string | undefined>(undefined)

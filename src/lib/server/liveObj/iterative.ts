@@ -73,7 +73,10 @@ function materialPresetIds(sourceText: string): Set<string> {
 function materialReferences(sourceText: string): string[] {
 	return [
 		...[...sourceText.matchAll(/^\s*#@\s*-\s*material\s+name=([^\s]+)/gm)].map((m) => m[1]),
-		...[...sourceText.matchAll(/^\s*#@material:\s*([^\s]+)/gm)].map((m) => m[1])
+		...[...sourceText.matchAll(/^\s*#@material:\s*([^\s]+)/gm)].map((m) => m[1]),
+		...[...sourceText.matchAll(/^\s*#@post\s+material\s+(?:.*\s)?(?:name|id)=([^\s]+)/gm)].map(
+			(m) => m[1]
+		)
 	];
 }
 
@@ -100,6 +103,37 @@ function countVertices(sourceText: string): number {
 
 function countFaces(sourceText: string): number {
 	return sourceText.split('\n').filter((line) => /^\s*f\s+/.test(line)).length;
+}
+
+function objectGeometryCoverage(sourceText: string): Array<{
+	name: string;
+	vertexCount: number;
+	faceCount: number;
+	usedVertexCount: number;
+}> {
+	const blocks = sourceText.split(/(?=^\s*o\s+)/gm).filter((block) => /^\s*o\s+/.test(block));
+	let globalVertexStart = 1;
+	const out: Array<{
+		name: string;
+		vertexCount: number;
+		faceCount: number;
+		usedVertexCount: number;
+	}> = [];
+	for (const block of blocks) {
+		const name = block.match(/^\s*o\s+([^\s#]+)/m)?.[1] ?? 'unnamed';
+		const vertexCount = countVertices(block);
+		const faceCount = countFaces(block);
+		const localGlobalIndices = new Set(
+			Array.from({ length: vertexCount }, (_, index) => globalVertexStart + index)
+		);
+		const used = new Set<number>();
+		for (const ref of block.split('\n').flatMap(elementVertexRefs)) {
+			if (localGlobalIndices.has(ref)) used.add(ref);
+		}
+		out.push({ name, vertexCount, faceCount, usedVertexCount: used.size });
+		globalVertexStart += vertexCount;
+	}
+	return out;
 }
 
 function bboxFromText(sourceText: string): LiveObjValidationResult['bbox'] {
@@ -227,6 +261,23 @@ export function validateLiveObj(liveObj: string, previousLiveObj = ''): LiveObjV
 		!/#@source:\s*(procedural|sdf|simulation|recipe|assembly)/.test(liveObj)
 	) {
 		errors.push('No vertices found and no executable procedural source was declared');
+	}
+	for (const coverage of objectGeometryCoverage(liveObj)) {
+		if (coverage.vertexCount > 0 && coverage.faceCount === 0) {
+			errors.push(
+				`Object '${coverage.name}' defines ${coverage.vertexCount} vertices but no faces, so it will not render.`
+			);
+			continue;
+		}
+		if (
+			coverage.vertexCount >= 12 &&
+			coverage.faceCount > 0 &&
+			coverage.usedVertexCount / coverage.vertexCount < 0.5
+		) {
+			errors.push(
+				`Object '${coverage.name}' only references ${coverage.usedVertexCount}/${coverage.vertexCount} vertices in faces. Add faces for the generated geometry instead of leaving vertices unused.`
+			);
+		}
 	}
 
 	for (const [i, line] of liveObj.split('\n').entries()) {

@@ -32,9 +32,7 @@
 	let editorValue = $state('');
 
 	function seedEditor(): string {
-		const metaBody = meshBasis.trim()
-			? stripLiveObjMeshLines(meshBasis)
-			: '';
+		const metaBody = meshBasis.trim() ? stripLiveObjMeshLines(meshBasis) : '';
 		if (sourceTab === 'live') {
 			const liveBody = String(liveObjText || '').trim() ? liveObjText : emptySourceHint;
 			return showMeshLines ? liveBody : stripLiveObjMeshLines(liveBody) || emptySourceHint;
@@ -72,6 +70,15 @@
 		if (sourceTab === 'meta') return null;
 
 		const cleaned = stripCodeFences(t).trim();
+		const liveSource = String(liveObjText || '');
+		const isRawPostSource =
+			/#@post(?:\s*:|\s+)/.test(liveSource) &&
+			!/#@source:\s*(procedural|assembly|sdf|simulation|recipe)/i.test(liveSource);
+		if (sourceTab === 'executed' && isRawPostSource && containsObjMeshLines(liveSource)) {
+			const metadataOnly = stripLiveObjMeshLines(cleaned);
+			if (metadataOnly.trim()) return mergeMetadataWithMesh(metadataOnly, liveSource).trim();
+			return liveSource.trim();
+		}
 		if (!showMeshLines && !containsObjMeshLines(cleaned)) {
 			const fullSource =
 				sourceTab === 'raw'
@@ -106,7 +113,7 @@
 	<div class="live-obj-source-editor planner-output-meta">
 		{#key `${sceneEpoch}-${sourceTab}`}
 			<MonacoEditor
-					language="obj"
+				language="obj"
 				theme="vs"
 				readOnly={!editable}
 				viewOnly={true}
@@ -119,7 +126,9 @@
 						type="button"
 						class="planner-monaco-action-btn"
 						disabled={sourceTab === 'meta'}
-						title={showMeshLines ? 'Hide v/f mesh lines in editor' : 'Show v/f mesh lines in editor'}
+						title={showMeshLines
+							? 'Hide v/f mesh lines in editor'
+							: 'Show v/f mesh lines in editor'}
 						onclick={() => {
 							showMeshLines = !showMeshLines;
 						}}

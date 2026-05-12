@@ -198,8 +198,12 @@ o cube
 	function parseObjectMaterialTags(sourceText: string): Map<string, string> {
 		const byObject = new Map<string, string>();
 		let currentObject: string | null = null;
+		const tokenValue = (raw: string, key: string): string | undefined => {
+			const match = raw.match(new RegExp(`(?:^|\\s)${key}=([a-zA-Z0-9_\\-.]+)`));
+			return match?.[1];
+		};
 		for (const line of sourceText.split(/\r?\n/)) {
-			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
+			const objectMatch = line.match(/^\s*[og]\s+([^\s#]+)/);
 			if (objectMatch) {
 				currentObject = objectMatch[1];
 				continue;
@@ -212,6 +216,13 @@ o cube
 			}
 			const inlineMaterialMatch = line.match(/^\s*#@material:\s*(?:name=)?([a-zA-Z0-9_\-.]+)\s*$/);
 			if (inlineMaterialMatch) byObject.set(currentObject, inlineMaterialMatch[1]);
+			const inlinePostMaterialMatch = line.match(/^\s*#@post\s+material\s+(.+)$/);
+			if (inlinePostMaterialMatch) {
+				const rest = inlinePostMaterialMatch[1];
+				const materialName = tokenValue(rest, 'name') ?? tokenValue(rest, 'id');
+				const target = tokenValue(rest, 'target') ?? currentObject;
+				if (materialName && target) byObject.set(target, materialName);
+			}
 		}
 		return byObject;
 	}
@@ -497,20 +508,29 @@ o cube
 		const text = String(updatedLiveObj ?? '');
 		if (!text.trim()) return;
 		statusLine = null;
-		const sceneWithKernel = applyKernelDefaultHeader(text);
+		const hasLiveSources = /#@source:\s*(procedural|assembly|sdf|simulation|recipe)/i.test(text);
+		const useRawPostExecutor = currentSceneMode === 'raw_obj' && !hasLiveSources;
+		const sceneWithKernel = useRawPostExecutor ? text : applyKernelDefaultHeader(text);
 		try {
-			const res = await fetch('/api/live-obj/execute', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ liveObj: sceneWithKernel })
-			});
+			const res = await fetch(
+				useRawPostExecutor ? '/api/raw-obj/execute' : '/api/live-obj/execute',
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(
+						useRawPostExecutor ? { rawObj: sceneWithKernel } : { liveObj: sceneWithKernel }
+					)
+				}
+			);
 			const payload = await res.json();
 			if (!res.ok)
 				throw new Error(
 					payload.detail || payload.message || res.statusText || 'Metadata regeneration failed'
 				);
-			liveObjText = String(payload.liveObj ?? sceneWithKernel);
-			currentSceneMode = /#@source:\s*(procedural|assembly|sdf|simulation)/i.test(liveObjText)
+			liveObjText = String(payload.liveObj ?? payload.rawObj ?? sceneWithKernel);
+			currentSceneMode = /#@source:\s*(procedural|assembly|sdf|simulation|recipe)/i.test(
+				liveObjText
+			)
 				? 'live_obj'
 				: currentSceneMode;
 			executedObjText =
@@ -618,10 +638,11 @@ o cube
 		return readableObjectName(part.role || part.id || `part ${index + 1}`);
 	}
 
-	function emptyIterativeLiveObj(): string {
-		return applyKernelDefaultHeader(`#@live_obj_version: 0.1
+	function emptyIterativeLiveObj(useProcedural: boolean): string {
+		const empty = `#@live_obj_version: 0.1
 #@up: y
-`);
+`;
+		return useProcedural ? applyKernelDefaultHeader(empty) : empty;
 	}
 
 	function planMaterialPresetLines(plan: IterativeScenePlan): string[] {
@@ -753,7 +774,7 @@ o cube
 	}) {
 		const { text, initialImageUrls, model, useProcedural } = args;
 		let accumulatedUsage: TokenUsageSummary | undefined;
-		let workingLiveObj = emptyIterativeLiveObj();
+		let workingLiveObj = emptyIterativeLiveObj(useProcedural);
 		let combinedRaw = '';
 
 		iterativeGenerationActive = true;
@@ -770,6 +791,7 @@ o cube
 					...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
 					currentLiveObj: '',
 					model,
+					useProcedural,
 					apiKey: providerSettings.apiKey?.trim() || undefined,
 					apiUrl: providerSettings.apiUrl?.trim() || undefined
 				})
@@ -807,6 +829,7 @@ o cube
 						plan,
 						part,
 						model,
+						useProcedural,
 						apiKey: providerSettings.apiKey?.trim() || undefined,
 						apiUrl: providerSettings.apiUrl?.trim() || undefined
 					})
@@ -974,7 +997,7 @@ o cube
 	}
 
 	async function sendPrompt(payload: SendPromptPayload) {
-		const { text, useProcedural = true, imageDataUrl } = payload;
+		const { text, useProcedural = false, imageDataUrl } = payload;
 		const initialImageUrls = [
 			...new Set(
 				[...(payload.imageDataUrls ?? []), ...(imageDataUrl ? [imageDataUrl] : [])]

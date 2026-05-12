@@ -140,7 +140,7 @@
 
 	let activeTab = $state<PanelTab>('chat');
 	let chatInput = $state('');
-	let chatUseProcedural = $state(true);
+	let chatUseProcedural = $state(false);
 	let chatFeedbackLoop = $state(false);
 	let chatFeedbackPasses = $state(3);
 	let chatAttachedDataUrl = $state<string | undefined>(undefined);

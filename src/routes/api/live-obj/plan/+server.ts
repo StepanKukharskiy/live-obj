@@ -17,6 +17,7 @@ type Body = {
 	model?: string;
 	apiKey?: string;
 	apiUrl?: string;
+	useProcedural?: boolean;
 };
 
 function normalizeImageUrls(...groups: Array<string | string[] | undefined>): string[] {
@@ -69,7 +70,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			() =>
 				requestLiveObjPartPlanFromLlm(userMessage, model, {
 					imageDataUrls: imageUrls,
-					currentLiveObjSummary
+					currentLiveObjSummary,
+					useProcedural: body.useProcedural !== false
 				})
 		);
 		const plan = parseJsonObject<IterativeScenePlan>(llmResult.content);
