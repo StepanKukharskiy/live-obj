@@ -14,6 +14,7 @@
 		historyContent?: string;
 		meta?: string;
 		tokenUsage?: TokenUsageSummary;
+		transient?: boolean;
 	};
 
 	type IterativePartSpec = {
@@ -93,6 +94,11 @@
 		executorWarnings?: string[];
 		llmUsage?: TokenUsageSummary;
 	};
+
+	type IterativeAppendStreamEvent =
+		| { type: 'preview_line'; line: string }
+		| ({ type: 'final' } & IterativeAppendPayload)
+		| { type: 'error'; message?: string };
 
 	let showPanel = $state(true);
 	let msgs = $state<ChatMsg[]>([]);
@@ -504,6 +510,19 @@ o cube
 		applyObjectControls();
 	}
 
+	function countObjFaceLines(objText: string): number {
+		return objText.split('\n').filter((line) => /^\s*f\s+/.test(line)).length;
+	}
+
+	function tryApplyObjString(objText: string, sourceTextForMetadata: string = objText): boolean {
+		try {
+			applyObjString(objText, sourceTextForMetadata);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	async function regenerateFromMetadata(updatedLiveObj: string) {
 		const text = String(updatedLiveObj ?? '');
 		if (!text.trim()) return;
@@ -634,8 +653,28 @@ o cube
 		msgs = [...msgs, { role: 'assistant', content, historyContent: '', ...(meta ? { meta } : {}) }];
 	}
 
+	function showThinkingMessage(content: string) {
+		msgs = [
+			...msgs.filter((message) => !message.transient),
+			{ role: 'assistant', content, historyContent: '', transient: true }
+		];
+	}
+
+	function clearThinkingMessage() {
+		msgs = msgs.filter((message) => !message.transient);
+	}
+
 	function partLabel(part: IterativePartSpec, index: number): string {
 		return readableObjectName(part.role || part.id || `part ${index + 1}`);
+	}
+
+	function planPartsMessage(plan: IterativeScenePlan): string {
+		const lines = plan.parts.map((part, index) => {
+			const method = part.method?.trim() ? ` [${part.method.trim()}]` : '';
+			const prompt = part.prompt?.trim() ? ` — ${part.prompt.trim()}` : '';
+			return `${index + 1}. ${partLabel(part, index)}${method}${prompt}`;
+		});
+		return `Parts:\n${lines.join('\n')}`;
 	}
 
 	function emptyIterativeLiveObj(useProcedural: boolean): string {
@@ -766,6 +805,140 @@ o cube
 		].join('\n');
 	}
 
+	async function appendPartWithStreamingPreview(args: {
+		text: string;
+		initialImageUrls: string[];
+		workingLiveObj: string;
+		plan: IterativeScenePlan;
+		part: IterativePartSpec;
+		model: string;
+		label: string;
+	}) {
+		const { text, initialImageUrls, workingLiveObj, plan, part, model, label } = args;
+		showThinkingMessage(`Thinking about ${label}...`);
+		const res = await fetch('/api/live-obj/append-part/stream', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				userMessage: text,
+				...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
+				...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
+				currentLiveObj: workingLiveObj,
+				plan,
+				part,
+				model,
+				useProcedural: false,
+				apiKey: providerSettings.apiKey?.trim() || undefined,
+				apiUrl: providerSettings.apiUrl?.trim() || undefined
+			})
+		});
+		if (!res.ok) {
+			const payload = (await res.json().catch(() => ({}))) as IterativeAppendPayload;
+			throw new Error(payload.message || res.statusText || `Streamed part ${label} failed`);
+		}
+		if (!res.body) throw new Error(`Streamed part ${label} failed: response had no body`);
+
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		const previewLines: string[] = [];
+		let buffer = '';
+		let finalPayload: IterativeAppendPayload | null = null;
+		let lastPreviewAt = 0;
+		let faceLinesSincePreview = 0;
+		const baseFaceCount = countObjFaceLines(workingLiveObj);
+		const flushPreview = (force = false) => {
+			if (previewLines.length === 0) return;
+			const now = performance.now();
+			if (!force && faceLinesSincePreview < 4 && now - lastPreviewAt < 220) return;
+			const previewObj = `${workingLiveObj.trimEnd()}\n${previewLines.join('\n')}\n`;
+			if (countObjFaceLines(previewObj) <= baseFaceCount) return;
+			if (!tryApplyObjString(previewObj, previewObj)) return;
+			lastPreviewAt = now;
+			faceLinesSincePreview = 0;
+		};
+
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split(/\r?\n/);
+			buffer = lines.pop() ?? '';
+			for (const line of lines) {
+				if (!line.trim()) continue;
+				const event = JSON.parse(line) as IterativeAppendStreamEvent;
+				if (event.type === 'preview_line') {
+					previewLines.push(event.line);
+					if (/^\s*f\s+/.test(event.line)) faceLinesSincePreview += 1;
+					if (faceLinesSincePreview > 0) clearThinkingMessage();
+					flushPreview(false);
+				} else if (event.type === 'final') {
+					clearThinkingMessage();
+					finalPayload = event;
+				} else if (event.type === 'error') {
+					clearThinkingMessage();
+					throw new Error(event.message || `Streamed part ${label} failed`);
+				}
+			}
+		}
+		if (buffer.trim()) {
+			const event = JSON.parse(buffer) as IterativeAppendStreamEvent;
+			if (event.type === 'final') {
+				clearThinkingMessage();
+				finalPayload = event;
+			} else if (event.type === 'error') {
+				clearThinkingMessage();
+				throw new Error(event.message || `Streamed part ${label} failed`);
+			}
+		}
+		if (!finalPayload) throw new Error(`Streamed part ${label} finished without a final scene`);
+		if (finalPayload.validation && !finalPayload.validation.valid) {
+			throw new Error(finalPayload.validation.errors.join('; ') || `Streamed part ${label} failed`);
+		}
+		flushPreview(true);
+		return finalPayload;
+	}
+
+	async function appendPartWithoutStreaming(args: {
+		text: string;
+		initialImageUrls: string[];
+		workingLiveObj: string;
+		plan: IterativeScenePlan;
+		part: IterativePartSpec;
+		model: string;
+		useProcedural: boolean;
+		partNumber: number;
+	}) {
+		const { text, initialImageUrls, workingLiveObj, plan, part, model, useProcedural, partNumber } =
+			args;
+		const label = partLabel(part, partNumber - 1);
+		showThinkingMessage(`Thinking about ${label}...`);
+		const appendRes = await fetch('/api/live-obj/append-part', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				userMessage: text,
+				...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
+				...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
+				currentLiveObj: workingLiveObj,
+				plan,
+				part,
+				model,
+				useProcedural,
+				apiKey: providerSettings.apiKey?.trim() || undefined,
+				apiUrl: providerSettings.apiUrl?.trim() || undefined
+			})
+		});
+		const payload = (await appendRes.json().catch(() => ({}))) as IterativeAppendPayload;
+		if (!appendRes.ok || !payload.liveObj) {
+			const validationErrors = payload.validation?.errors?.join('; ');
+			throw new Error(
+				validationErrors || payload.message || appendRes.statusText || `Part ${partNumber} failed`
+			);
+		}
+		clearThinkingMessage();
+		return payload;
+	}
+
 	async function runIterativeSceneGeneration(args: {
 		text: string;
 		initialImageUrls: string[];
@@ -782,6 +955,7 @@ o cube
 			const planStartedAt = performance.now();
 			statusLine = 'Planning scene parts.';
 			appendProgressMessage('Planning the scene as separate buildable parts...');
+			showThinkingMessage('Thinking through scene parts...');
 			const planRes = await fetch('/api/live-obj/plan', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -800,6 +974,7 @@ o cube
 			if (!planRes.ok || !planPayload.plan?.parts?.length) {
 				throw new Error(planPayload.message || planRes.statusText || 'Part planning failed');
 			}
+			clearThinkingMessage();
 
 			const plan = planPayload.plan;
 			workingLiveObj = applyPlanMaterialsToHeader(workingLiveObj, plan);
@@ -812,36 +987,53 @@ o cube
 				`Plan ready: ${partCount} part${partCount === 1 ? '' : 's'}.`,
 				`time ${formatDuration(performance.now() - planStartedAt)}`
 			);
+			appendProgressMessage(planPartsMessage(plan));
 
 			for (const [index, part] of plan.parts.entries()) {
 				const label = partLabel(part, index);
 				const partStartedAt = performance.now();
 				statusLine = `Building part ${index + 1}/${partCount}: ${label}.`;
 				appendProgressMessage(`Building ${index + 1}/${partCount}: ${label}.`);
-				const appendRes = await fetch('/api/live-obj/append-part', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						userMessage: text,
-						...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
-						...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
-						currentLiveObj: workingLiveObj,
-						plan,
-						part,
-						model,
-						useProcedural,
-						apiKey: providerSettings.apiKey?.trim() || undefined,
-						apiUrl: providerSettings.apiUrl?.trim() || undefined
-					})
-				});
-				const appendPayload = (await appendRes.json().catch(() => ({}))) as IterativeAppendPayload;
-				if (!appendRes.ok || !appendPayload.liveObj) {
-					const validationErrors = appendPayload.validation?.errors?.join('; ');
+				const appendPayload = useProcedural
+					? await appendPartWithoutStreaming({
+							text,
+							initialImageUrls,
+							workingLiveObj,
+							plan,
+							part,
+							model,
+							useProcedural,
+							partNumber: index + 1
+						})
+					: await appendPartWithStreamingPreview({
+							text,
+							initialImageUrls,
+							workingLiveObj,
+							plan,
+							part,
+							model,
+							label
+						}).catch(async (streamError) => {
+							tryApplyObjString(executedObjText || workingLiveObj, workingLiveObj);
+							appendProgressMessage(
+								`Streaming preview for ${label} failed; retrying with stable append.`,
+								streamError instanceof Error ? streamError.message : String(streamError)
+							);
+							return appendPartWithoutStreaming({
+								text,
+								initialImageUrls,
+								workingLiveObj,
+								plan,
+								part,
+								model,
+								useProcedural,
+								partNumber: index + 1
+							});
+						});
+				if (!appendPayload.liveObj) throw new Error(`Part ${index + 1} failed`);
+				if (appendPayload.validation && !appendPayload.validation.valid) {
 					throw new Error(
-						validationErrors ||
-							appendPayload.message ||
-							appendRes.statusText ||
-							`Part ${index + 1} failed`
+						appendPayload.validation.errors.join('; ') || `Part ${index + 1} failed validation`
 					);
 				}
 
@@ -888,6 +1080,7 @@ o cube
 				}
 			];
 		} finally {
+			clearThinkingMessage();
 			iterativeGenerationActive = false;
 		}
 	}
@@ -932,6 +1125,9 @@ o cube
 			history.push({ role: 'assistant', content: currentLiveObj });
 		}
 
+		showThinkingMessage(
+			isIterativeEdit ? 'Thinking about the edit...' : 'Thinking about the scene...'
+		);
 		const res = await fetch('/api/live-obj', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -953,6 +1149,7 @@ o cube
 		});
 		const payload = (await res.json().catch(() => ({}))) as LiveObjApiPayload;
 		if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
+		clearThinkingMessage();
 
 		liveObjText = String(payload.liveObj ?? '');
 		currentSceneMode = useProcedural ? 'live_obj' : 'raw_obj';
@@ -1060,6 +1257,9 @@ o cube
 						: 'Generating the scene in one model pass...'
 				);
 				const generationStartedAt = performance.now();
+				showThinkingMessage(
+					isIterativeEdit ? 'Thinking about the edit...' : 'Thinking about the scene...'
+				);
 				const res = await fetch('/api/live-obj', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
@@ -1081,6 +1281,7 @@ o cube
 				});
 				const payload = (await res.json().catch(() => ({}))) as LiveObjApiPayload;
 				if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
+				clearThinkingMessage();
 
 				liveObjText = String(payload.liveObj ?? '');
 				currentSceneMode = useProcedural ? 'live_obj' : 'raw_obj';
@@ -1163,10 +1364,12 @@ o cube
 				statusLine = null;
 			}
 		} catch (e) {
+			clearThinkingMessage();
 			const m = e instanceof Error ? e.message : String(e);
 			statusLine = m;
 			msgs = [...msgs, { role: 'assistant', content: `Error: ${m}` }];
 		} finally {
+			clearThinkingMessage();
 			busy = false;
 		}
 	}

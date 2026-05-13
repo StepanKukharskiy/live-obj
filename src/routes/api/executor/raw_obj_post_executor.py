@@ -184,13 +184,16 @@ def parse_obj(path: Path) -> Scene:
 
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
-        if stripped.startswith("o ") or stripped.startswith("g "):
+        if stripped.startswith("o "):
             declaration, name = stripped.split(maxsplit=1)
             current = RawObject(name=name.strip(), declaration=declaration)
             scene.objects.append(current)
             continue
         if current is None:
             scene.header_lines.append(line)
+            continue
+        if stripped.startswith("g "):
+            current.raw_nonlive_lines.append(line)
             continue
         if stripped.startswith("#@"):
             current.meta_lines.append(line)

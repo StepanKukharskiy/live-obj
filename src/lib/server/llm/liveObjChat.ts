@@ -4,7 +4,7 @@ import type {
 	ChatMessageContent,
 	TokenUsage
 } from './chat';
-import { requestChatCompletion } from './chat';
+import { requestChatCompletion, streamChatCompletion } from './chat';
 import { LIVE_OBJ_SYSTEM_PROMPT, LLM_ONLY_SYSTEM_PROMPT } from './liveObjSystemPrompt';
 
 const DEFAULT_LIVE_OBJ_MODEL = 'gpt-5.5';
@@ -400,7 +400,12 @@ export async function requestLiveObjPartPlanFromLlm(
 	const prompt = [
 		`User request: ${userMessage.trim() || IMAGE_ONLY_USER_HINT}`,
 		options?.useProcedural === false
-			? 'Generation mode: raw-first OBJ with per-part raw meshes and optional #@post modifier stacks.'
+			? [
+					'Generation mode: tools-off raw-first OBJ.',
+					'Plan ONLY raw mesh parts. Each part method must be "llm_mesh".',
+					'Do not use method values "procedural", "recipe", or "hybrid" in this mode.',
+					'If a part could be procedural conceptually, still describe it as direct low-poly OBJ mesh with optional #@post material/tag/smooth/symmetrize notes.'
+				].join('\n')
 			: 'Generation mode: Live OBJ with procedural/recipe/raw mesh parts as appropriate.',
 		options?.currentLiveObjSummary
 			? `Current scene summary:\n${options.currentLiveObjSummary}`
@@ -461,6 +466,52 @@ export async function requestLiveObjPartFromLlm(
 		label: 'live-obj-iterative-part',
 		maxTokens: imageDataUrls.length > 0 ? 20000 : 16000,
 		timeoutMs: imageDataUrls.length > 0 ? 240000 : 180000
+	});
+	return { content, usage };
+}
+
+export async function streamLiveObjPartFromLlm(
+	input: {
+		userMessage: string;
+		part: unknown;
+		plan?: unknown;
+		currentLiveObjSummary: string;
+	},
+	model: string = DEFAULT_LIVE_OBJ_MODEL,
+	options: { imageDataUrl?: string; imageDataUrls?: string[]; useProcedural?: boolean } | undefined,
+	onDelta: (delta: string) => void | Promise<void>
+): Promise<LiveObjLlmResult> {
+	const imageDataUrls = normalizeImageDataUrls([
+		...(options?.imageDataUrls ?? []),
+		...(options?.imageDataUrl ? [options.imageDataUrl] : [])
+	]);
+	const prompt = [
+		`Original user request: ${input.userMessage.trim() || IMAGE_ONLY_USER_HINT}`,
+		'',
+		`Requested part spec:\n${JSON.stringify(input.part, null, 2)}`,
+		'',
+		input.plan ? `Overall part plan:\n${JSON.stringify(input.plan, null, 2)}` : '',
+		'',
+		`Current scene summary:\n${input.currentLiveObjSummary || '(empty scene)'}`,
+		'',
+		'Generate only the requested part now.'
+	]
+		.filter(Boolean)
+		.join('\n');
+	const systemPrompt =
+		options?.useProcedural === false
+			? RAW_OBJ_ITERATIVE_PART_SYSTEM_PROMPT
+			: LIVE_OBJ_ITERATIVE_PART_SYSTEM_PROMPT;
+	const { content, usage } = await streamChatCompletion({
+		messages: [
+			{ role: 'system', content: systemPrompt },
+			{ role: 'user', content: userMessageContent(prompt, imageDataUrls) }
+		],
+		model: model || DEFAULT_LIVE_OBJ_MODEL,
+		label: 'live-obj-iterative-part-stream',
+		maxTokens: imageDataUrls.length > 0 ? 20000 : 16000,
+		timeoutMs: imageDataUrls.length > 0 ? 240000 : 180000,
+		onDelta
 	});
 	return { content, usage };
 }

@@ -24,6 +24,10 @@ export interface RequestChatCompletionOptions {
 	onAttempt?: (attempt: ChatCompletionAttempt) => void;
 }
 
+export interface StreamChatCompletionOptions extends RequestChatCompletionOptions {
+	onDelta: (delta: string) => void | Promise<void>;
+}
+
 export interface ChatCompletionResult {
 	data: unknown;
 	content: string;
@@ -119,12 +123,14 @@ function isRetriableError(error: unknown): boolean {
 function isRateLimitError(error: unknown): boolean {
 	if (error instanceof Error) {
 		const message = error.message.toLowerCase();
-		return message.includes('rate limit') || 
-			   message.includes('rate_limit_exceeded') || 
-			   message.includes('too many requests') ||
-			   message.includes('quota exceeded') ||
-			   message.includes('usage limit') ||
-			   message.includes('model overloaded');
+		return (
+			message.includes('rate limit') ||
+			message.includes('rate_limit_exceeded') ||
+			message.includes('too many requests') ||
+			message.includes('quota exceeded') ||
+			message.includes('usage limit') ||
+			message.includes('model overloaded')
+		);
 	}
 	return false;
 }
@@ -138,10 +144,16 @@ function isInputValidationError(status: number, body: string): boolean {
 }
 
 function isLengthTruncatedEmptyResponseError(error: unknown): boolean {
-	return error instanceof Error && error.message === 'Model exhausted max_tokens before emitting final content';
+	return (
+		error instanceof Error &&
+		error.message === 'Model exhausted max_tokens before emitting final content'
+	);
 }
 
-export function withLlmRequestOverrides<T>(overrides: LlmRequestOverrides | undefined, callback: () => Promise<T>): Promise<T> {
+export function withLlmRequestOverrides<T>(
+	overrides: LlmRequestOverrides | undefined,
+	callback: () => Promise<T>
+): Promise<T> {
 	if (!overrides?.apiKey && !overrides?.apiUrl && !overrides?.model) {
 		return callback();
 	}
@@ -196,6 +208,22 @@ function completionTokenBudgetForAttempt(maxTokens: number, attempt: number): nu
 	return Math.min(32000, Math.ceil(maxTokens * multiplier));
 }
 
+function extractStreamingDelta(data: unknown): string {
+	const payload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	const directDelta = payload.delta;
+	if (typeof directDelta === 'string') return directDelta;
+	const choices = Array.isArray(payload.choices) ? payload.choices : [];
+	const choice =
+		choices[0] && typeof choices[0] === 'object' ? (choices[0] as Record<string, unknown>) : {};
+	const delta =
+		choice.delta && typeof choice.delta === 'object'
+			? (choice.delta as Record<string, unknown>)
+			: {};
+	if (typeof delta.content === 'string') return delta.content;
+	if (typeof choice.text === 'string') return choice.text;
+	return '';
+}
+
 /**
  * Merge `process.env` and SvelteKit private env. Uses `||` so empty strings fall through
  * (SvelteKit populates `$env/dynamic/private` from `.env` even when `process.env` is unset).
@@ -223,7 +251,9 @@ async function resolveDefaultLlmConfig(): Promise<Required<LlmRequestOverrides>>
 	};
 }
 
-export async function hasConfiguredServerLlmAccess(overrides?: LlmRequestOverrides): Promise<boolean> {
+export async function hasConfiguredServerLlmAccess(
+	overrides?: LlmRequestOverrides
+): Promise<boolean> {
 	const defaults = await resolveDefaultLlmConfig();
 	const apiUrl = overrides?.apiUrl ?? defaults.apiUrl;
 	const providerKeys = await resolveProviderApiKeys();
@@ -263,17 +293,11 @@ export async function requestChatCompletion({
 		throw new Error('API URL not configured');
 	}
 
-	const fallbackModels = isOpenAiApiUrl(apiUrl)
-		? []
-		: TOGETHER_FALLBACK_MODELS;
+	const fallbackModels = isOpenAiApiUrl(apiUrl) ? [] : TOGETHER_FALLBACK_MODELS;
 
 	let lastError: Error | null = null;
 	const modelsToTry = Array.from(
-		new Set(
-			model
-				? [model]
-				: [configuredModel || DEFAULT_OPENAI_MODEL, ...fallbackModels]
-		)
+		new Set(model ? [model] : [configuredModel || DEFAULT_OPENAI_MODEL, ...fallbackModels])
 	);
 
 	for (const currentModel of modelsToTry) {
@@ -295,127 +319,281 @@ export async function requestChatCompletion({
 				status: 'started'
 			});
 
-		try {
-			const response = await fetch(apiUrl, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					Authorization: `Bearer ${apiKey}`
-				},
-				signal: controller.signal,
-				body: JSON.stringify(requestPayload)
-			});
-
-			if (!response.ok) {
-				const errBody = await response.text().catch(() => response.statusText);
-				console.error('[LLM Response Error]', {
-					label,
-					attempt,
-					status: response.status,
-					metadata: metadata ?? null,
-					body: errBody || response.statusText
+			try {
+				const response = await fetch(apiUrl, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						Authorization: `Bearer ${apiKey}`
+					},
+					signal: controller.signal,
+					body: JSON.stringify(requestPayload)
 				});
-				lastError = new Error(`LLM API error (${response.status}): ${errBody || response.statusText}`);
-				const hasMoreModels = modelsToTry.indexOf(currentModel) < modelsToTry.length - 1;
-				if (attempt < MAX_ATTEMPTS && RETRIABLE_STATUS_CODES.has(response.status)) {
-					await wait(200 * attempt);
-					continue;
-				}
-				// If this is a rate limit and we have more models to try, break to next model
-				if (RATE_LIMIT_STATUS_CODES.has(response.status) && hasMoreModels) {
-					console.log('[LLM Model Fallback]', `Rate limited on ${currentModel}, trying next model`);
-					break;
-				}
-				if (isInputValidationError(response.status, errBody || response.statusText) && hasMoreModels) {
-					console.log('[LLM Model Fallback]', `Input validation error on ${currentModel}, trying next model`);
-					break;
-				}
-				throw lastError;
-			}
 
-			const data = await response.json();
-			const content = extractCompletionContent(data);
-			if (!content) {
-				console.error('[LLM Empty Response]', {
-					label,
-					attempt,
+				if (!response.ok) {
+					const errBody = await response.text().catch(() => response.statusText);
+					console.error('[LLM Response Error]', {
+						label,
+						attempt,
+						status: response.status,
+						metadata: metadata ?? null,
+						body: errBody || response.statusText
+					});
+					lastError = new Error(
+						`LLM API error (${response.status}): ${errBody || response.statusText}`
+					);
+					const hasMoreModels = modelsToTry.indexOf(currentModel) < modelsToTry.length - 1;
+					if (attempt < MAX_ATTEMPTS && RETRIABLE_STATUS_CODES.has(response.status)) {
+						await wait(200 * attempt);
+						continue;
+					}
+					// If this is a rate limit and we have more models to try, break to next model
+					if (RATE_LIMIT_STATUS_CODES.has(response.status) && hasMoreModels) {
+						console.log(
+							'[LLM Model Fallback]',
+							`Rate limited on ${currentModel}, trying next model`
+						);
+						break;
+					}
+					if (
+						isInputValidationError(response.status, errBody || response.statusText) &&
+						hasMoreModels
+					) {
+						console.log(
+							'[LLM Model Fallback]',
+							`Input validation error on ${currentModel}, trying next model`
+						);
+						break;
+					}
+					throw lastError;
+				}
+
+				const data = await response.json();
+				const content = extractCompletionContent(data);
+				if (!content) {
+					console.error('[LLM Empty Response]', {
+						label,
+						attempt,
+						model: currentModel,
+						metadata: metadata ?? null,
+						payloadSummary: summarizeCompletionPayload(data)
+					});
+					if (isLengthTruncatedEmptyResponsePayload(data)) {
+						throw new Error('Model exhausted max_tokens before emitting final content');
+					}
+					throw new Error('Empty response from model');
+				}
+				onAttempt?.({
 					model: currentModel,
-					metadata: metadata ?? null,
-					payloadSummary: summarizeCompletionPayload(data)
+					attempt,
+					status: 'succeeded'
 				});
-				if (isLengthTruncatedEmptyResponsePayload(data)) {
-					throw new Error('Model exhausted max_tokens before emitting final content');
-				}
-				throw new Error('Empty response from model');
-			}
-			onAttempt?.({
-				model: currentModel,
-				attempt,
-				status: 'succeeded'
-			});
 
-			return { data, content, usage: extractTokenUsage(data, currentModel, label, attempt) };
-		} catch (error) {
-			lastError =
-				isAbortError(error)
-					? new Error(`LLM request timed out after ${timeoutMs}ms (attempt ${attempt}/${MAX_ATTEMPTS})`)
+				return { data, content, usage: extractTokenUsage(data, currentModel, label, attempt) };
+			} catch (error) {
+				lastError = isAbortError(error)
+					? new Error(
+							`LLM request timed out after ${timeoutMs}ms (attempt ${attempt}/${MAX_ATTEMPTS})`
+						)
 					: error instanceof Error
 						? error
 						: new Error(String(error));
-			console.error('[LLM Request Failure]', {
-				label,
-				attempt,
-				metadata: metadata ?? null,
-				error: lastError.message
-			});
-			onAttempt?.({
-				model: currentModel,
-				attempt,
-				status: 'failed',
-				error: lastError.message
-			});
+				console.error('[LLM Request Failure]', {
+					label,
+					attempt,
+					metadata: metadata ?? null,
+					error: lastError.message
+				});
+				onAttempt?.({
+					model: currentModel,
+					attempt,
+					status: 'failed',
+					error: lastError.message
+				});
 
-			const hasMoreModels = modelsToTry.indexOf(currentModel) < modelsToTry.length - 1;
+				const hasMoreModels = modelsToTry.indexOf(currentModel) < modelsToTry.length - 1;
 
-			if (isLengthTruncatedEmptyResponseError(lastError)) {
-				if (attempt < MAX_ATTEMPTS) {
+				if (isLengthTruncatedEmptyResponseError(lastError)) {
+					if (attempt < MAX_ATTEMPTS) {
+						await wait(200 * attempt);
+						continue;
+					}
+					if (hasMoreModels) {
+						console.log(
+							'[LLM Model Fallback]',
+							`Truncated empty response on ${currentModel}, trying next model`
+						);
+						break;
+					}
+				}
+
+				if (isLengthTruncatedEmptyResponseError(lastError) && hasMoreModels) {
+					break;
+				}
+
+				if (
+					attempt < MAX_ATTEMPTS &&
+					isRetriableError(error) &&
+					!(switchModelOnTimeout && isAbortError(error) && hasMoreModels)
+				) {
 					await wait(200 * attempt);
 					continue;
 				}
-				if (hasMoreModels) {
-					console.log('[LLM Model Fallback]', `Truncated empty response on ${currentModel}, trying next model`);
+
+				if (isRateLimitError(error) && hasMoreModels) {
+					console.log('[LLM Model Fallback]', `Rate limited on ${currentModel}, trying next model`);
 					break;
 				}
-			}
 
-			if (isLengthTruncatedEmptyResponseError(lastError) && hasMoreModels) {
-				break;
-			}
+				if (
+					isTimeoutError(lastError) &&
+					hasMoreModels &&
+					(switchModelOnTimeout || attempt === MAX_ATTEMPTS)
+				) {
+					console.log('[LLM Model Fallback]', `Timeout on ${currentModel}, trying next model`);
+					break;
+				}
 
-			if (attempt < MAX_ATTEMPTS && isRetriableError(error) && !(switchModelOnTimeout && isAbortError(error) && hasMoreModels)) {
-				await wait(200 * attempt);
-				continue;
+				throw lastError;
+			} finally {
+				clearTimeout(timeoutId);
+				releaseTurn();
 			}
-
-			if (isRateLimitError(error) && hasMoreModels) {
-				console.log('[LLM Model Fallback]', `Rate limited on ${currentModel}, trying next model`);
-				break;
-			}
-
-			if (isTimeoutError(lastError) && hasMoreModels && (switchModelOnTimeout || attempt === MAX_ATTEMPTS)) {
-				console.log('[LLM Model Fallback]', `Timeout on ${currentModel}, trying next model`);
-				break;
-			}
-
-			throw lastError;
-		} finally {
-			clearTimeout(timeoutId);
-			releaseTurn();
 		}
-	}
 	}
 
 	throw lastError ?? new Error('LLM request failed');
+}
+
+export async function streamChatCompletion({
+	messages,
+	model,
+	temperature = 0.1,
+	maxTokens = 12000,
+	label = 'server-chat-completion-stream',
+	metadata,
+	timeoutMs = REQUEST_TIMEOUT_MS,
+	onAttempt,
+	onDelta
+}: StreamChatCompletionOptions): Promise<ChatCompletionResult> {
+	const requestOverrides = llmRequestOverridesStorage.getStore();
+	const defaultConfig = await resolveDefaultLlmConfig();
+	const apiUrl = requestOverrides?.apiUrl ?? defaultConfig.apiUrl;
+	const providerKeys = await resolveProviderApiKeys();
+	const apiKey =
+		requestOverrides?.apiKey ??
+		(isOpenAiApiUrl(apiUrl)
+			? providerKeys.openAiApiKey || providerKeys.togetherApiKey
+			: providerKeys.togetherApiKey || providerKeys.openAiApiKey || defaultConfig.apiKey);
+	const currentModel =
+		model || requestOverrides?.model || defaultConfig.model || DEFAULT_OPENAI_MODEL;
+	if (!apiKey) {
+		throw new Error('No LLM API key provided. Please provide an API key in the provider settings.');
+	}
+	if (!apiUrl) {
+		throw new Error('API URL not configured');
+	}
+
+	const releaseTurn = await acquireLlmRequestTurn();
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+	const requestPayload = {
+		...buildCompletionRequestPayload({
+			apiUrl,
+			model: currentModel,
+			messages,
+			maxTokens,
+			temperature
+		}),
+		stream: true
+	};
+	onAttempt?.({ model: currentModel, attempt: 1, status: 'started' });
+
+	try {
+		const response = await fetch(apiUrl, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${apiKey}`
+			},
+			signal: controller.signal,
+			body: JSON.stringify(requestPayload)
+		});
+		if (!response.ok) {
+			const errBody = await response.text().catch(() => response.statusText);
+			console.error('[LLM Stream Response Error]', {
+				label,
+				status: response.status,
+				metadata: metadata ?? null,
+				body: errBody || response.statusText
+			});
+			throw new Error(`LLM API error (${response.status}): ${errBody || response.statusText}`);
+		}
+		if (!response.body) throw new Error('LLM stream response had no body');
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let sseBuffer = '';
+		let content = '';
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			sseBuffer += decoder.decode(value, { stream: true });
+			const lines = sseBuffer.split(/\r?\n/);
+			sseBuffer = lines.pop() ?? '';
+			for (const rawLine of lines) {
+				const line = rawLine.trim();
+				if (!line.startsWith('data:')) continue;
+				const dataLine = line.slice(5).trim();
+				if (!dataLine || dataLine === '[DONE]') continue;
+				try {
+					const parsed = JSON.parse(dataLine);
+					const delta = extractStreamingDelta(parsed);
+					if (!delta) continue;
+					content += delta;
+					await onDelta(delta);
+				} catch {
+					// Compatible providers sometimes emit keepalive/event lines; ignore them.
+				}
+			}
+		}
+		if (sseBuffer.trim().startsWith('data:')) {
+			const dataLine = sseBuffer.trim().slice(5).trim();
+			if (dataLine && dataLine !== '[DONE]') {
+				try {
+					const parsed = JSON.parse(dataLine);
+					const delta = extractStreamingDelta(parsed);
+					if (delta) {
+						content += delta;
+						await onDelta(delta);
+					}
+				} catch {}
+			}
+		}
+		onAttempt?.({ model: currentModel, attempt: 1, status: 'succeeded' });
+		return { data: {}, content };
+	} catch (error) {
+		const streamError = isAbortError(error)
+			? new Error(`LLM stream timed out after ${timeoutMs}ms`)
+			: error instanceof Error
+				? error
+				: new Error(String(error));
+		console.error('[LLM Stream Failure]', {
+			label,
+			metadata: metadata ?? null,
+			error: streamError.message
+		});
+		onAttempt?.({
+			model: currentModel,
+			attempt: 1,
+			status: 'failed',
+			error: streamError.message
+		});
+		throw streamError;
+	} finally {
+		clearTimeout(timeoutId);
+		releaseTurn();
+	}
 }
 
 function extractTextFromContentValue(value: unknown): string {
@@ -490,8 +668,8 @@ function extractTokenUsage(
 		...(promptTokens != null ? { promptTokens } : {}),
 		...(completionTokens != null ? { completionTokens } : {}),
 		...(totalTokens != null ? { totalTokens } : {}),
-		...(numberFromRecord(completionDetails, ['reasoning_tokens']) ??
-		numberFromRecord(outputDetails, ['reasoning_tokens'])
+		...((numberFromRecord(completionDetails, ['reasoning_tokens']) ??
+		numberFromRecord(outputDetails, ['reasoning_tokens']))
 			? {
 					reasoningTokens:
 						numberFromRecord(completionDetails, ['reasoning_tokens']) ??
@@ -513,7 +691,8 @@ function isLengthTruncatedEmptyResponsePayload(data: unknown): boolean {
 	};
 	const firstChoice = payload.choices?.[0];
 	if (!firstChoice) return false;
-	const finishReason = typeof firstChoice.finish_reason === 'string' ? firstChoice.finish_reason : '';
+	const finishReason =
+		typeof firstChoice.finish_reason === 'string' ? firstChoice.finish_reason : '';
 	const content = extractTextFromContentValue(firstChoice.message?.content);
 	return finishReason === 'length' && !content;
 }
@@ -685,7 +864,10 @@ function repairJsonTail(content: string, errorPosition?: number | null): string 
 }
 
 export function parseStructuredJson<T>(content: string): T {
-	const cleaned = content.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+	const cleaned = content
+		.replace(/^```[a-z]*\n?/i, '')
+		.replace(/\n?```$/i, '')
+		.trim();
 	try {
 		return JSON.parse(cleaned) as T;
 	} catch (error) {

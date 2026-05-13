@@ -22,6 +22,7 @@
 		historyContent?: string;
 		meta?: string;
 		tokenUsage?: TokenUsageSummary;
+		transient?: boolean;
 	};
 	type SendPayload = {
 		text: string;

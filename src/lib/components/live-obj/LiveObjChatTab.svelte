@@ -15,6 +15,7 @@
 		historyContent?: string;
 		meta?: string;
 		tokenUsage?: TokenUsageSummary;
+		transient?: boolean;
 	};
 	type SendPayload = {
 		text: string;
@@ -710,7 +711,7 @@ f 90 81 161 170`
 	}
 
 	function displayMessageContent(content: string): string {
-		return content.replace(/\s+/g, ' ').trim();
+		return content.trim();
 	}
 
 	$effect(() => {
@@ -784,13 +785,20 @@ f 90 81 161 170`
 					class:assistant={m.role === 'assistant'}
 					class:user={m.role === 'user'}
 				>
-					<div class="planner-chat-bubble">
+					<div class="planner-chat-bubble" class:planner-chat-thinking={m.transient}>
 						<div class="planner-chat-content">
 							{#if m.imageDataUrl}
 								<img class="planner-chat-msg-image" src={m.imageDataUrl} alt="" />
 							{/if}
 							{#if m.content}
 								<div class="planner-chat-msg-text">{displayMessageContent(m.content)}</div>
+							{/if}
+							{#if m.transient}
+								<span class="planner-thinking-dots" aria-hidden="true">
+									<span></span>
+									<span></span>
+									<span></span>
+								</span>
 							{/if}
 							{#if m.role === 'assistant' && m.meta}
 								<div class="planner-chat-token-usage">{m.meta}</div>
@@ -804,15 +812,6 @@ f 90 81 161 170`
 			{/each}
 		{/if}
 	</div>
-
-	{#if statusLine}
-		<details class="planner-status" open>
-			<summary class="planner-status-header">
-				<span class="planner-status-label">Executor Status</span>
-			</summary>
-			<div class="planner-status-content">{statusLine}</div>
-		</details>
-	{/if}
 
 	<div class="planner-chat-input-shell">
 		{#if attachedDataUrl}
@@ -917,7 +916,7 @@ f 90 81 161 170`
 	}
 
 	.planner-chat-msg-text {
-		white-space: normal;
+		white-space: pre-wrap;
 		word-break: break-word;
 	}
 
@@ -926,6 +925,48 @@ f 90 81 161 170`
 		font-size: 11px;
 		line-height: 1.3;
 		color: #64748b;
+	}
+
+	.planner-chat-thinking .planner-chat-content {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		color: #475569;
+	}
+
+	.planner-thinking-dots {
+		display: inline-flex;
+		gap: 3px;
+		align-items: center;
+	}
+
+	.planner-thinking-dots span {
+		width: 4px;
+		height: 4px;
+		border-radius: 999px;
+		background: #64748b;
+		animation: planner-thinking-pulse 1s infinite ease-in-out;
+	}
+
+	.planner-thinking-dots span:nth-child(2) {
+		animation-delay: 0.14s;
+	}
+
+	.planner-thinking-dots span:nth-child(3) {
+		animation-delay: 0.28s;
+	}
+
+	@keyframes planner-thinking-pulse {
+		0%,
+		80%,
+		100% {
+			opacity: 0.35;
+			transform: translateY(0);
+		}
+		40% {
+			opacity: 1;
+			transform: translateY(-2px);
+		}
 	}
 
 	.planner-status {
