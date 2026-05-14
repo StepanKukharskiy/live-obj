@@ -255,6 +255,7 @@
 		const lines = text.split(/\r?\n/);
 		let activeObject: string | null = null;
 		let targetObjectLine = -1;
+		let updatedExistingParam = false;
 		for (let i = 0; i < lines.length; i += 1) {
 			const rawLine = lines[i];
 			const trimmed = rawLine.trim();
@@ -271,6 +272,7 @@
 				const parsed = parseParams(paramsMatch[1]);
 				parsed[key] = value.trim();
 				lines[i] = `#@params: ${serializeParams(parsed)}`;
+				updatedExistingParam = true;
 				break;
 			}
 			if (source === 'sdf_mesh_from_sdf') {
@@ -309,7 +311,7 @@
 				break;
 			}
 		}
-		if (source === 'params' && targetObjectLine >= 0) {
+		if (source === 'params' && targetObjectLine >= 0 && !updatedExistingParam) {
 			lines.splice(targetObjectLine + 1, 0, `#@params: ${key}=${value.trim()}`);
 		}
 		return lines.join('\n');

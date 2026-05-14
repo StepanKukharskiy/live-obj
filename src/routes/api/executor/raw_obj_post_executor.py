@@ -7,6 +7,7 @@ raw LLM-authored OBJ vertices/faces as the base geometry, then applies a small
 `#@post:` modifier stack on top.
 
 Supported post ops:
+    transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz]
     symmetrize axis=x|y|z side=positive|negative
     mirror axis=x|y|z
     array count=n offset=[x,y,z]
@@ -55,6 +56,7 @@ class RawObject:
     name: str
     declaration: str = "o"
     meta_lines: List[str] = field(default_factory=list)
+    params: Dict[str, Any] = field(default_factory=dict)
     post_ops: List[Dict[str, Any]] = field(default_factory=list)
     mesh: Mesh = field(default_factory=Mesh)
     raw_nonlive_lines: List[str] = field(default_factory=list)
@@ -129,6 +131,53 @@ def split_top_level(s: str) -> List[str]:
     return out
 
 
+def split_top_level_commas(s: str) -> List[str]:
+    out: List[str] = []
+    cur: List[str] = []
+    depth = 0
+    quote: Optional[str] = None
+    escape = False
+    for ch in s:
+        if quote is not None:
+            cur.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            cur.append(ch)
+            continue
+        if ch in "[({":
+            depth += 1
+        elif ch in "])}":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            if cur:
+                out.append("".join(cur).strip())
+                cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        out.append("".join(cur).strip())
+    return [p for p in out if p]
+
+
+def parse_key_values(body: str) -> Dict[str, Any]:
+    parsed: Dict[str, Any] = {}
+    for piece in split_top_level_commas(body):
+        if "=" not in piece:
+            continue
+        key, raw_value = piece.split("=", 1)
+        key = key.strip()
+        if key:
+            parsed[key] = parse_scalar(raw_value)
+    return parsed
+
+
 def parse_tokens(body: str) -> Dict[str, Any]:
     tokens = split_top_level(body.strip())
     if not tokens:
@@ -144,6 +193,32 @@ def parse_tokens(body: str) -> Dict[str, Any]:
     if args:
         parsed["args"] = args
     return parsed
+
+
+def parse_params(meta_lines: List[str]) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    block: Optional[str] = None
+    for raw_line in meta_lines:
+        line = raw_line.strip()
+        if not line.startswith("#@"):
+            continue
+        body = line[2:].strip()
+        if body == "params:":
+            block = "params"
+            continue
+        if body.startswith("params:"):
+            params.update(parse_key_values(body[len("params:") :].strip()))
+            block = "params"
+            continue
+        if body.endswith(":") and not body.startswith("-"):
+            block = None
+            continue
+        if block == "params" and body.startswith("-"):
+            params.update(parse_key_values(body[1:].strip()))
+            continue
+        if ":" in body and not body.startswith("-"):
+            block = None
+    return params
 
 
 def parse_post_ops(meta_lines: List[str]) -> List[Dict[str, Any]]:
@@ -227,6 +302,7 @@ def parse_obj(path: Path) -> Scene:
         current.raw_nonlive_lines.append(line)
 
     for obj in scene.objects:
+        obj.params = parse_params(obj.meta_lines)
         obj.post_ops = parse_post_ops(obj.meta_lines)
     return scene
 
@@ -328,6 +404,91 @@ def op_array(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
         )
         out.extend(copy)
     return out
+
+
+def eval_numeric_expr(value: Any, params: Dict[str, Any]) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 0.0
+        try:
+            return float(text)
+        except ValueError:
+            pass
+        if text in params:
+            return eval_numeric_expr(params[text], params)
+        node = ast.parse(text, mode="eval")
+
+        def visit(n: ast.AST) -> float:
+            if isinstance(n, ast.Expression):
+                return visit(n.body)
+            if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+                return float(n.value)
+            if isinstance(n, ast.Name):
+                if n.id not in params:
+                    raise ValueError(f"unknown parameter '{n.id}'")
+                return eval_numeric_expr(params[n.id], params)
+            if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.UAdd, ast.USub)):
+                val = visit(n.operand)
+                return val if isinstance(n.op, ast.UAdd) else -val
+            if isinstance(n, ast.BinOp) and isinstance(
+                n.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow)
+            ):
+                left = visit(n.left)
+                right = visit(n.right)
+                if isinstance(n.op, ast.Add):
+                    return left + right
+                if isinstance(n.op, ast.Sub):
+                    return left - right
+                if isinstance(n.op, ast.Mult):
+                    return left * right
+                if isinstance(n.op, ast.Div):
+                    return left / right
+                if isinstance(n.op, ast.Pow):
+                    return left**right
+            raise ValueError(f"unsupported expression '{text}'")
+
+        return visit(node)
+    raise ValueError(f"expected numeric value, got {value!r}")
+
+
+def parse_vec3(value: Any, params: Dict[str, Any], default: Vec3) -> Vec3:
+    raw = value
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text in params:
+            raw = params[text]
+        elif text.startswith("[") and text.endswith("]"):
+            raw = split_top_level_commas(text[1:-1])
+    if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+        return default
+    return (
+        eval_numeric_expr(raw[0], params),
+        eval_numeric_expr(raw[1], params),
+        eval_numeric_expr(raw[2], params),
+    )
+
+
+def rotate_point(vertex: Vec3, rotation_degrees: Vec3) -> Vec3:
+    x, y, z = vertex
+    rx, ry, rz = [math.radians(a) for a in rotation_degrees]
+    y, z = y * math.cos(rx) - z * math.sin(rx), y * math.sin(rx) + z * math.cos(rx)
+    x, z = x * math.cos(ry) + z * math.sin(ry), -x * math.sin(ry) + z * math.cos(ry)
+    x, y = x * math.cos(rz) - y * math.sin(rz), x * math.sin(rz) + y * math.cos(rz)
+    return (x, y, z)
+
+
+def op_transform(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
+    position = parse_vec3(op.get("position", [0, 0, 0]), params, (0.0, 0.0, 0.0))
+    rotation = parse_vec3(op.get("rotation", [0, 0, 0]), params, (0.0, 0.0, 0.0))
+    scale = parse_vec3(op.get("scale", [1, 1, 1]), params, (1.0, 1.0, 1.0))
+    vertices: List[Vec3] = []
+    for x, y, z in mesh.vertices:
+        x, y, z = rotate_point((x * scale[0], y * scale[1], z * scale[2]), rotation)
+        vertices.append((x + position[0], y + position[1], z + position[2]))
+    return Mesh(vertices, [list(face) for face in mesh.faces])
 
 
 def op_subdivide(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
@@ -443,7 +604,12 @@ def apply_post_ops(obj: RawObject) -> None:
         cmd = str(op.get("cmd", "")).strip().lower()
         if cmd in {"material", "tag"}:
             continue
-        if cmd == "symmetrize":
+        if cmd == "transform":
+            try:
+                mesh = op_transform(mesh, op, obj.params)
+            except Exception as e:
+                warn(f"{obj.name}: transform failed: {e}")
+        elif cmd == "symmetrize":
             mesh = op_symmetrize(mesh, op)
         elif cmd == "mirror":
             mesh = op_mirror(mesh, op)

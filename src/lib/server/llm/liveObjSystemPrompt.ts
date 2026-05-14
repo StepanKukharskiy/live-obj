@@ -30,6 +30,7 @@ Output only valid OBJ content with required scene metadata:
 - Do not use inline post syntax such as #@post material id=... or #@post smooth target=...
 
 Supported #@post ops:
+- transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz] (values may reference #@params)
 - symmetrize axis=x|y|z side=positive|negative
 - mirror axis=x|y|z
 - array count=n offset=[x,y,z]
@@ -42,6 +43,7 @@ Supported #@post ops:
 - tag value=architectural|product|game|art|structural|decorative
 
 Use #@post for:
+- object-level semantic controls on raw mesh parts, e.g. #@params: roof_lift=0 and #@post transform position=[0,roof_lift,0]
 - symmetry intent on objects that should be bilaterally clean, such as shoes, vehicles, creatures, furniture, tools, and product shells
 - low-poly cleanup with subdivide/smooth/simplify
 - repeated raw mesh modules with array or mirror

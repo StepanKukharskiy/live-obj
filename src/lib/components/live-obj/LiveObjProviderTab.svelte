@@ -15,7 +15,7 @@
 			image: ['gpt-image-2', 'gpt-image-1.5']
 		},
 		together: {
-			text: ['deepseek-ai/DeepSeek-V4-Pro', 'MiniMaxAI/MiniMax-M2.7', 'moonshotai/Kimi-K2.6', 'zai-org/GLM-5.1', 'openai/gpt-oss-120b'],
+			text: ['deepseek-ai/DeepSeek-V4-Pro', 'MiniMaxAI/MiniMax-M2.7', 'moonshotai/Kimi-K2.6', 'zai-org/GLM-5.1', 'google/gemma-4-31B-it', 'openai/gpt-oss-120b'],
 			image: ['black-forest-labs/FLUX.2-pro', 'Qwen/Qwen-Image-2.0']
 		}
 	};

@@ -161,7 +161,7 @@ Raw-first part rules:
 - Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
 - Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
-- Use #@post: for raw-post modifier intent. Supported #@post ops are symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
 - Put material and tag assignments inside #@post blocks. Do not use #@ops in raw-first mode.
 - Always use block syntax: #@post: then lines like #@ - material name=mat_id. Do not emit inline #@post material id=... lines.`;
@@ -325,7 +325,7 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 					'Current scene mode: raw OBJ / raw-post output.',
 					'Important: existing v/f mesh blocks are source base geometry, not disposable cache. Preserve existing mesh object blocks unless the user asks to replace them.',
 					'For cleanup, symmetry, repetition, material, or tag edits on raw OBJ scenes, prefer adding or editing #@post blocks. Do not add #@ops and do not convert the whole scene to procedural metadata.',
-					'Supported #@post ops include symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.'
+					'Supported #@post ops include transform, symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.'
 				].join('\n')
 			: [
 					'Current scene mode: Live OBJ / tools-on output.',

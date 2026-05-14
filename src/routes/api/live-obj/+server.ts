@@ -155,6 +155,7 @@ const KNOWN_RECIPE_OPS = new Set([
 	'emit_panels'
 ]);
 const KNOWN_POST_OPS = new Set([
+	'transform',
 	'symmetrize',
 	'mirror',
 	'array',
