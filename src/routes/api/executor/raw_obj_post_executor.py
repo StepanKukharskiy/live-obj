@@ -7,10 +7,10 @@ raw LLM-authored OBJ vertices/faces as the base geometry, then applies a small
 `#@post:` modifier stack on top.
 
 Supported post ops:
-    transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz]
+    transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz] pivot=[x,y,z]
     symmetrize axis=x|y|z side=positive|negative
     mirror axis=x|y|z
-    array count=n offset=[x,y,z]
+    array count=n offset=[x,y,z] centered=true|false
     subdivide level=n
     smooth iterations=n strength=v
     simplify ratio=v
@@ -66,6 +66,7 @@ class RawObject:
 class Scene:
     header_lines: List[str] = field(default_factory=list)
     objects: List[RawObject] = field(default_factory=list)
+    params: Dict[str, Any] = field(default_factory=dict)
 
 
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
@@ -301,8 +302,9 @@ def parse_obj(path: Path) -> Scene:
             continue
         current.raw_nonlive_lines.append(line)
 
+    scene.params = parse_params(scene.header_lines)
     for obj in scene.objects:
-        obj.params = parse_params(obj.meta_lines)
+        obj.params = {**scene.params, **parse_params(obj.meta_lines)}
         obj.post_ops = parse_post_ops(obj.meta_lines)
     return scene
 
@@ -383,20 +385,20 @@ def op_symmetrize(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
     return half
 
 
-def op_array(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
-    count = max(1, int(op.get("count", 1)))
-    raw_offset = op.get("offset", [0, 0, 0])
-    if not isinstance(raw_offset, list) or len(raw_offset) < 3:
-        raw_offset = [0, 0, 0]
-    offset = (float(raw_offset[0]), float(raw_offset[1]), float(raw_offset[2]))
+def op_array(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
+    count = max(1, int(round(eval_numeric_expr(op.get("count", 1), params))))
+    offset = parse_vec3(op.get("offset", [0, 0, 0]), params, (0.0, 0.0, 0.0))
+    centered = parse_bool(op.get("centered", op.get("center")), False)
+    origin_shift = -0.5 * (count - 1) if centered and count > 1 else 0.0
     out = Mesh()
     for n in range(count):
+        step = n + origin_shift
         copy = Mesh(
             [
                 (
-                    v[0] + offset[0] * n,
-                    v[1] + offset[1] * n,
-                    v[2] + offset[2] * n,
+                    v[0] + offset[0] * step,
+                    v[1] + offset[1] * step,
+                    v[2] + offset[2] * step,
                 )
                 for v in mesh.vertices
             ],
@@ -404,6 +406,19 @@ def op_array(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
         )
         out.extend(copy)
     return out
+
+
+def parse_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "center", "centered"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def eval_numeric_expr(value: Any, params: Dict[str, Any]) -> float:
@@ -484,10 +499,19 @@ def op_transform(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh
     position = parse_vec3(op.get("position", [0, 0, 0]), params, (0.0, 0.0, 0.0))
     rotation = parse_vec3(op.get("rotation", [0, 0, 0]), params, (0.0, 0.0, 0.0))
     scale = parse_vec3(op.get("scale", [1, 1, 1]), params, (1.0, 1.0, 1.0))
+    pivot = parse_vec3(op.get("pivot", [0, 0, 0]), params, (0.0, 0.0, 0.0))
     vertices: List[Vec3] = []
     for x, y, z in mesh.vertices:
+        x -= pivot[0]
+        y -= pivot[1]
+        z -= pivot[2]
         x, y, z = rotate_point((x * scale[0], y * scale[1], z * scale[2]), rotation)
         vertices.append((x + position[0], y + position[1], z + position[2]))
+        vertices[-1] = (
+            vertices[-1][0] + pivot[0],
+            vertices[-1][1] + pivot[1],
+            vertices[-1][2] + pivot[2],
+        )
     return Mesh(vertices, [list(face) for face in mesh.faces])
 
 
@@ -614,7 +638,7 @@ def apply_post_ops(obj: RawObject) -> None:
         elif cmd == "mirror":
             mesh = op_mirror(mesh, op)
         elif cmd == "array":
-            mesh = op_array(mesh, op)
+            mesh = op_array(mesh, op, obj.params)
         elif cmd == "subdivide":
             mesh = op_subdivide(mesh, op)
         elif cmd == "smooth":

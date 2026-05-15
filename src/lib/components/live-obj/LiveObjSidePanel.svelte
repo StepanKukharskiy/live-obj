@@ -263,7 +263,7 @@
 					bind:outlineNormalSensitivity
 					bind:toonSteps
 					bind:toonOutline
-					{executedObjText}
+					{liveObjText}
 				/>
 			{:else}
 				<LiveObjRenderTab

@@ -40,6 +40,49 @@ f 1 2 3
         self.assertEqual(mesh.vertices[1], (2.0, 1.25, 0.0))
         self.assertEqual(mesh.vertices[2], (0.0, 2.25, 0.0))
 
+    def test_transform_post_op_can_use_pivot(self):
+        source = """#@live_obj_version: 0.1
+#@up: y
+o bar
+#@source: llm_mesh
+#@params: width=2
+#@post:
+#@ - transform scale=[width,1,1] pivot=[1,0,0]
+v 1 0 0
+v 2 0 0
+v 1 1 0
+f 1 2 3
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertEqual(mesh.vertices[0], (1.0, 0.0, 0.0))
+        self.assertEqual(mesh.vertices[1], (3.0, 0.0, 0.0))
+        self.assertEqual(mesh.vertices[2], (1.0, 1.0, 0.0))
+
+    def test_array_can_be_centered_and_reference_scene_params(self):
+        source = """#@live_obj_version: 0.1
+#@up: y
+#@params: frame_spacing=4
+o side_frame
+#@source: llm_mesh
+#@post:
+#@ - array count=2 offset=[frame_spacing,0,0] centered=true
+v -1 0 0
+v -0.5 0 0
+v -1 1 0
+f 1 2 3
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertEqual(mesh.vertices[0], (-3.0, 0.0, 0.0))
+        self.assertEqual(mesh.vertices[1], (-2.5, 0.0, 0.0))
+        self.assertEqual(mesh.vertices[3], (1.0, 0.0, 0.0))
+        self.assertEqual(mesh.vertices[4], (1.5, 0.0, 0.0))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,9 +31,11 @@ Output only valid OBJ content with required scene metadata:
 
 Supported #@post ops:
 - transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz] (values may reference #@params)
+- transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz] pivot=[x,y,z] (optional pivot for scale/rotation)
 - symmetrize axis=x|y|z side=positive|negative
 - mirror axis=x|y|z
 - array count=n offset=[x,y,z]
+- array count=n offset=[x,y,z] centered=true
 - subdivide level=n
 - smooth iterations=n strength=value
 - simplify ratio=value
@@ -64,6 +66,8 @@ Rules:
 - Use #@transform for object-level placement intent even when vertices are already in place
 - Use reasonable default materials (e.g., color=#888888 roughness=0.5 metalness=0.0)
 - Prefer #@post symmetrize over manually modeling both sides when a design is clearly symmetric. Emit the cleaner half or a rough full mesh, then add symmetrize.
+- When adding #@controls for spacing between paired supports, legs, rails, wheels, armrests, or repeated modules, keep the whole object centered as values change. Use `#@ - array count=n offset=[...] centered=true` when the base module is centered at the origin, or follow the array with `#@ - center_origin axes=x|z|xz` when the mesh is authored as one side and duplicated.
+- When adding #@controls for width/height/depth scale, use `pivot=[x,y,z]` on transform when a contact edge, ground point, hinge, backrest base, or attachment point should stay fixed.
 - Put material/tag post ops inside #@post blocks. Do not use #@ops in raw-first mode.
 
 Example cube with material:

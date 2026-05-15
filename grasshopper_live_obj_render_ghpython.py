@@ -1,0 +1,704 @@
+# Grasshopper GHPython component: Live OBJ/raw OBJ renderer with automatic controls.
+#
+# Inputs to create:
+#   live_obj          str
+#   values            list access, item access also works if one value
+#   refresh_controls  bool
+#   clear_controls    bool
+#
+# Outputs to create:
+#   meshes
+#   controls
+#   executed_obj
+#   warnings
+#   status
+#
+# Supported:
+#   OBJ cache/raw v/f/o mesh parsing
+#   #@up: y conversion into Rhino Z-up coordinates
+#   #@params
+#   #@controls: slider, seed, toggle, choice/value_list
+#   #@post:
+#     transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz]
+#       optional: pivot=[x,y,z] for scale/rotation pivot in source coordinates
+#     mirror axis=x|y|z
+#     array count=n offset=[x,y,z] centered=true|false
+#     snap_to_ground axis=x|y|z
+#     center_origin axes=xz|xy|yz|xyz
+
+import ast
+import math
+import re
+import System
+import Rhino.Geometry as rg
+import Grasshopper
+import Grasshopper.Kernel as ghk
+import Grasshopper.Kernel.Special as ghks
+
+
+GENERATED_PREFIX = "spellshape:"
+
+
+class ControlSpec(object):
+    def __init__(self, object_name, kind, key, label, min_v=None, max_v=None, step=None, options=None):
+        self.object_name = object_name or "unnamed"
+        self.kind = (kind or "slider").lower()
+        self.key = key or ""
+        self.label = (label or key or "").replace("_", " ")
+        self.min = min_v
+        self.max = max_v
+        self.step = step
+        self.options = options or []
+
+    @property
+    def full_key(self):
+        return "%s.%s" % (self.object_name, self.key)
+
+    @property
+    def nickname(self):
+        return GENERATED_PREFIX + self.full_key
+
+    def display(self):
+        return "%s [%s] min=%s max=%s step=%s" % (
+            self.full_key,
+            self.kind,
+            self.min,
+            self.max,
+            self.step,
+        )
+
+
+class PostOp(object):
+    def __init__(self, cmd, args):
+        self.cmd = (cmd or "").lower()
+        self.args = args or {}
+
+
+class Obj(object):
+    def __init__(self, name="unnamed", first_vertex_index=1):
+        self.name = name
+        self.first_vertex_index = first_vertex_index
+        self.vertices = []
+        self.faces = []
+        self.params = {}
+        self.controls = []
+        self.post_ops = []
+
+
+class Scene(object):
+    def __init__(self):
+        self.objects = []
+        self.controls = []
+        self.params = {}
+        self.up = "z"
+
+
+def split_lines(text):
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
+def split_top_level(text, separator=","):
+    out = []
+    buf = []
+    depth = 0
+    quote = None
+    for ch in text or "":
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch in "[({":
+            depth += 1
+        elif ch in "])}":
+            depth = max(0, depth - 1)
+        if ch == separator and depth == 0:
+            token = "".join(buf).strip()
+            if token:
+                out.append(token)
+            buf = []
+            continue
+        buf.append(ch)
+    token = "".join(buf).strip()
+    if token:
+        out.append(token)
+    return out
+
+
+def split_top_level_spaces(text):
+    out = []
+    buf = []
+    depth = 0
+    quote = None
+    for ch in text or "":
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch in "[({":
+            depth += 1
+        elif ch in "])}":
+            depth = max(0, depth - 1)
+        if ch.isspace() and depth == 0:
+            token = "".join(buf).strip()
+            if token:
+                out.append(token)
+            buf = []
+            continue
+        buf.append(ch)
+    token = "".join(buf).strip()
+    if token:
+        out.append(token)
+    return out
+
+
+def parse_comma_kvs(text):
+    out = {}
+    for part in split_top_level(text, ","):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        if k:
+            out[k] = v.strip()
+    return out
+
+
+def parse_space_kvs(text):
+    out = {}
+    for token in split_top_level_spaces(text):
+        if "=" not in token:
+            continue
+        k, v = token.split("=", 1)
+        k = k.strip()
+        if k:
+            out[k] = v.strip()
+    return out
+
+
+def parse_control(object_name, line):
+    parts = split_top_level_spaces(line)
+    if not parts:
+        return None
+    kind = parts[0].strip().lower()
+    args = parse_space_kvs(" ".join(parts[1:]))
+    key = args.get("key") or args.get("param") or args.get("name")
+    if not key:
+        return None
+    options_raw = args.get("options") or args.get("values") or ""
+    options = [p.strip() for p in re.split(r"[|,]", options_raw) if p.strip()]
+    return ControlSpec(
+        object_name,
+        kind,
+        key.strip(),
+        (args.get("label") or key).strip(),
+        args.get("min"),
+        args.get("max"),
+        args.get("step"),
+        options,
+    )
+
+
+def parse_post(line):
+    parts = split_top_level_spaces(line)
+    if not parts:
+        return PostOp("", {})
+    return PostOp(parts[0], parse_space_kvs(" ".join(parts[1:])))
+
+
+def parse_face_index(token):
+    head = token.split("/")[0]
+    try:
+        return int(head)
+    except Exception:
+        return 0
+
+
+def parse_live_obj(text, warn):
+    scene = Scene()
+    current = None
+    block = None
+    global_vertex = 0
+    seen_object = False
+
+    def flush():
+        if current is None:
+            return
+        if not (current.vertices or current.faces or current.params or current.controls or current.post_ops):
+            return
+        scene.objects.append(current)
+        scene.controls.extend(current.controls)
+
+    for raw in split_lines(text):
+        line = raw.strip()
+        if not line:
+            continue
+
+        m = re.match(r"^o\s+(.+)$", line)
+        if m:
+            flush()
+            current = Obj(m.group(1).strip(), global_vertex + 1)
+            block = None
+            seen_object = True
+            continue
+
+        if current is None and seen_object:
+            current = Obj("unnamed", global_vertex + 1)
+
+        if line.startswith("#@"):
+            body = line[2:].strip()
+            low = body.lower()
+            if low.startswith("up:"):
+                up = body.split(":", 1)[1].strip().lower()
+                if up in ("x", "y", "z"):
+                    scene.up = up
+                continue
+            if low == "controls:":
+                block = "controls"
+                continue
+            if low == "post:":
+                block = "post"
+                continue
+            if low.startswith("params:"):
+                if current is None:
+                    scene.params.update(parse_comma_kvs(body[len("params:") :]))
+                else:
+                    current.params.update(parse_comma_kvs(body[len("params:") :]))
+                block = "params"
+                continue
+            if body.endswith(":") and not body.startswith("-"):
+                block = None
+                continue
+            if body.startswith("- "):
+                item = body[2:].strip()
+                if block == "controls":
+                    c = parse_control(current.name if current is not None else "scene", item)
+                    if c:
+                        if current is None:
+                            scene.controls.append(c)
+                        else:
+                            current.controls.append(c)
+                elif block == "post":
+                    op = parse_post(item)
+                    if op.cmd:
+                        current.post_ops.append(op)
+                elif block == "params":
+                    if current is None:
+                        scene.params.update(parse_comma_kvs(item))
+                    else:
+                        current.params.update(parse_comma_kvs(item))
+                continue
+            if low.startswith("post "):
+                op = parse_post(body[len("post ") :])
+                if op.cmd:
+                    current.post_ops.append(op)
+            continue
+
+        if line.startswith("v "):
+            if current is None:
+                current = Obj("unnamed", global_vertex + 1)
+            parts = line.split()
+            if len(parts) >= 4:
+                try:
+                    current.vertices.append(rg.Point3d(float(parts[1]), float(parts[2]), float(parts[3])))
+                    global_vertex += 1
+                except Exception as e:
+                    warn.append("bad vertex on %s: %s" % (current.name, e))
+            continue
+
+        if line.startswith("f "):
+            if current is None:
+                current = Obj("unnamed", global_vertex + 1)
+            ids = [parse_face_index(t) for t in line.split()[1:]]
+            ids = [i for i in ids if i > 0]
+            if len(ids) >= 3:
+                current.faces.append(ids)
+
+    flush()
+    return scene
+
+
+def values_to_overrides(ctrls, vals):
+    if vals is None:
+        vals = []
+    elif not isinstance(vals, (list, tuple)):
+        vals = [vals]
+    out = {}
+    for i, c in enumerate(ctrls):
+        if i >= len(vals):
+            break
+        if vals[i] is None:
+            continue
+        out[c.full_key] = str(vals[i])
+    return out
+
+
+def apply_overrides(scene, overrides):
+    for c in scene.controls:
+        if c.full_key in overrides:
+            scene.params[c.key] = overrides[c.full_key]
+    for obj in scene.objects:
+        for c in obj.controls:
+            if c.full_key in overrides:
+                obj.params[c.key] = overrides[c.full_key]
+
+
+def object_scope(scene, obj):
+    scope = dict(scene.params)
+    scope.update(obj.params)
+    return scope
+
+
+def eval_number(raw, scope):
+    if raw is None:
+        return 0.0
+    text = str(raw).strip()
+    if text in scope:
+        return eval_number(scope[text], scope)
+    try:
+        return float(text)
+    except Exception:
+        pass
+
+    expr = text
+    for k in sorted(scope.keys(), key=len, reverse=True):
+        try:
+            v = float(scope[k])
+        except Exception:
+            continue
+        expr = re.sub(r"\b%s\b" % re.escape(k), repr(v), expr)
+    if not re.match(r"^[0-9eE\.\+\-\*\/\(\) ]+$", expr):
+        return 0.0
+    try:
+        return float(eval(expr, {"__builtins__": {}}, {}))
+    except Exception:
+        return 0.0
+
+
+def eval_bool(raw, default=False):
+    if raw is None:
+        return default
+    text = str(raw).strip().lower()
+    if text in ("1", "true", "yes", "on", "center", "centered"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def parse_vec3(raw, scope, default):
+    if raw is None:
+        return rg.Vector3d(*default)
+    text = str(raw).strip()
+    if text in scope:
+        text = str(scope[text]).strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    parts = split_top_level(text, ",")
+    if len(parts) < 3:
+        return rg.Vector3d(*default)
+    return rg.Vector3d(eval_number(parts[0], scope), eval_number(parts[1], scope), eval_number(parts[2], scope))
+
+
+def source_to_rhino_transform(scene):
+    # Rhino is Z-up. Web/raw OBJ files are often Y-up. Convert Y-up source
+    # coordinates (x, y, z) to Rhino coordinates (x, -z, y), which is a
+    # right-handed +90 degree rotation around X.
+    if scene.up == "y":
+        return rg.Transform.Rotation(math.radians(90.0), rg.Vector3d.XAxis, rg.Point3d.Origin)
+    if scene.up == "x":
+        # Defensive support only: X-up source to Rhino Z-up.
+        return rg.Transform.Rotation(math.radians(-90.0), rg.Vector3d.YAxis, rg.Point3d.Origin)
+    return rg.Transform.Identity
+
+
+def rhino_to_source_transform(scene):
+    if scene.up == "y":
+        return rg.Transform.Rotation(math.radians(-90.0), rg.Vector3d.XAxis, rg.Point3d.Origin)
+    if scene.up == "x":
+        return rg.Transform.Rotation(math.radians(90.0), rg.Vector3d.YAxis, rg.Point3d.Origin)
+    return rg.Transform.Identity
+
+
+def source_to_rhino_axis(axis, scene):
+    axis = (axis or "z").lower()
+    if scene.up == "y":
+        return {"x": "x", "y": "z", "z": "y"}.get(axis, axis)
+    if scene.up == "x":
+        return {"x": "z", "y": "y", "z": "x"}.get(axis, axis)
+    return axis
+
+
+def build_mesh(obj, warn, scene):
+    if not obj.vertices or not obj.faces:
+        return None
+    source_to_rhino = source_to_rhino_transform(scene)
+    mesh = rg.Mesh()
+    for p in obj.vertices:
+        p = rg.Point3d(p)
+        p.Transform(source_to_rhino)
+        mesh.Vertices.Add(p)
+    for f in obj.faces:
+        local = [i - obj.first_vertex_index for i in f]
+        if any(i < 0 or i >= len(obj.vertices) for i in local):
+            warn.append("skipped out-of-range face on %s" % obj.name)
+            continue
+        if len(local) == 3:
+            mesh.Faces.AddFace(local[0], local[1], local[2])
+        elif len(local) == 4:
+            mesh.Faces.AddFace(local[0], local[1], local[2], local[3])
+        else:
+            for i in range(1, len(local) - 1):
+                mesh.Faces.AddFace(local[0], local[i], local[i + 1])
+    if mesh.Faces.Count == 0:
+        return None
+    mesh.Normals.ComputeNormals()
+    mesh.Compact()
+    return mesh
+
+
+def get_arg(op, key, fallback):
+    return op.args.get(key, fallback)
+
+
+def sandwich_source_xform(source_xform, scene):
+    if scene.up == "z":
+        return source_xform
+    return source_to_rhino_transform(scene) * source_xform * rhino_to_source_transform(scene)
+
+
+def source_mirror_transform(axis):
+    axis = (axis or "x").lower()
+    plane = rg.Plane.WorldYZ if axis == "x" else rg.Plane.WorldZX if axis == "y" else rg.Plane.WorldXY
+    return rg.Transform.Mirror(plane)
+
+
+def apply_post_ops(mesh, obj, warn, scene):
+    scope = object_scope(scene, obj)
+    for op in obj.post_ops:
+        if op.cmd == "transform":
+            pos = parse_vec3(get_arg(op, "position", "[0,0,0]"), scope, (0, 0, 0))
+            rot = parse_vec3(get_arg(op, "rotation", "[0,0,0]"), scope, (0, 0, 0))
+            scale = parse_vec3(get_arg(op, "scale", "[1,1,1]"), scope, (1, 1, 1))
+            pivot = parse_vec3(get_arg(op, "pivot", "[0,0,0]"), scope, (0, 0, 0))
+            xform = rg.Transform.Scale(rg.Plane.WorldXY, scale.X, scale.Y, scale.Z)
+            xform = rg.Transform.Rotation(math.radians(rot.X), rg.Vector3d.XAxis, rg.Point3d.Origin) * xform
+            xform = rg.Transform.Rotation(math.radians(rot.Y), rg.Vector3d.YAxis, rg.Point3d.Origin) * xform
+            xform = rg.Transform.Rotation(math.radians(rot.Z), rg.Vector3d.ZAxis, rg.Point3d.Origin) * xform
+            if pivot.Length > 0:
+                xform = rg.Transform.Translation(pivot) * xform * rg.Transform.Translation(-pivot)
+            xform = rg.Transform.Translation(pos) * xform
+            mesh.Transform(sandwich_source_xform(xform, scene))
+        elif op.cmd == "mirror":
+            axis = get_arg(op, "axis", "x").lower()
+            copy = mesh.DuplicateMesh()
+            copy.Transform(sandwich_source_xform(source_mirror_transform(axis), scene))
+            mesh.Append(copy)
+        elif op.cmd == "array":
+            count = max(1, int(round(eval_number(get_arg(op, "count", "1"), scope))))
+            offset = parse_vec3(get_arg(op, "offset", "[1,0,0]"), scope, (1, 0, 0))
+            centered = eval_bool(get_arg(op, "centered", get_arg(op, "center", None)), False)
+            base = mesh.DuplicateMesh()
+            if centered and count > 1:
+                mesh.Transform(sandwich_source_xform(rg.Transform.Translation(offset * (-0.5 * (count - 1))), scene))
+            for i in range(1, count):
+                copy = base.DuplicateMesh()
+                step = offset * i
+                if centered and count > 1:
+                    step = offset * (i - 0.5 * (count - 1))
+                copy.Transform(sandwich_source_xform(rg.Transform.Translation(step), scene))
+                mesh.Append(copy)
+        elif op.cmd == "snap_to_ground":
+            axis = source_to_rhino_axis(get_arg(op, "axis", scene.up), scene)
+            bb = mesh.GetBoundingBox(True)
+            if axis == "x":
+                move = rg.Vector3d(-bb.Min.X, 0, 0)
+            elif axis == "y":
+                move = rg.Vector3d(0, -bb.Min.Y, 0)
+            else:
+                move = rg.Vector3d(0, 0, -bb.Min.Z)
+            mesh.Transform(rg.Transform.Translation(move))
+        elif op.cmd == "center_origin":
+            source_axes = get_arg(op, "axes", "xyz").lower()
+            axes = "".join(sorted(set(source_to_rhino_axis(a, scene) for a in source_axes if a in "xyz")))
+            bb = mesh.GetBoundingBox(True)
+            c = bb.Center
+            mesh.Transform(rg.Transform.Translation(
+                -c.X if "x" in axes else 0,
+                -c.Y if "y" in axes else 0,
+                -c.Z if "z" in axes else 0,
+            ))
+        elif op.cmd in ("material", "tag"):
+            pass
+        else:
+            warn.append("unsupported #@post op on %s: %s" % (obj.name, op.cmd))
+    mesh.Normals.ComputeNormals()
+    mesh.Compact()
+
+
+def serialize_meshes(mesh_list):
+    lines = []
+    offset = 1
+    for mi, mesh in enumerate(mesh_list):
+        lines.append("o mesh_%d" % mi)
+        for v in mesh.Vertices:
+            lines.append("v %.8g %.8g %.8g" % (v.X, v.Y, v.Z))
+        for f in mesh.Faces:
+            if f.IsTriangle:
+                lines.append("f %d %d %d" % (f.A + offset, f.B + offset, f.C + offset))
+            else:
+                lines.append("f %d %d %d %d" % (f.A + offset, f.B + offset, f.C + offset, f.D + offset))
+        offset += mesh.Vertices.Count
+    return "\n".join(lines)
+
+
+def gh_doc():
+    try:
+        return ghenv.Component.OnPingDocument()
+    except Exception:
+        return None
+
+
+def remove_generated_controls():
+    doc = gh_doc()
+    if doc is None:
+        return
+    mine = []
+    for obj in doc.Objects:
+        if getattr(obj, "NickName", "").startswith(GENERATED_PREFIX):
+            mine.append(obj)
+    for obj in mine:
+        doc.RemoveObject(obj, False)
+
+
+def controls_need_refresh(ctrls):
+    try:
+        input_param = ghenv.Component.Params.Input[1]
+    except Exception:
+        return False
+    sources = list(input_param.Sources)
+    if len(sources) != len(ctrls):
+        return True
+    for source, ctrl in zip(sources, ctrls):
+        if source.NickName != ctrl.nickname:
+            return True
+    return False
+
+
+def create_control_object(ctrl):
+    kind = ctrl.kind
+    if kind in ("toggle", "bool", "boolean"):
+        obj = ghks.GH_BooleanToggle()
+        obj.Name = ctrl.label
+        obj.NickName = ctrl.nickname
+        obj.Value = False
+        obj.CreateAttributes()
+        return obj
+
+    if kind in ("choice", "value_list", "select", "dropdown"):
+        obj = ghks.GH_ValueList()
+        obj.Name = ctrl.label
+        obj.NickName = ctrl.nickname
+        obj.ListItems.Clear()
+        opts = ctrl.options or ["default"]
+        for opt in opts:
+            obj.ListItems.Add(ghks.GH_ValueListItem(opt, '"%s"' % opt))
+        obj.CreateAttributes()
+        return obj
+
+    obj = ghks.GH_NumberSlider()
+    obj.Name = ctrl.label
+    obj.NickName = ctrl.nickname
+    min_v = float(ctrl.min) if ctrl.min not in (None, "") else 0.0
+    max_v = float(ctrl.max) if ctrl.max not in (None, "") else 1.0
+    step_v = abs(float(ctrl.step)) if ctrl.step not in (None, "") else 0.01
+    obj.Slider.Minimum = System.Decimal(min_v)
+    obj.Slider.Maximum = System.Decimal(max_v)
+    obj.Slider.DecimalPlaces = 0 if step_v >= 1 else 1 if step_v >= 0.1 else 2 if step_v >= 0.01 else 3
+    obj.SetSliderValue(System.Decimal(min_v))
+    obj.CreateAttributes()
+    return obj
+
+
+def create_or_refresh_controls(ctrls):
+    doc = gh_doc()
+    if doc is None:
+        return
+    try:
+        input_param = ghenv.Component.Params.Input[1]
+    except Exception:
+        return
+
+    input_param.RemoveAllSources()
+    remove_generated_controls()
+
+    pivot = ghenv.Component.Attributes.Pivot
+    x = pivot.X - 220
+    y = pivot.Y
+
+    for i, ctrl in enumerate(ctrls):
+        obj = create_control_object(ctrl)
+        obj.Attributes.Pivot = System.Drawing.PointF(x, y + i * 32)
+        doc.AddObject(obj, False)
+        try:
+            input_param.AddSource(obj)
+        except Exception:
+            pass
+
+    ghenv.Component.Params.OnParametersChanged()
+    doc.ScheduleSolution(10, lambda d: ghenv.Component.ExpireSolution(False))
+
+
+# Main execution.
+warnings = []
+scene = parse_live_obj(live_obj or "", warnings)
+
+if clear_controls:
+    remove_generated_controls()
+
+if scene.controls and (refresh_controls or controls_need_refresh(scene.controls)):
+    create_or_refresh_controls(scene.controls)
+
+overrides = values_to_overrides(scene.controls, values)
+apply_overrides(scene, overrides)
+
+meshes = []
+for obj in scene.objects:
+    mesh = build_mesh(obj, warnings, scene)
+    if mesh is None:
+        continue
+    apply_post_ops(mesh, obj, warnings, scene)
+    meshes.append(mesh)
+
+controls = [c.display() for c in scene.controls]
+executed_obj = serialize_meshes(meshes)
+status = "objects=%d controls=%d meshes=%d warnings=%d up=%s input_chars=%d" % (
+    len(scene.objects),
+    len(scene.controls),
+    len(meshes),
+    len(warnings),
+    scene.up,
+    len(live_obj or ""),
+)
+
+if len(scene.objects) == 0 and (live_obj or "").strip():
+    warnings.append("No OBJ objects parsed. Input starts with: %r" % ((live_obj or "").strip()[:240],))
+elif len(meshes) == 0 and len(scene.objects) > 0:
+    summary = []
+    for obj in scene.objects[:8]:
+        summary.append("%s: v=%d f=%d" % (obj.name, len(obj.vertices), len(obj.faces)))
+    warnings.append("Parsed objects but no renderable meshes: " + "; ".join(summary))
+
+try:
+    ghenv.Component.Message = status
+except Exception:
+    pass

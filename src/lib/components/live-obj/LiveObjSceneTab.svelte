@@ -22,7 +22,7 @@
 		outlineNormalSensitivity = $bindable(1),
 		toonSteps = $bindable<2 | 3 | 4 | 5>(3),
 		toonOutline = $bindable(true),
-		executedObjText = ''
+		liveObjText = ''
 	}: {
 		backgroundColor?: string;
 		showGrid?: boolean;
@@ -44,16 +44,16 @@
 		outlineNormalSensitivity?: number;
 		toonSteps?: 2 | 3 | 4 | 5;
 		toonOutline?: boolean;
-		executedObjText?: string;
+		liveObjText?: string;
 	} = $props();
 
 	function downloadObj() {
-		if (!executedObjText.trim()) return;
-		const blob = new Blob([executedObjText], { type: 'text/plain' });
+		if (!liveObjText.trim()) return;
+		const blob = new Blob([liveObjText], { type: 'text/plain' });
 		const url = URL.createObjectURL(blob);
 		const link = document.createElement('a');
 		link.href = url;
-		link.download = 'project-name.obj';
+		link.download = 'spellshape-live.obj';
 		document.body.appendChild(link);
 		link.click();
 		document.body.removeChild(link);
@@ -62,9 +62,12 @@
 </script>
 
 <div class="live-obj-scene">
-	<button type="button" class="send-button" onclick={downloadObj} disabled={!executedObjText.trim()}>
-		Download OBJ
+	<button type="button" class="send-button" onclick={downloadObj} disabled={!liveObjText.trim()}>
+		Save Live OBJ
 	</button>
+	<p class="live-obj-save-helper">
+		A standard OBJ with Spellshape metadata. Opens in any 3D app; reopen in Spellshape for editable parts and parameters.
+	</p>
 	<div class="planner-chain">
 		<label class="planner-context-field kernel-default">
 			<span class="planner-label-inline">Kernel</span>
@@ -169,6 +172,13 @@
 	.live-obj-scene > button {
 		margin: 12px 0;
 		width: 100%;
+	}
+
+	.live-obj-save-helper {
+		margin: -4px 0 12px;
+		color: rgba(15, 23, 42, 0.68);
+		font-size: 0.82rem;
+		line-height: 1.35;
 	}
 
 	.kernel-default select,
