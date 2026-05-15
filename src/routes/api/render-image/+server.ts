@@ -29,6 +29,23 @@ function dataUrlToBase64Payload(dataUrl: string): string {
 	return m[1];
 }
 
+function dataUrlToInlineImage(dataUrl: string): { mimeType: string; data: string } {
+	const m = dataUrl.match(/^data:(.+?);base64,(.+)$/);
+	if (!m) {
+		throw new Error('Invalid data URL payload');
+	}
+	return { mimeType: m[1], data: m[2] };
+}
+
+function isGoogleGenerateContentUrl(url: string): boolean {
+	return url.includes('generativelanguage.googleapis.com') && url.includes(':generateContent');
+}
+
+function googleGenerateContentUrlForModel(url: string, model: string): string {
+	if (!isGoogleGenerateContentUrl(url)) return url;
+	return url.replace(/\/models\/[^/:]+:generateContent/, `/models/${encodeURIComponent(model)}:generateContent`);
+}
+
 async function urlToDataUrl(url: string): Promise<string> {
 	const proxyRes = await fetch(url);
 	if (!proxyRes.ok) throw new Error(`Image proxy fetch failed: ${proxyRes.status}`);
@@ -71,6 +88,82 @@ Do not redesign the object. Preserve exact silhouette, object count, relative po
 
 Use this scene metadata as a hard constraint for objects, materials, and structure:
 ${sceneMetadata || '(no #@ metadata found)'}`;
+
+	if (isGoogleGenerateContentUrl(imagesApiUrl)) {
+		const image = dataUrlToInlineImage(screenshotDataUrl);
+		const googleUrl = googleGenerateContentUrlForModel(imagesApiUrl, imageModel);
+		const abortController = new AbortController();
+		const timeout = setTimeout(() => abortController.abort(), OPENAI_IMAGES_TIMEOUT_MS);
+		let response: Response;
+		try {
+			response = await fetch(googleUrl, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'x-goog-api-key': apiKey
+				},
+				body: JSON.stringify({
+					contents: [
+						{
+							role: 'user',
+							parts: [
+								{ text: fullPrompt },
+								{
+									inline_data: {
+										mime_type: image.mimeType,
+										data: image.data
+									}
+								}
+							]
+						}
+					],
+					generationConfig: {
+						responseModalities: ['TEXT', 'IMAGE']
+					}
+				}),
+				signal: abortController.signal
+			});
+		} catch (err) {
+			const message =
+				err instanceof Error && err.name === 'AbortError'
+					? `Image provider request timed out after ${Math.round(OPENAI_IMAGES_TIMEOUT_MS / 1000)}s`
+					: `Unable to reach image provider (${googleUrl}): ${networkErrorMessage(err)}`;
+			throw error(502, message);
+		} finally {
+			clearTimeout(timeout);
+		}
+
+		const payload = (await response.json().catch(() => ({}))) as {
+			error?: { message?: string };
+			candidates?: Array<{
+				content?: {
+					parts?: Array<{
+						text?: string;
+						inlineData?: { mimeType?: string; data?: string };
+						inline_data?: { mime_type?: string; data?: string };
+					}>;
+				};
+			}>;
+		};
+		if (!response.ok) {
+			throw error(response.status, payload.error?.message ?? 'Image generation failed');
+		}
+
+		const parts = payload.candidates?.[0]?.content?.parts ?? [];
+		const imagePart = parts.find((part) => part.inlineData?.data || part.inline_data?.data);
+		const inlineImage = imagePart?.inlineData
+			? { mimeType: imagePart.inlineData.mimeType, data: imagePart.inlineData.data }
+			: imagePart?.inline_data
+				? { mimeType: imagePart.inline_data.mime_type, data: imagePart.inline_data.data }
+				: undefined;
+		if (!inlineImage?.data) {
+			const text = parts.map((part) => part.text).filter(Boolean).join(' ');
+			throw error(502, text || 'No image returned by provider');
+		}
+
+		const mimeType = inlineImage.mimeType ?? 'image/png';
+		return json({ imageDataUrl: `data:${mimeType};base64,${inlineImage.data}` });
+	}
 
 	const form = new FormData();
 	form.append('model', imageModel);

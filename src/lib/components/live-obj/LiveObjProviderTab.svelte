@@ -14,6 +14,10 @@
 			text: ['gpt-5.5', 'gpt-4o'],
 			image: ['gpt-image-2', 'gpt-image-1.5']
 		},
+		google: {
+			text: ['gemini-3.1-pro-preview'],
+			image: ['gemini-3.1-flash-image-preview']
+		},
 		together: {
 			text: ['deepseek-ai/DeepSeek-V4-Pro', 'MiniMaxAI/MiniMax-M2.7', 'moonshotai/Kimi-K2.6', 'zai-org/GLM-5.1', 'google/gemma-4-31B-it', 'openai/gpt-oss-120b'],
 			image: ['black-forest-labs/FLUX.2-pro', 'Qwen/Qwen-Image-2.0']
@@ -25,6 +29,10 @@
 			text: 'https://api.openai.com/v1/chat/completions',
 			image: 'https://api.openai.com/v1/images/edits'
 		},
+		google: {
+			text: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+			image: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent'
+		},
 		together: {
 			text: 'https://api.together.xyz/v1/chat/completions',
 			image: 'https://api.together.xyz/v1/images/edits'
@@ -32,6 +40,8 @@
 	};
 
 	const CUSTOM = '__custom__';
+	const DEFAULT_TEXT_URLS = Object.values(PROVIDER_DEFAULT_URLS).map((defaults) => defaults.text);
+	const DEFAULT_IMAGE_URLS = Object.values(PROVIDER_DEFAULT_URLS).map((defaults) => defaults.image);
 
 	let { settings = $bindable<ProviderSettings>({ provider: 'openai', apiKey: '', apiUrl: 'https://api.openai.com/v1/chat/completions', imageUrl: 'https://api.openai.com/v1/images/edits', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }), busy = false }: { settings?: ProviderSettings; busy?: boolean } = $props();
 
@@ -46,10 +56,10 @@
 		if (settings.provider && PROVIDER_DEFAULT_URLS[settings.provider as keyof typeof PROVIDER_DEFAULT_URLS]) {
 			const defaults = PROVIDER_DEFAULT_URLS[settings.provider as keyof typeof PROVIDER_DEFAULT_URLS];
 			const models = PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS];
-			if (!settings.apiUrl || settings.apiUrl === PROVIDER_DEFAULT_URLS.openai.text || settings.apiUrl === PROVIDER_DEFAULT_URLS.together.text) {
+			if (!settings.apiUrl || DEFAULT_TEXT_URLS.includes(settings.apiUrl)) {
 				settings.apiUrl = defaults.text;
 			}
-			if (!settings.imageUrl || settings.imageUrl === PROVIDER_DEFAULT_URLS.openai.image || settings.imageUrl === PROVIDER_DEFAULT_URLS.together.image) {
+			if (!settings.imageUrl || DEFAULT_IMAGE_URLS.includes(settings.imageUrl)) {
 				settings.imageUrl = defaults.image;
 			}
 			// Set model to first in list if current model is not in the new provider's model list
@@ -79,6 +89,7 @@
 	<label>Provider
 		<select bind:value={settings.provider} disabled={busy}>
 			<option value="openai">OpenAI</option>
+			<option value="google">Google</option>
 			<option value="together">Together</option>
 		</select>
 	</label>
