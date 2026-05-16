@@ -1,15 +1,18 @@
 # Spellshape
 
-AI-native 3D authoring platform. Create 3D models by describing them in natural language.
+AI-native 3D authoring for portable, editable Live OBJ scenes.
 
 ## What is Spellshape?
 
-Spellshape is a web-based 3D modeling tool that uses AI to generate 3D geometry from text descriptions. It runs on top of the OBJ file format enhanced with metadata, allowing for procedural generation, signed distance fields (SDF), simulations, and more.
+Spellshape is a web-based 3D modeling tool for creating and iterating on semantic 3D scenes with AI. It runs on Live OBJ: standard OBJ geometry plus ignored-by-default `#@` metadata for editable parts, parameters, procedural intent, signed distance fields (SDF), simulations, and more.
+
+Spellshape scenes are valid OBJ files. They open in ordinary 3D software as normal meshes, and reopen in Spellshape-aware tools as editable semantic scenes.
 
 ### Key Features
 
-- **Natural Language to 3D**: Type what you want to build, and AI generates the geometry
-- **Live OBJ Format**: OBJ files with `#@` metadata that drives geometry generation
+- **Natural Language to Editable Scenes**: Describe what you want to build, then keep editing semantic parts and parameters
+- **Live OBJ Format**: Standard OBJ files with `#@` metadata that drives editable scene regeneration
+- **Portable Project Artifact**: Save a Live OBJ that works as mesh geometry anywhere and stays editable in Spellshape
 - **Bring Your Own API Key**: Use your own OpenAI API key for model access
 - **Multiple Generation Methods**:
   - Procedural generation (CADQuery kernel)
@@ -26,8 +29,49 @@ Spellshape is a web-based 3D modeling tool that uses AI to generate 3D geometry 
 2. Model returns Live OBJ text (`#@` metadata + OBJ cache)
 3. Executor expands/regenerates geometry from metadata
 4. UI shows chat, source outputs (live/raw/executed), and metadata-driven controls
+5. User saves the Live OBJ as the durable editable scene artifact
 
 The `#@` metadata is the editable source of truth; mesh `v/f` is cache/output.
+
+### Live OBJ as Project File
+
+A saved Live OBJ is not just a baked mesh export. It is a standard OBJ file with Spellshape metadata:
+
+```obj
+#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+
+o roof
+#@source: procedural
+#@semantic: dominant sculptural roof
+#@params: width=6.0, depth=4.0, overhang=1.2
+v ...
+f ...
+```
+
+Other tools can ignore the `#@` comments and read the geometry. Spellshape reads the metadata first, treats it as authoritative, and can regenerate the cached mesh when parameters or semantic edits change.
+
+Raw-first scenes can also carry post-parametric edit intent without becoming procedural CAD:
+
+```obj
+o roof
+#@source: llm_mesh
+#@semantic: heavy chapel roof
+#@part: id=roof role=dominant_form edit=direct
+#@params: roof_lift=0
+#@bbox: min=[-4,2,-2] max=[4,5,2]
+#@lock: silhouette, material
+#@anchor: id=roof_left_edge at=[-4,2,0]
+#@constraint: roof must_touch walls
+#@post:
+#@ - transform position=[0,roof_lift,0]
+v ...
+f ...
+```
+
+In raw-post mode, `#@post` is the executable mesh modifier stack. Metadata such as `#@bbox`, `#@lock`, `#@part`, `#@anchor`, `#@constraint`, and `#@variant` records semantic edit intent for planning, validation, targeted edits, and future UI controls.
 
 ### Tech Stack
 
@@ -70,6 +114,7 @@ npm run preview
 ## Live OBJ Syntax Examples
 
 ### Procedural Generation
+
 ```
 o wall
 #@source: procedural
@@ -78,6 +123,7 @@ o wall
 ```
 
 ### SDF Operations
+
 ```
 #@sdf:
 #@ - box id=a center=[0,0,0] size=[1,1,1]
@@ -86,14 +132,14 @@ o wall
 ```
 
 ### Transformations
+
 ```
 #@ops:
-#@ - move offset=[1,0,0]
-#@ - scale factor=2.0
-#@ - rotate angle=45 axis=z
+#@ - transform position=[1,0,0] rotation=[0,0,45] scale=[2,2,2]
 ```
 
 ### Simulation
+
 ```
 o coral
 #@source: simulation
@@ -104,6 +150,7 @@ o coral
 ## Contributing
 
 This project follows the working principles outlined in AGENTS.md:
+
 1. Think before coding - ask when ambiguous
 2. Simplicity first - minimum code that solves the problem
 3. Surgical changes - only touch what the task requires

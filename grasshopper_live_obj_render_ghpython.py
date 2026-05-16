@@ -1,4 +1,12 @@
-# Grasshopper GHPython component: Live OBJ/raw OBJ renderer with automatic controls.
+# Spellshape Grasshopper - Live OBJ / Raw OBJ Renderer
+# Release date: 2026-05-16
+# License: MIT
+# Source: https://github.com/StepanKukharskiy/live-obj
+#
+# Network behavior:
+# - No network calls.
+# - No telemetry.
+# - Reads OBJ/Live OBJ text locally and creates Rhino preview meshes.
 #
 # Inputs to create:
 #   live_obj          str
@@ -23,6 +31,10 @@
 #       optional: pivot=[x,y,z] for scale/rotation pivot in source coordinates
 #     mirror axis=x|y|z
 #     array count=n offset=[x,y,z] centered=true|false
+#     symmetrize axis=x|y|z side=positive|negative
+#     subdivide level=n
+#     smooth iterations=n strength=0.5
+#     simplify ratio=0.5
 #     snap_to_ground axis=x|y|z
 #     center_origin axes=xz|xy|yz|xyz
 
@@ -40,7 +52,7 @@ GENERATED_PREFIX = "spellshape:"
 
 
 class ControlSpec(object):
-    def __init__(self, object_name, kind, key, label, min_v=None, max_v=None, step=None, options=None):
+    def __init__(self, object_name, kind, key, label, min_v=None, max_v=None, step=None, options=None, value=None):
         self.object_name = object_name or "unnamed"
         self.kind = (kind or "slider").lower()
         self.key = key or ""
@@ -49,6 +61,7 @@ class ControlSpec(object):
         self.max = max_v
         self.step = step
         self.options = options or []
+        self.value = value
 
     @property
     def full_key(self):
@@ -59,9 +72,10 @@ class ControlSpec(object):
         return GENERATED_PREFIX + self.full_key
 
     def display(self):
-        return "%s [%s] min=%s max=%s step=%s" % (
+        return "%s [%s] value=%s min=%s max=%s step=%s" % (
             self.full_key,
             self.kind,
+            self.value,
             self.min,
             self.max,
             self.step,
@@ -173,6 +187,21 @@ def parse_comma_kvs(text):
     return out
 
 
+def parse_param_kvs(text):
+    parts = split_top_level(text, ",")
+    if len(parts) <= 1:
+        parts = split_top_level_spaces(text)
+    out = {}
+    for part in parts:
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        if k:
+            out[k] = v.strip().strip("\"'")
+    return out
+
+
 def parse_space_kvs(text):
     out = {}
     for token in split_top_level_spaces(text):
@@ -181,21 +210,32 @@ def parse_space_kvs(text):
         k, v = token.split("=", 1)
         k = k.strip()
         if k:
-            out[k] = v.strip()
+            out[k] = v.strip().strip("\"'")
     return out
 
 
-def parse_control(object_name, line):
+def parse_control(object_name, line, params=None):
     parts = split_top_level_spaces(line)
     if not parts:
         return None
-    kind = parts[0].strip().lower()
+    first = parts[0].strip()
     args = parse_space_kvs(" ".join(parts[1:]))
-    key = args.get("key") or args.get("param") or args.get("name")
+    if "type" in args or "kind" in args:
+        kind = (args.get("type") or args.get("kind") or "slider").strip().lower()
+        key = args.get("key") or args.get("param") or args.get("name") or first
+    elif "=" in first:
+        kind = "slider"
+        key = args.get("key") or args.get("param") or args.get("name") or first
+    else:
+        kind = first.lower()
+        key = args.get("key") or args.get("param") or args.get("name")
     if not key:
         return None
     options_raw = args.get("options") or args.get("values") or ""
     options = [p.strip() for p in re.split(r"[|,]", options_raw) if p.strip()]
+    value = args.get("value") or args.get("default") or args.get("current")
+    if value is None and params is not None:
+        value = params.get(key.strip())
     return ControlSpec(
         object_name,
         kind,
@@ -205,6 +245,7 @@ def parse_control(object_name, line):
         args.get("max"),
         args.get("step"),
         options,
+        value,
     )
 
 
@@ -265,14 +306,24 @@ def parse_live_obj(text, warn):
             if low == "controls:":
                 block = "controls"
                 continue
+            if low.startswith("controls:"):
+                item = body[len("controls:") :].strip()
+                c = parse_control(current.name if current is not None else "scene", item, current.params if current is not None else scene.params)
+                if c:
+                    if current is None:
+                        scene.controls.append(c)
+                    else:
+                        current.controls.append(c)
+                block = "controls"
+                continue
             if low == "post:":
                 block = "post"
                 continue
             if low.startswith("params:"):
                 if current is None:
-                    scene.params.update(parse_comma_kvs(body[len("params:") :]))
+                    scene.params.update(parse_param_kvs(body[len("params:") :]))
                 else:
-                    current.params.update(parse_comma_kvs(body[len("params:") :]))
+                    current.params.update(parse_param_kvs(body[len("params:") :]))
                 block = "params"
                 continue
             if body.endswith(":") and not body.startswith("-"):
@@ -281,7 +332,7 @@ def parse_live_obj(text, warn):
             if body.startswith("- "):
                 item = body[2:].strip()
                 if block == "controls":
-                    c = parse_control(current.name if current is not None else "scene", item)
+                    c = parse_control(current.name if current is not None else "scene", item, current.params if current is not None else scene.params)
                     if c:
                         if current is None:
                             scene.controls.append(c)
@@ -293,9 +344,9 @@ def parse_live_obj(text, warn):
                         current.post_ops.append(op)
                 elif block == "params":
                     if current is None:
-                        scene.params.update(parse_comma_kvs(item))
+                        scene.params.update(parse_param_kvs(item))
                     else:
-                        current.params.update(parse_comma_kvs(item))
+                        current.params.update(parse_param_kvs(item))
                 continue
             if low.startswith("post "):
                 op = parse_post(body[len("post ") :])
@@ -358,12 +409,14 @@ def object_scope(scene, obj):
     return scope
 
 
-def eval_number(raw, scope):
+def eval_number_or_none(raw, scope):
     if raw is None:
-        return 0.0
+        return None
     text = str(raw).strip()
     if text in scope:
-        return eval_number(scope[text], scope)
+        return eval_number_or_none(scope[text], scope)
+    if re.search(r"\$\{[^}]+\}", text) or re.search(r"(?<!\[)\{[A-Za-z_][A-Za-z0-9_]*\}", text):
+        return None
     try:
         return float(text)
     except Exception:
@@ -377,11 +430,16 @@ def eval_number(raw, scope):
             continue
         expr = re.sub(r"\b%s\b" % re.escape(k), repr(v), expr)
     if not re.match(r"^[0-9eE\.\+\-\*\/\(\) ]+$", expr):
-        return 0.0
+        return None
     try:
         return float(eval(expr, {"__builtins__": {}}, {}))
     except Exception:
-        return 0.0
+        return None
+
+
+def eval_number(raw, scope):
+    value = eval_number_or_none(raw, scope)
+    return 0.0 if value is None else value
 
 
 def eval_bool(raw, default=False):
@@ -395,6 +453,19 @@ def eval_bool(raw, default=False):
     return default
 
 
+def control_default_number(ctrl, fallback):
+    raw = ctrl.value
+    if raw in (None, ""):
+        raw = fallback
+    try:
+        return float(raw)
+    except Exception:
+        try:
+            return float(fallback)
+        except Exception:
+            return 0.0
+
+
 def parse_vec3(raw, scope, default):
     if raw is None:
         return rg.Vector3d(*default)
@@ -406,7 +477,10 @@ def parse_vec3(raw, scope, default):
     parts = split_top_level(text, ",")
     if len(parts) < 3:
         return rg.Vector3d(*default)
-    return rg.Vector3d(eval_number(parts[0], scope), eval_number(parts[1], scope), eval_number(parts[2], scope))
+    values = [eval_number_or_none(parts[0], scope), eval_number_or_none(parts[1], scope), eval_number_or_none(parts[2], scope)]
+    if any(v is None for v in values):
+        return rg.Vector3d(*default)
+    return rg.Vector3d(values[0], values[1], values[2])
 
 
 def source_to_rhino_transform(scene):
@@ -482,6 +556,179 @@ def source_mirror_transform(axis):
     return rg.Transform.Mirror(plane)
 
 
+def face_indices(face):
+    if face.IsTriangle:
+        return [face.A, face.B, face.C]
+    return [face.A, face.B, face.C, face.D]
+
+
+def add_face(mesh, ids):
+    if len(ids) == 3:
+        mesh.Faces.AddFace(ids[0], ids[1], ids[2])
+    elif len(ids) == 4:
+        mesh.Faces.AddFace(ids[0], ids[1], ids[2], ids[3])
+
+
+def face_centroid(mesh, face):
+    ids = face_indices(face)
+    if not ids:
+        return rg.Point3d.Origin
+    x = y = z = 0.0
+    for idx in ids:
+        p = mesh.Vertices[idx]
+        x += p.X
+        y += p.Y
+        z += p.Z
+    n = float(len(ids))
+    return rg.Point3d(x / n, y / n, z / n)
+
+
+def axis_value(point, axis):
+    if axis == "x":
+        return point.X
+    if axis == "y":
+        return point.Y
+    return point.Z
+
+
+def compact_mesh_faces(mesh, face_ids):
+    out = rg.Mesh()
+    used = {}
+    for face_id in face_ids:
+        face = mesh.Faces[face_id]
+        remapped = []
+        for idx in face_indices(face):
+            if idx not in used:
+                p = mesh.Vertices[idx]
+                used[idx] = out.Vertices.Add(p.X, p.Y, p.Z)
+            remapped.append(used[idx])
+        add_face(out, remapped)
+    out.Normals.ComputeNormals()
+    out.Compact()
+    return out
+
+
+def duplicate_mirrored(mesh, axis, scene):
+    copy = mesh.DuplicateMesh()
+    copy.Transform(sandwich_source_xform(source_mirror_transform(axis), scene))
+    return copy
+
+
+def apply_symmetrize(mesh, op, scene, warn, obj_name):
+    source_axis = get_arg(op, "axis", "x").lower()
+    rhino_axis = source_to_rhino_axis(source_axis, scene)
+    side = get_arg(op, "side", "positive").lower()
+    sign = -1.0 if side in ("negative", "minus", "-") else 1.0
+    try:
+        tol = abs(eval_number(get_arg(op, "tolerance", "0.000001"), dict(scene.params)))
+    except Exception:
+        tol = 0.000001
+    selected = []
+    for i in range(mesh.Faces.Count):
+        c = face_centroid(mesh, mesh.Faces[i])
+        if sign * axis_value(c, rhino_axis) >= -tol:
+            selected.append(i)
+    if not selected:
+        warn.append("symmetrize found no faces on requested side for %s; used mirror fallback" % obj_name)
+        mesh.Append(duplicate_mirrored(mesh, source_axis, scene))
+        return mesh
+    half = compact_mesh_faces(mesh, selected)
+    half.Append(duplicate_mirrored(half, source_axis, scene))
+    return half
+
+
+def apply_subdivide(mesh, op, scope):
+    try:
+        level = int(round(eval_number(get_arg(op, "level", "1"), scope)))
+    except Exception:
+        level = 1
+    level = max(0, min(3, level))
+    out = mesh.DuplicateMesh()
+    for _ in range(level):
+        next_mesh = rg.Mesh()
+        for v in out.Vertices:
+            next_mesh.Vertices.Add(v.X, v.Y, v.Z)
+        for face in out.Faces:
+            ids = face_indices(face)
+            pts = [out.Vertices[i] for i in ids]
+            x = sum(p.X for p in pts) / float(len(pts))
+            y = sum(p.Y for p in pts) / float(len(pts))
+            z = sum(p.Z for p in pts) / float(len(pts))
+            center_idx = next_mesh.Vertices.Add(x, y, z)
+            for i, a in enumerate(ids):
+                b = ids[(i + 1) % len(ids)]
+                next_mesh.Faces.AddFace(a, b, center_idx)
+        next_mesh.Normals.ComputeNormals()
+        next_mesh.Compact()
+        out = next_mesh
+    return out
+
+
+def vertex_neighbors(mesh):
+    neighbors = [set() for _ in range(mesh.Vertices.Count)]
+    for face in mesh.Faces:
+        ids = face_indices(face)
+        for i, idx in enumerate(ids):
+            prev_idx = ids[i - 1]
+            next_idx = ids[(i + 1) % len(ids)]
+            neighbors[idx].add(prev_idx)
+            neighbors[idx].add(next_idx)
+    return neighbors
+
+
+def apply_smooth(mesh, op, scope):
+    try:
+        iterations = int(round(eval_number(get_arg(op, "iterations", get_arg(op, "level", "1")), scope)))
+    except Exception:
+        iterations = 1
+    try:
+        strength = eval_number(get_arg(op, "strength", "0.5"), scope)
+    except Exception:
+        strength = 0.5
+    iterations = max(0, min(20, iterations))
+    strength = max(0.0, min(1.0, strength))
+    out = mesh.DuplicateMesh()
+    for _ in range(iterations):
+        neighbors = vertex_neighbors(out)
+        points = []
+        for i, v in enumerate(out.Vertices):
+            ns = list(neighbors[i])
+            if not ns:
+                points.append(rg.Point3d(v.X, v.Y, v.Z))
+                continue
+            ax = sum(out.Vertices[n].X for n in ns) / float(len(ns))
+            ay = sum(out.Vertices[n].Y for n in ns) / float(len(ns))
+            az = sum(out.Vertices[n].Z for n in ns) / float(len(ns))
+            points.append(rg.Point3d(
+                v.X * (1.0 - strength) + ax * strength,
+                v.Y * (1.0 - strength) + ay * strength,
+                v.Z * (1.0 - strength) + az * strength,
+            ))
+        next_mesh = rg.Mesh()
+        for p in points:
+            next_mesh.Vertices.Add(p)
+        for face in out.Faces:
+            add_face(next_mesh, face_indices(face))
+        next_mesh.Normals.ComputeNormals()
+        next_mesh.Compact()
+        out = next_mesh
+    return out
+
+
+def apply_simplify(mesh, op, scope):
+    try:
+        ratio = eval_number(get_arg(op, "ratio", "1"), scope)
+    except Exception:
+        ratio = 1.0
+    ratio = max(0.05, min(1.0, ratio))
+    if ratio >= 0.999 or mesh.Faces.Count == 0:
+        return mesh
+    target = max(1, int(math.ceil(mesh.Faces.Count * ratio)))
+    step = max(1, int(round(float(mesh.Faces.Count) / float(target))))
+    selected = [i for i in range(mesh.Faces.Count) if i % step == 0][:target]
+    return compact_mesh_faces(mesh, selected)
+
+
 def apply_post_ops(mesh, obj, warn, scene):
     scope = object_scope(scene, obj)
     for op in obj.post_ops:
@@ -500,9 +747,9 @@ def apply_post_ops(mesh, obj, warn, scene):
             mesh.Transform(sandwich_source_xform(xform, scene))
         elif op.cmd == "mirror":
             axis = get_arg(op, "axis", "x").lower()
-            copy = mesh.DuplicateMesh()
-            copy.Transform(sandwich_source_xform(source_mirror_transform(axis), scene))
-            mesh.Append(copy)
+            mesh.Append(duplicate_mirrored(mesh, axis, scene))
+        elif op.cmd == "symmetrize":
+            mesh = apply_symmetrize(mesh, op, scene, warn, obj.name)
         elif op.cmd == "array":
             count = max(1, int(round(eval_number(get_arg(op, "count", "1"), scope))))
             offset = parse_vec3(get_arg(op, "offset", "[1,0,0]"), scope, (1, 0, 0))
@@ -517,6 +764,14 @@ def apply_post_ops(mesh, obj, warn, scene):
                     step = offset * (i - 0.5 * (count - 1))
                 copy.Transform(sandwich_source_xform(rg.Transform.Translation(step), scene))
                 mesh.Append(copy)
+        elif op.cmd == "subdivide":
+            mesh = apply_subdivide(mesh, op, scope)
+        elif op.cmd == "smooth":
+            if "level" in op.args and "iterations" not in op.args:
+                warn.append("accepted smooth level= as iterations= on %s; generator should emit iterations=" % obj.name)
+            mesh = apply_smooth(mesh, op, scope)
+        elif op.cmd == "simplify":
+            mesh = apply_simplify(mesh, op, scope)
         elif op.cmd == "snap_to_ground":
             axis = source_to_rhino_axis(get_arg(op, "axis", scene.up), scene)
             bb = mesh.GetBoundingBox(True)
@@ -543,6 +798,7 @@ def apply_post_ops(mesh, obj, warn, scene):
             warn.append("unsupported #@post op on %s: %s" % (obj.name, op.cmd))
     mesh.Normals.ComputeNormals()
     mesh.Compact()
+    return mesh
 
 
 def serialize_meshes(mesh_list):
@@ -600,7 +856,7 @@ def create_control_object(ctrl):
         obj = ghks.GH_BooleanToggle()
         obj.Name = ctrl.label
         obj.NickName = ctrl.nickname
-        obj.Value = False
+        obj.Value = eval_bool(ctrl.value, False)
         obj.CreateAttributes()
         return obj
 
@@ -621,10 +877,12 @@ def create_control_object(ctrl):
     min_v = float(ctrl.min) if ctrl.min not in (None, "") else 0.0
     max_v = float(ctrl.max) if ctrl.max not in (None, "") else 1.0
     step_v = abs(float(ctrl.step)) if ctrl.step not in (None, "") else 0.01
+    value_v = control_default_number(ctrl, min_v)
+    value_v = max(min_v, min(max_v, value_v))
     obj.Slider.Minimum = System.Decimal(min_v)
     obj.Slider.Maximum = System.Decimal(max_v)
     obj.Slider.DecimalPlaces = 0 if step_v >= 1 else 1 if step_v >= 0.1 else 2 if step_v >= 0.01 else 3
-    obj.SetSliderValue(System.Decimal(min_v))
+    obj.SetSliderValue(System.Decimal(value_v))
     obj.CreateAttributes()
     return obj
 
@@ -676,7 +934,7 @@ for obj in scene.objects:
     mesh = build_mesh(obj, warnings, scene)
     if mesh is None:
         continue
-    apply_post_ops(mesh, obj, warnings, scene)
+    mesh = apply_post_ops(mesh, obj, warnings, scene)
     meshes.append(mesh)
 
 controls = [c.display() for c in scene.controls]

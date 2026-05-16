@@ -4,6 +4,7 @@
 	import Canvas3D from '$lib/components/Canvas3D.svelte';
 	import LiveObjSidePanel from '$lib/components/live-obj/LiveObjSidePanel.svelte';
 	import type { SourceTab } from '$lib/components/live-obj/LiveObjOutputTab.svelte';
+	import { hasProceduralLiveSources, normalizeRawPostHeader } from '$lib/liveObj/rawPostHeader';
 	import { browser } from '$app/environment';
 	import { onMount, tick } from 'svelte';
 
@@ -53,6 +54,7 @@
 	type SendPromptPayload = {
 		text: string;
 		useProcedural?: boolean;
+		targetObjectId?: string;
 		imageDataUrl?: string;
 		imageDataUrls?: string[];
 		feedbackLoop?: boolean;
@@ -115,6 +117,8 @@ o cube
 #@transform: rotation=[30,30,0]
 `);
 	let currentSceneMode = $state<'live_obj' | 'raw_obj'>('live_obj');
+	let selectedTargetObjectId = $state('');
+	const targetObjectOptions = $derived(objectNamesFromLiveObj(liveObjText));
 	let rawLlmText = $state('');
 	let executedObjText = $state('');
 	let sceneEpoch = $state(0);
@@ -527,9 +531,9 @@ o cube
 		const text = String(updatedLiveObj ?? '');
 		if (!text.trim()) return;
 		statusLine = null;
-		const hasLiveSources = /#@source:\s*(procedural|assembly|sdf|simulation|recipe)/i.test(text);
+		const hasLiveSources = hasProceduralLiveSources(text);
 		const useRawPostExecutor = currentSceneMode === 'raw_obj' && !hasLiveSources;
-		const sceneWithKernel = useRawPostExecutor ? text : applyKernelDefaultHeader(text);
+		const sceneWithKernel = useRawPostExecutor ? normalizeRawPostHeader(text) : applyKernelDefaultHeader(text);
 		try {
 			const res = await fetch(
 				useRawPostExecutor ? '/api/raw-obj/execute' : '/api/live-obj/execute',
@@ -547,9 +551,7 @@ o cube
 					payload.detail || payload.message || res.statusText || 'Metadata regeneration failed'
 				);
 			liveObjText = String(payload.liveObj ?? payload.rawObj ?? sceneWithKernel);
-			currentSceneMode = /#@source:\s*(procedural|assembly|sdf|simulation|recipe)/i.test(
-				liveObjText
-			)
+			currentSceneMode = hasProceduralLiveSources(liveObjText)
 				? 'live_obj'
 				: currentSceneMode;
 			executedObjText =
@@ -631,6 +633,12 @@ o cube
 	});
 
 	$effect(() => {
+		if (selectedTargetObjectId && !targetObjectOptions.includes(selectedTargetObjectId)) {
+			selectedTargetObjectId = '';
+		}
+	});
+
+	$effect(() => {
 		if (!browser) return;
 		if (providerSettings.rememberMe) {
 			localStorage.setItem(PROVIDER_SETTINGS_KEY, JSON.stringify(providerSettings));
@@ -681,7 +689,7 @@ o cube
 		const empty = `#@live_obj_version: 0.1
 #@up: y
 `;
-		return useProcedural ? applyKernelDefaultHeader(empty) : empty;
+		return useProcedural ? applyKernelDefaultHeader(empty) : normalizeRawPostHeader(empty);
 	}
 
 	function planMaterialPresetLines(plan: IterativeScenePlan): string[] {
@@ -1088,6 +1096,7 @@ o cube
 	async function requestSceneUpdateTurn(args: {
 		text: string;
 		useProcedural: boolean;
+		targetObjectId?: string;
 		imageDataUrl?: string;
 		imageDataUrls?: string[];
 		priorMsgs: ChatMsg[];
@@ -1096,6 +1105,7 @@ o cube
 		const {
 			text,
 			useProcedural,
+			targetObjectId,
 			imageDataUrl,
 			imageDataUrls = [],
 			priorMsgs,
@@ -1141,6 +1151,7 @@ o cube
 				apiKey: providerSettings.apiKey?.trim() || undefined,
 				apiUrl: providerSettings.apiUrl?.trim() || undefined,
 				useProcedural,
+				...(targetObjectId ? { targetObjectId } : {}),
 				...(isIterativeEdit
 					? { currentLiveObj, isIterativeEdit, currentSceneMode: previousSceneMode }
 					: {}),
@@ -1194,7 +1205,7 @@ o cube
 	}
 
 	async function sendPrompt(payload: SendPromptPayload) {
-		const { text, useProcedural = false, imageDataUrl } = payload;
+		const { text, useProcedural = false, targetObjectId, imageDataUrl } = payload;
 		const initialImageUrls = [
 			...new Set(
 				[...(payload.imageDataUrls ?? []), ...(imageDataUrl ? [imageDataUrl] : [])]
@@ -1273,6 +1284,7 @@ o cube
 						apiKey: providerSettings.apiKey?.trim() || undefined,
 						apiUrl: providerSettings.apiUrl?.trim() || undefined,
 						useProcedural,
+						...(targetObjectId ? { targetObjectId } : {}),
 						...(isIterativeEdit
 							? { currentLiveObj, isIterativeEdit, currentSceneMode: previousSceneMode }
 							: {}),
@@ -1351,6 +1363,7 @@ o cube
 				await requestSceneUpdateTurn({
 					text: feedbackPrompt(text, pass, feedbackPasses, initialImageUrls.length > 0),
 					useProcedural,
+					targetObjectId,
 					imageDataUrls: [...initialImageUrls, screenshot],
 					priorMsgs: priorBeforeFeedback,
 					includeHistoryImages: false
@@ -1383,6 +1396,24 @@ o cube
 		} finally {
 			sourceApplyBusy = false;
 		}
+	}
+
+	async function openLiveObj(sceneText: string) {
+		const text = String(sceneText ?? '').trim();
+		if (!text) return;
+		const isProceduralLiveObj = hasProceduralLiveSources(text);
+		const nextSource = isProceduralLiveObj ? `${text}\n` : normalizeRawPostHeader(text);
+		currentSceneMode = isProceduralLiveObj ? 'live_obj' : 'raw_obj';
+		rawLlmText = '';
+		msgs = [
+			...msgs,
+			{
+				role: 'assistant',
+				content: 'Opened Live OBJ.',
+				historyContent: nextSource
+			}
+		];
+		await applyEditedSource(nextSource);
 	}
 
 	function captureSceneScreenshot() {
@@ -1453,6 +1484,8 @@ o cube
 		bind:outlineNormalSensitivity
 		bind:toonSteps
 		bind:toonOutline
+		bind:selectedTargetObjectId
+		{targetObjectOptions}
 		bind:objectColor
 		bind:objectScale
 		bind:objectPosX
@@ -1478,6 +1511,7 @@ o cube
 			}
 		}}
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
+		onOpenLiveObj={(text) => void openLiveObj(text)}
 		bind:providerSettings
 		onSend={(p) => void sendPrompt(p)}
 		onCaptureSceneScreenshot={captureSceneScreenshot}

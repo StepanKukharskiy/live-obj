@@ -83,6 +83,27 @@ f 1 2 3
         self.assertEqual(mesh.vertices[3], (1.0, 0.0, 0.0))
         self.assertEqual(mesh.vertices[4], (1.5, 0.0, 0.0))
 
+    def test_template_placeholder_vector_falls_back_to_default(self):
+        source = """#@live_obj_version: 0.1
+#@up: y
+o block
+#@source: llm_mesh
+#@params: lift=2
+#@post:
+#@ - transform position=[0,lift,0] scale=[{bad_scale},1,1]
+v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertEqual(mesh.vertices[0], (0.0, 2.0, 0.0))
+        self.assertEqual(mesh.vertices[1], (1.0, 2.0, 0.0))
+        self.assertEqual(mesh.vertices[2], (0.0, 3.0, 0.0))
+
 
 if __name__ == "__main__":
     unittest.main()

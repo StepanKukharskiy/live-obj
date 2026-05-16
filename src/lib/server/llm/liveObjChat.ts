@@ -100,7 +100,7 @@ Return only JSON with this shape:
     {
       "id": "stable_object_or_group_id",
       "role": "what this part contributes",
-      "method": "llm_mesh|procedural|recipe|hybrid",
+      "method": "llm_mesh",
       "dependencies": ["prior_part_id"],
       "prompt": "specific instructions for generating only this part",
       "validationHints": ["bbox/contact/detail expectations"]
@@ -117,7 +117,10 @@ Planning rules:
 - Do not plan separate first-pass parts for seams, fasteners, bolts, handles, bollards, expansion joints, connection plates, tiny context objects, or micro facade details unless the user explicitly asks for them.
 - Make dependencies explicit so later parts can align to earlier geometry.
 - Use y as the vertical/up axis unless the user explicitly asks otherwise.
+- Plan raw mesh parts. Each part method must be "llm_mesh".
+- Do not use method values "procedural", "recipe", or "hybrid" in this iterative raw OBJ planner.
 - Do not invent executor operations. The default generation method is llm_mesh with semantic metadata and optional generic post notes.
+- If the user asks for controls, sliders, parameters, adjustable dimensions, or editability, preserve that requirement in the relevant part prompts. Do not treat metadata controls as forbidden UI objects.
 - Use stable snake_case ids.`;
 
 const LIVE_OBJ_ITERATIVE_PART_SYSTEM_PROMPT = `You generate one Live OBJ part for an iterative scene builder.
@@ -152,7 +155,12 @@ Critical OBJ indexing rule:
 
 Raw-first part rules:
 - Use #@source: llm_mesh for the generated object/group.
-- Include #@editable, #@semantic, #@part_of, and #@depends_on metadata where useful.
+- Include #@editable, #@semantic, #@part, #@part_of, and #@depends_on metadata where useful.
+- Use #@bbox: min=[x,y,z] max=[x,y,z] when the intended extents are clear.
+- Use #@lock: footprint, position, silhouette, material when future edits should preserve those properties.
+- Use #@anchor: id=anchor_id at=[x,y,z] for meaningful connection, contact, edge, support, hinge, or alignment points.
+- Use #@constraint: as soft edit intent only, such as roof must_touch walls or object must_rest_on_ground.
+- Use #@variant: id=base name="Base" when a generated part is one named concept alternative.
 - Generate only the requested part, not the whole scene.
 - Fit the part to the existing scene summary and dependencies.
 - Use y as the vertical/up axis unless the current scene summary says otherwise.
@@ -163,6 +171,8 @@ Raw-first part rules:
 - Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
 - Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
+- If the user request, plan, or part prompt asks for controls, include #@params: and #@controls: metadata for meaningful dimensions. Every control key must be referenced by executable #@post metadata such as transform, array, mirror/symmetrize, smooth, subdivide, simplify, snap_to_ground, or center_origin. For raw v/f meshes, use controls for object-level scale, height, spacing, count, smoothing, or placement rather than pretending baked vertex coordinates are parametric.
+- Parameter references in #@post expressions must use bare names such as voxel_size or (voxel_size*grid_width)/10. Never use template placeholder syntax such as dollar-brace or curly-brace parameter wrappers.
 - Put material and tag assignments inside #@post blocks. Do not use #@ops in raw-first mode.
 - Always use block syntax: #@post: then lines like #@ - material name=mat_id. Do not emit inline #@post material id=... lines.`;
 

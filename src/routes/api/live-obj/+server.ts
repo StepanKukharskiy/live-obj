@@ -17,6 +17,8 @@ import {
 	applyLiveObjSurgicalPatch,
 	parseLiveObjSurgicalPatch
 } from '$lib/server/liveObj/surgicalPatch';
+import { normalizeRawPostHeader } from '$lib/liveObj/rawPostHeader';
+import { rawPostValidationIssues, validateRawPostSource } from '$lib/liveObj/rawPostValidation';
 
 type WireHistoryItem = {
 	role: string;
@@ -38,6 +40,7 @@ type Body = {
 	apiUrl?: string;
 	provider?: string;
 	useProcedural?: boolean;
+	targetObjectId?: string;
 	kernelDefault?: 'auto' | 'cadquery';
 };
 
@@ -470,12 +473,15 @@ export const POST: RequestHandler = async ({ request }) => {
 				history,
 				model,
 				currentSceneMode: body.currentSceneMode === 'raw_obj' ? 'raw_obj' : 'live_obj',
+				targetObjectId: body.targetObjectId,
 				imageUrls,
 				reqApiKey,
 				reqApiUrl
 			});
 			rawLlm = patchResult.rawPatch;
-			correctedLiveObj = patchResult.liveObj;
+			correctedLiveObj = useProcedural
+				? patchResult.liveObj
+				: normalizeRawPostHeader(patchResult.liveObj);
 			surgicalEditSummary = patchResult.summary;
 			surgicalEditCount = patchResult.appliedEdits;
 			llmUsages = [...llmUsages, ...patchResult.usages];
@@ -491,8 +497,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			rawLlm = llmResult.content;
 			if (llmResult.usage) llmUsages.push(llmResult.usage);
 			correctedLiveObj = stripCodeFences(rawLlm);
-			if (useProcedural)
-				correctedLiveObj = applyKernelDefaultHeader(correctedLiveObj, kernelDefault);
+			correctedLiveObj = useProcedural
+				? applyKernelDefaultHeader(correctedLiveObj, kernelDefault)
+				: normalizeRawPostHeader(correctedLiveObj, { sourcePrompt: userMessage });
 		}
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
@@ -502,6 +509,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	// into one list, then do at most one consolidated LLM correction pass.
 	const unknownOps = unknownOpsInLiveObj(correctedLiveObj);
 	const unknownMeta = unknownMetaValues(correctedLiveObj);
+	const rawPostValidation = useProcedural ? undefined : validateRawPostSource(correctedLiveObj);
 
 	let executedObj = correctedLiveObj;
 	let executorWarnings: string[] = [];
@@ -519,6 +527,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const issues = collectSceneIssues({
 		unknownOps,
 		unknownMeta,
+		rawPostValidationIssues: rawPostValidation ? rawPostValidationIssues(rawPostValidation) : [],
 		executorWarnings,
 		executorError
 	});
@@ -527,22 +536,26 @@ export const POST: RequestHandler = async ({ request }) => {
 		if (useSurgicalEdit) {
 			try {
 				const correctionPatch = await requestAndApplySurgicalPatch({
-					userMessage: buildSurgicalCorrectionPrompt(issues),
+					userMessage: buildSurgicalCorrectionPrompt(issues, useProcedural),
 					baseLiveObj: correctedLiveObj,
 					history,
 					model,
 					currentSceneMode: body.currentSceneMode === 'raw_obj' ? 'raw_obj' : 'live_obj',
+					targetObjectId: body.targetObjectId,
 					reqApiKey,
 					reqApiUrl
 				});
 				llmUsages = [...llmUsages, ...correctionPatch.usages];
+				const correctionLiveObj = useProcedural
+					? correctionPatch.liveObj
+					: normalizeRawPostHeader(correctionPatch.liveObj);
 				const retryResult = useProcedural
-					? await expandLiveObjWithExecutor(correctionPatch.liveObj)
-					: await expandRawObjWithPostExecutor(correctionPatch.liveObj);
+					? await expandLiveObjWithExecutor(correctionLiveObj)
+					: await expandRawObjWithPostExecutor(correctionLiveObj);
 				const assistantMessage = await requestAssistantChatMessage({
 					userMessage,
 					previousLiveObj: currentLiveObj,
-					nextLiveObj: correctionPatch.liveObj,
+					nextLiveObj: correctionLiveObj,
 					editMode,
 					surgicalEditSummary: correctionPatch.summary ?? surgicalEditSummary,
 					rawLlm: correctionPatch.rawPatch,
@@ -551,7 +564,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					reqApiUrl
 				});
 				return json({
-					liveObj: correctionPatch.liveObj,
+					liveObj: correctionLiveObj,
 					rawLlm: correctionPatch.rawPatch,
 					executedObj: retryResult.executedObj,
 					...(summarizeTokenUsage(llmUsages) ? { llmUsage: summarizeTokenUsage(llmUsages) } : {}),
@@ -567,7 +580,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				executorError = retryErr instanceof Error ? retryErr.message : String(retryErr);
 			}
 		} else {
-			const correctionPrompt = buildCorrectionPrompt(issues);
+			const correctionPrompt = buildCorrectionPrompt(issues, useProcedural);
 			try {
 				const correctedResult = await withLlmRequestOverrides(
 					reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
@@ -580,7 +593,11 @@ export const POST: RequestHandler = async ({ request }) => {
 						)
 				);
 				if (correctedResult.usage) llmUsages.push(correctedResult.usage);
-				const retryLiveObj = stripCodeFences(correctedResult.content);
+				const retryLiveObj = useProcedural
+					? stripCodeFences(correctedResult.content)
+					: normalizeRawPostHeader(stripCodeFences(correctedResult.content), {
+							sourcePrompt: userMessage
+						});
 				try {
 					const retryResult = useProcedural
 						? await expandLiveObjWithExecutor(retryLiveObj)
@@ -644,12 +661,38 @@ export const POST: RequestHandler = async ({ request }) => {
 	});
 };
 
+function objectBlockByName(sourceText: string, objectId: string): string | undefined {
+	const escaped = objectId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const match = sourceText.match(new RegExp(`^\\s*o\\s+${escaped}(?:\\s|$)[\\s\\S]*?(?=^\\s*o\\s+|\\s*$)`, 'm'));
+	return match?.[0]?.trim();
+}
+
+function withTargetObjectContext(
+	userMessage: string,
+	currentLiveObj: string,
+	targetObjectId?: string
+): string {
+	const target = targetObjectId?.trim();
+	if (!target) return userMessage;
+	const block = objectBlockByName(currentLiveObj, target);
+	return [
+		`Selected target object: ${target}`,
+		'Apply the user request primarily to this object unless the request explicitly asks for a broader scene edit.',
+		block ? `Current selected object block:\n\`\`\`obj\n${block}\n\`\`\`` : '',
+		'',
+		`User request: ${userMessage}`
+	]
+		.filter(Boolean)
+		.join('\n');
+}
+
 async function requestAndApplySurgicalPatch(args: {
 	userMessage: string;
 	baseLiveObj: string;
 	history: ChatCompletionMessage[];
 	model: string;
 	currentSceneMode?: 'live_obj' | 'raw_obj';
+	targetObjectId?: string;
 	imageUrl?: string;
 	imageUrls?: string[];
 	reqApiKey?: string;
@@ -662,13 +705,14 @@ async function requestAndApplySurgicalPatch(args: {
 	usages: TokenUsage[];
 }> {
 	const imageUrls = normalizeImageUrls(args.imageUrls, args.imageUrl);
+	const userMessage = withTargetObjectContext(args.userMessage, args.baseLiveObj, args.targetObjectId);
 	const patchResult = await withLlmRequestOverrides(
 		args.reqApiKey || args.reqApiUrl
 			? { apiKey: args.reqApiKey, apiUrl: args.reqApiUrl }
 			: undefined,
 		() =>
 			requestLiveObjSurgicalPatchFromLlm(
-				args.userMessage,
+				userMessage,
 				args.baseLiveObj,
 				args.history,
 				args.model,
@@ -686,7 +730,7 @@ async function requestAndApplySurgicalPatch(args: {
 			parseLiveObjSurgicalPatch(rawPatch)
 		);
 		assertSurgicalPatchPreservesExistingObjects(
-			args.userMessage,
+			userMessage,
 			args.baseLiveObj,
 			applied.liveObj
 		);
@@ -698,7 +742,7 @@ async function requestAndApplySurgicalPatch(args: {
 			usages
 		};
 	} catch (firstError) {
-		const repairPrompt = buildPatchRepairPrompt(args.userMessage, rawPatch, firstError);
+		const repairPrompt = buildPatchRepairPrompt(userMessage, rawPatch, firstError);
 		const repairedPatchResult = await withLlmRequestOverrides(
 			args.reqApiKey || args.reqApiUrl
 				? { apiKey: args.reqApiKey, apiUrl: args.reqApiUrl }
@@ -722,7 +766,7 @@ async function requestAndApplySurgicalPatch(args: {
 			parseLiveObjSurgicalPatch(repairedRawPatch)
 		);
 		assertSurgicalPatchPreservesExistingObjects(
-			args.userMessage,
+			userMessage,
 			args.baseLiveObj,
 			repaired.liveObj
 		);
@@ -790,6 +834,7 @@ function applyKernelDefaultHeader(sceneText: string, kernelDefault: 'auto' | 'ca
 function collectSceneIssues(args: {
 	unknownOps: string[];
 	unknownMeta: { badSources: string[]; badTypes: string[]; badSims: string[] };
+	rawPostValidationIssues?: string[];
 	executorWarnings: string[];
 	executorError: string | undefined;
 }): string[] {
@@ -801,17 +846,24 @@ function collectSceneIssues(args: {
 		issues.push(`unknown type values: ${args.unknownMeta.badTypes.join(', ')}`);
 	if (args.unknownMeta.badSims.length > 0)
 		issues.push(`unknown sim values: ${args.unknownMeta.badSims.join(', ')}`);
+	for (const issue of args.rawPostValidationIssues ?? []) issues.push(issue);
 	for (const w of args.executorWarnings) issues.push(`executor warning: ${w}`);
 	if (args.executorError)
 		issues.push(`executor error: ${args.executorError.split('\n').slice(0, 8).join(' | ')}`);
 	return issues;
 }
 
-function buildCorrectionPrompt(issues: string[]): string {
+function correctionOpInstruction(useProcedural: boolean): string {
+	return useProcedural
+		? 'Use only supported ops. Use #@ops: (never #@op: or #@op_experimental).'
+		: 'For raw-post scenes, preserve raw v/f mesh as source geometry and use #@post: blocks for modifiers. Do not add #@ops or procedural sources.';
+}
+
+function buildCorrectionPrompt(issues: string[], useProcedural: boolean): string {
 	return [
 		'Rewrite the previous Live OBJ so the executor runs cleanly. Preserve intent, object IDs, and dimensions.',
 		'Fix every issue listed below in a single revision. Do not introduce new objects unless required to resolve an issue.',
-		'Use only supported ops. Use #@ops: (never #@op: or #@op_experimental).',
+		correctionOpInstruction(useProcedural),
 		'If a missing anchor is reported, either add a valid #@anchors block on the referenced assembly or replace the anchor() reference with concrete coordinates.',
 		'If unsupported ops are reported, replace them with supported equivalents.',
 		'',
@@ -820,11 +872,11 @@ function buildCorrectionPrompt(issues: string[]): string {
 	].join('\n');
 }
 
-function buildSurgicalCorrectionPrompt(issues: string[]): string {
+function buildSurgicalCorrectionPrompt(issues: string[], useProcedural: boolean): string {
 	return [
 		'Apply a surgical correction patch to the current Live OBJ so the executor runs cleanly.',
 		'Preserve unrelated text exactly. Fix every issue listed below in the smallest exact edits possible.',
-		'Use only supported ops. Use #@ops: lists, never #@op: or #@op_experimental.',
+		correctionOpInstruction(useProcedural),
 		'If a missing anchor is reported, either add a valid #@anchors entry on the referenced assembly or replace the anchor() reference with concrete coordinates.',
 		'',
 		'Issues to fix:',

@@ -27,6 +27,7 @@
 	type SendPayload = {
 		text: string;
 		useProcedural?: boolean;
+		targetObjectId?: string;
 		imageDataUrl?: string;
 		imageDataUrls?: string[];
 		feedbackLoop?: boolean;
@@ -71,6 +72,8 @@
 		outlineNormalSensitivity = $bindable(1),
 		toonSteps = $bindable<2 | 3 | 4 | 5>(3),
 		toonOutline = $bindable(true),
+		selectedTargetObjectId = $bindable(''),
+		targetObjectOptions = [],
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
 		providerSettings = $bindable({
@@ -85,6 +88,7 @@
 		onSend,
 		onCaptureSceneScreenshot,
 		onLaunchObjExample,
+		onOpenLiveObj,
 		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery')
 	}: {
 		showPanel?: boolean;
@@ -122,6 +126,8 @@
 		outlineNormalSensitivity?: number;
 		toonSteps?: 2 | 3 | 4 | 5;
 		toonOutline?: boolean;
+		selectedTargetObjectId?: string;
+		targetObjectOptions?: string[];
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
 		providerSettings?: {
@@ -136,6 +142,7 @@
 		onSend?: (payload: SendPayload) => void;
 		onCaptureSceneScreenshot?: () => string;
 		onLaunchObjExample?: (liveObj: string) => void;
+		onOpenLiveObj?: (sourceText: string) => void | Promise<void>;
 		kernelDefault?: 'auto' | 'cadquery';
 	} = $props();
 
@@ -216,6 +223,8 @@
 					{onLaunchObjExample}
 					bind:input={chatInput}
 					bind:useProcedural={chatUseProcedural}
+					bind:targetObjectId={selectedTargetObjectId}
+					{targetObjectOptions}
 					bind:feedbackLoop={chatFeedbackLoop}
 					bind:feedbackPasses={chatFeedbackPasses}
 					bind:attachedDataUrl={chatAttachedDataUrl}
@@ -264,6 +273,7 @@
 					bind:toonSteps
 					bind:toonOutline
 					{liveObjText}
+					{onOpenLiveObj}
 				/>
 			{:else}
 				<LiveObjRenderTab

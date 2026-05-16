@@ -65,6 +65,23 @@ o wall
 #@ - rotate angle=45 axis=z
 ```
 
+### Raw-Post Semantic Metadata
+```
+o roof
+#@source: llm_mesh
+#@semantic: heavy chapel roof
+#@part: id=roof role=dominant_form edit=direct
+#@bbox: min=[-4,2,-2] max=[4,5,2]
+#@lock: silhouette, material
+#@anchor: id=roof_left_edge at=[-4,2,0]
+#@constraint: roof must_touch walls
+#@variant: id=base name="Base"
+#@post:
+#@ - smooth iterations=1 strength=0.2
+```
+
+In raw-post mode, `#@post` contains executable mesh modifiers. `#@bbox`, `#@lock`, `#@part`, `#@anchor`, `#@constraint`, and `#@variant` are semantic edit metadata for planning, validation, targeted edits, and future UI controls.
+
 ### Simulation
 ```
 o coral

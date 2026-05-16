@@ -1,0 +1,209 @@
+import { hasProceduralLiveSources } from './rawPostHeader';
+
+const SUPPORTED_RAW_POST_OPS = new Set([
+	'transform',
+	'symmetrize',
+	'mirror',
+	'array',
+	'subdivide',
+	'smooth',
+	'simplify',
+	'snap_to_ground',
+	'center_origin',
+	'material',
+	'tag'
+]);
+
+const RAW_POST_SEMANTIC_META_KEYS = new Set([
+	'bbox',
+	'lock',
+	'part',
+	'anchor',
+	'constraint',
+	'variant'
+]);
+
+type RawPostObjectSummary = {
+	name: string;
+	vertexCount: number;
+	faceCount: number;
+	metaLines: string[];
+};
+
+export type RawPostValidationResult = {
+	valid: boolean;
+	errors: string[];
+	warnings: string[];
+	objectNames: string[];
+};
+
+function postOpsFromMetaLines(metaLines: string[]): string[] {
+	const ops: string[] = [];
+	let block: 'post' | 'ops' | 'other' = 'other';
+	for (const rawLine of metaLines) {
+		const line = rawLine.trim();
+		if (!line.startsWith('#@')) continue;
+		const body = line.slice(2).trim();
+		if (body === 'post:') {
+			block = 'post';
+			continue;
+		}
+		if (body === 'ops:') {
+			block = 'ops';
+			continue;
+		}
+		if (body.endsWith(':') && !body.startsWith('-')) {
+			block = 'other';
+			continue;
+		}
+		if (body.startsWith('post ')) {
+			ops.push(body.slice('post '.length).trim().split(/\s+/)[0] ?? '');
+			block = 'other';
+			continue;
+		}
+		if (body.startsWith('-') && block === 'post') {
+			ops.push(body.slice(1).trim().split(/\s+/)[0] ?? '');
+		}
+		if (body.startsWith('-') && block === 'ops') {
+			ops.push(`#@ops:${body.slice(1).trim().split(/\s+/)[0] ?? ''}`);
+		}
+	}
+	return ops.filter(Boolean);
+}
+
+function metaBody(line: string): string | undefined {
+	const trimmed = line.trim();
+	return trimmed.startsWith('#@') ? trimmed.slice(2).trim() : undefined;
+}
+
+function semanticMetaKey(line: string): string | undefined {
+	const body = metaBody(line);
+	const key = body?.match(/^([A-Za-z_][\w-]*)(?:\s*:|\s+)/)?.[1]?.toLowerCase();
+	return key && RAW_POST_SEMANTIC_META_KEYS.has(key) ? key : undefined;
+}
+
+function hasVec3Attribute(body: string, key: string): boolean {
+	return new RegExp(`\\b${key}\\s*=\\s*(?:\\[[^\\]]+\\]|\\([^\\)]+\\))`, 'i').test(body);
+}
+
+function hasIdAttribute(body: string): boolean {
+	return /\bid\s*=\s*("[^"]+"|'[^']+'|[A-Za-z_][\w-]*)/i.test(body);
+}
+
+function faceRefs(line: string, vertexCount: number): number[] {
+	return line
+		.trim()
+		.split(/\s+/)
+		.slice(1)
+		.map((token) => Number(token.split('/')[0]))
+		.filter((n) => Number.isFinite(n))
+		.map((n) => (n < 0 ? vertexCount + n + 1 : n));
+}
+
+export function summarizeRawPostObjects(sourceText: string): RawPostObjectSummary[] {
+	const objects: RawPostObjectSummary[] = [];
+	let current: RawPostObjectSummary | null = null;
+	for (const rawLine of sourceText.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		const objectMatch = line.match(/^o\s+([^\s#]+)/);
+		if (objectMatch) {
+			current = { name: objectMatch[1], vertexCount: 0, faceCount: 0, metaLines: [] };
+			objects.push(current);
+			continue;
+		}
+		if (!current) continue;
+		if (line.startsWith('#@')) current.metaLines.push(rawLine);
+		if (/^v\s+/.test(line)) current.vertexCount += 1;
+		if (/^f\s+/.test(line)) current.faceCount += 1;
+	}
+	return objects;
+}
+
+export function validateRawPostSource(sourceText: string): RawPostValidationResult {
+	const text = String(sourceText ?? '');
+	const errors: string[] = [];
+	const warnings: string[] = [];
+	if (!text.trim()) {
+		return { valid: true, errors, warnings, objectNames: [] };
+	}
+	if (hasProceduralLiveSources(text)) {
+		errors.push(
+			'Raw-post mode cannot execute procedural, assembly, SDF, simulation, or recipe sources'
+		);
+		return {
+			valid: false,
+			errors,
+			warnings,
+			objectNames: summarizeRawPostObjects(text).map((o) => o.name)
+		};
+	}
+
+	const objects = summarizeRawPostObjects(text);
+	const objectNames = objects.map((object) => object.name);
+	if (objects.length === 0) errors.push('No OBJ objects found');
+
+	const duplicateNames = objectNames.filter((name, index) => objectNames.indexOf(name) !== index);
+	if (duplicateNames.length > 0) {
+		errors.push(`Duplicate object names: ${[...new Set(duplicateNames)].join(', ')}`);
+	}
+
+	const totalVertexCount = text.split(/\r?\n/).filter((line) => /^\s*v\s+/.test(line)).length;
+	for (const [lineIndex, line] of text.split(/\r?\n/).entries()) {
+		if (!/^\s*f\s+/.test(line)) continue;
+		const refs = faceRefs(line, totalVertexCount);
+		if (refs.length < 3) errors.push(`Face on line ${lineIndex + 1} has fewer than 3 vertices`);
+		for (const ref of refs) {
+			if (!Number.isInteger(ref) || ref <= 0 || ref > totalVertexCount) {
+				errors.push(`Face on line ${lineIndex + 1} references missing vertex ${ref}`);
+			}
+		}
+	}
+
+	for (const object of objects) {
+		if (object.vertexCount > 0 && object.faceCount === 0) {
+			errors.push(`Object '${object.name}' defines vertices but no faces`);
+		}
+		if (!object.metaLines.some((line) => /^\s*#@source:\s*llm_mesh\b/i.test(line))) {
+			warnings.push(`Object '${object.name}' is missing #@source: llm_mesh`);
+		}
+		if (!object.metaLines.some((line) => /^\s*#@semantic:\s*\S+/i.test(line))) {
+			warnings.push(`Object '${object.name}' is missing #@semantic`);
+		}
+		for (const line of object.metaLines) {
+			const key = semanticMetaKey(line);
+			if (!key) continue;
+			const body = metaBody(line) ?? '';
+			if (key === 'bbox' && (!hasVec3Attribute(body, 'min') || !hasVec3Attribute(body, 'max'))) {
+				errors.push(
+					`Object '${object.name}' has malformed #@bbox; expected min=[x,y,z] max=[x,y,z]`
+				);
+			}
+			if (key === 'anchor' && (!hasIdAttribute(body) || !hasVec3Attribute(body, 'at'))) {
+				errors.push(`Object '${object.name}' has malformed #@anchor; expected id=name at=[x,y,z]`);
+			}
+		}
+		for (const op of postOpsFromMetaLines(object.metaLines)) {
+			if (op.startsWith('#@ops:')) {
+				errors.push(`Object '${object.name}' uses #@ops in raw-post mode; use #@post instead`);
+				continue;
+			}
+			if (!SUPPORTED_RAW_POST_OPS.has(op)) {
+				errors.push(`Object '${object.name}' has unsupported #@post op '${op}'`);
+			}
+		}
+	}
+
+	return {
+		valid: errors.length === 0,
+		errors,
+		warnings,
+		objectNames
+	};
+}
+
+export function rawPostValidationIssues(result: RawPostValidationResult): string[] {
+	return [
+		...result.errors.map((message) => `raw-post validation error: ${message}`),
+		...result.warnings.map((message) => `raw-post validation warning: ${message}`)
+	];
+}

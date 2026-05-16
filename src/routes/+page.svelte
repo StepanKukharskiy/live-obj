@@ -72,13 +72,13 @@
 
 	<main class="landing-main">
 		<section class="hero">
-			<h1>Create 3D Models by Just Describing Them</h1>
+			<h1>Create Editable 3D Scenes as Live OBJ</h1>
 			<p class="hero-subtitle">
-				No complex software. No technical skills needed. Just type what you want to build.
+				Describe a concept, iterate on semantic parts, and save a standard OBJ that reopens in Spellshape with editable metadata.
 			</p>
 
 			<p class="byo-text">
-				Running on top of OBJ with metadata. Bring Your Own API Key - now. Bring Your Own Model - coming soon.
+				Portable OBJ everywhere. Live metadata in Spellshape. Bring Your Own API Key now; Bring Your Own Model soon.
 			</p>
 
 			<div class="link-buttons">
@@ -105,7 +105,7 @@
 				</div>
 			</div>
 
-			<button class="cta-button" onclick={goToApp}>Try It Free</button>
+			<button class="cta-button" onclick={goToApp}>Open Spellshape</button>
 		</section>
 
 		<section class="platforms">
@@ -128,7 +128,7 @@
 	</main>
 
 	<footer class="landing-footer">
-	<p>&copy; 2026 Spellshape. AI-native 3D.</p>
+	<p>&copy; 2026 Spellshape. Portable OBJ. Editable in Spellshape. AI-native by design.</p>
 		<img class="landing-logo-bottom" src="/images/spellshape_text_logo.svg" alt="Spellshape" />
 		
 	</footer>

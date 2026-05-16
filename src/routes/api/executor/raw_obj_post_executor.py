@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import ast
 import math
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,10 +71,19 @@ class Scene:
 
 
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
+TEMPLATE_PLACEHOLDER_RE = re.compile(r"\$\{[^}]+\}|(?<!\[)\{[A-Za-z_][A-Za-z0-9_]*\}")
 
 
 def warn(message: str) -> None:
     print(f"raw-post warning: {message}", file=sys.stderr)
+
+
+def has_template_placeholder(value: Any) -> bool:
+    if isinstance(value, str):
+        return TEMPLATE_PLACEHOLDER_RE.search(value) is not None
+    if isinstance(value, (list, tuple)):
+        return any(has_template_placeholder(item) for item in value)
+    return False
 
 
 def parse_scalar(value: str) -> Any:
@@ -428,6 +438,10 @@ def eval_numeric_expr(value: Any, params: Dict[str, Any]) -> float:
         text = value.strip()
         if not text:
             return 0.0
+        if has_template_placeholder(text):
+            raise ValueError(
+                f"template placeholder syntax is not supported in '{text}'; use bare parameter names"
+            )
         try:
             return float(text)
         except ValueError:
@@ -479,11 +493,15 @@ def parse_vec3(value: Any, params: Dict[str, Any], default: Vec3) -> Vec3:
             raw = split_top_level_commas(text[1:-1])
     if not isinstance(raw, (list, tuple)) or len(raw) < 3:
         return default
-    return (
-        eval_numeric_expr(raw[0], params),
-        eval_numeric_expr(raw[1], params),
-        eval_numeric_expr(raw[2], params),
-    )
+    try:
+        return (
+            eval_numeric_expr(raw[0], params),
+            eval_numeric_expr(raw[1], params),
+            eval_numeric_expr(raw[2], params),
+        )
+    except Exception as e:
+        warn(f"invalid vector expression {value!r}: {e}; using default {default}")
+        return default
 
 
 def rotate_point(vertex: Vec3, rotation_degrees: Vec3) -> Vec3:
@@ -622,10 +640,28 @@ def op_center_origin(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
     return Mesh(vertices, [list(face) for face in mesh.faces])
 
 
+def validate_post_op(obj_name: str, op: Dict[str, Any]) -> None:
+    cmd = str(op.get("cmd", "")).strip().lower()
+    for key, value in op.items():
+        if key == "cmd":
+            continue
+        if has_template_placeholder(value):
+            warn(
+                f"{obj_name}: #@post {cmd} uses template placeholder syntax in {key}={value!r}; use bare parameter names"
+            )
+    if cmd == "smooth" and "level" in op and "iterations" not in op:
+        warn(f"{obj_name}: smooth uses level=; use smooth iterations=n strength=v")
+    if cmd == "tag" and "name" in op and "value" not in op:
+        warn(f"{obj_name}: tag uses name=; use tag value=...")
+    if cmd == "snap_to_ground" and ("surface" in op or "anchor" in op):
+        warn(f"{obj_name}: snap_to_ground only supports axis=x|y|z")
+
+
 def apply_post_ops(obj: RawObject) -> None:
     mesh = obj.mesh.copy()
     for op in obj.post_ops:
         cmd = str(op.get("cmd", "")).strip().lower()
+        validate_post_op(obj.name, op)
         if cmd in {"material", "tag"}:
             continue
         if cmd == "transform":

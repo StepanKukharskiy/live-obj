@@ -11,7 +11,9 @@ This is raw-first OBJ mode:
 - Do include lightweight semantic metadata so future surgical edits and post-processing can understand the scene.
 
 Output only valid OBJ content with required scene metadata:
+- Scene marker: #@scene
 - Header: #@live_obj_version: 0.1
+- Workflow marker: #@workflow: raw_post
 - Up axis: #@up: y
 - Material presets (optional): #@material_preset: name color=#hex roughness=value metalness=value
 - Vertices: v x y z (coordinates, Y-up orientation)
@@ -20,6 +22,12 @@ Output only valid OBJ content with required scene metadata:
 - Per-object source: #@source: llm_mesh
 - Per-object editability: #@editable: transform,material,duplicate,delete
 - Per-object semantic hint: #@semantic: short human-readable role
+- Per-object semantic part marker (optional): #@part: id=part_id role=dominant_form edit=direct
+- Per-object intended bounds (optional): #@bbox: min=[x,y,z] max=[x,y,z]
+- Per-object locks for targeted edits (optional): #@lock: footprint, position, silhouette, material
+- Per-object anchors for later repair/assembly (optional): #@anchor: id=anchor_id at=[x,y,z]
+- Per-object soft intent constraints (optional): #@constraint: roof must_touch walls
+- Per-object variant labels (optional): #@variant: id=base name="Base"
 - Per-object transform: #@transform: position=[x,y,z],rotation=[0,0,0],scale=[1,1,1]
 - Raw post stack (optional): #@post: followed by supported #@ - op lines
 - Material assignment (optional): #@post: then #@ - material name=material_name
@@ -51,6 +59,14 @@ Use #@post for:
 - repeated raw mesh modules with array or mirror
 - material and tag metadata
 
+Use semantic edit metadata for post-parametric control intent:
+- #@bbox records intended extents for planning, placement, and validation. It does not transform geometry.
+- #@lock tells future targeted edits what to preserve. Use concrete values like footprint, position, silhouette, material, proportions, or openings.
+- #@part names the semantic role when an object/group is a meaningful design part.
+- #@anchor marks points future repair or assembly edits can connect to.
+- #@constraint records soft design intent. Do not treat it as a solved CAD constraint.
+- #@variant labels concept alternatives when the scene contains multiple versions.
+
 Rules:
 - Keep geometry low-poly and clean
 - Use consistent winding order (counter-clockwise for front faces)
@@ -58,7 +74,7 @@ Rules:
 - Center objects near origin unless specified otherwise
 - Ensure faces are valid (no degenerate triangles)
 - Use Y-up coordinate system (Y axis points up)
-- Always include #@live_obj_version: 0.1 and #@up: y at the top
+- Always include #@scene, #@live_obj_version: 0.1, #@workflow: raw_post, and #@up: y at the top
 - Define material presets in the header before objects
 - Assign materials to objects using #@ - material name=preset_name
 - Every object must include #@source: llm_mesh before its v/f block
@@ -72,13 +88,17 @@ Rules:
 
 Example cube with material:
 
+#@scene
 #@live_obj_version: 0.1
+#@workflow: raw_post
 #@up: y
 #@material_preset: default_gray color=#888888 roughness=0.5 metalness=0.0
 o cube
 #@source: llm_mesh
 #@editable: transform,material,duplicate,delete
 #@semantic: simple cube body
+#@part: id=cube_body role=primary_mass edit=direct
+#@bbox: min=[-0.5,-0.5,-0.5] max=[0.5,0.5,0.5]
 #@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
 #@post:
 #@ - material name=default_gray

@@ -22,7 +22,8 @@
 		outlineNormalSensitivity = $bindable(1),
 		toonSteps = $bindable<2 | 3 | 4 | 5>(3),
 		toonOutline = $bindable(true),
-		liveObjText = ''
+		liveObjText = '',
+		onOpenLiveObj
 	}: {
 		backgroundColor?: string;
 		showGrid?: boolean;
@@ -45,7 +46,10 @@
 		toonSteps?: 2 | 3 | 4 | 5;
 		toonOutline?: boolean;
 		liveObjText?: string;
+		onOpenLiveObj?: (sourceText: string) => void | Promise<void>;
 	} = $props();
+
+	let openFileInput: HTMLInputElement | undefined = $state();
 
 	function downloadObj() {
 		if (!liveObjText.trim()) return;
@@ -59,12 +63,33 @@
 		document.body.removeChild(link);
 		URL.revokeObjectURL(url);
 	}
+
+	async function openObjFile(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		const text = await file.text();
+		await Promise.resolve(onOpenLiveObj?.(text));
+		input.value = '';
+	}
 </script>
 
 <div class="live-obj-scene">
-	<button type="button" class="send-button" onclick={downloadObj} disabled={!liveObjText.trim()}>
-		Save Live OBJ
-	</button>
+	<div class="live-obj-file-actions">
+		<button type="button" class="send-button" onclick={() => openFileInput?.click()}>
+			Open Live OBJ
+		</button>
+		<button type="button" class="send-button" onclick={downloadObj} disabled={!liveObjText.trim()}>
+			Save Live OBJ
+		</button>
+		<input
+			bind:this={openFileInput}
+			type="file"
+			accept=".obj,text/plain"
+			class="live-obj-file-input"
+			onchange={openObjFile}
+		/>
+	</div>
 	<p class="live-obj-save-helper">
 		A standard OBJ with Spellshape metadata. Opens in any 3D app; reopen in Spellshape for editable parts and parameters.
 	</p>
@@ -169,9 +194,19 @@
 </div>
 
 <style>
-	.live-obj-scene > button {
+	.live-obj-file-actions {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
 		margin: 12px 0;
+	}
+
+	.live-obj-file-actions > button {
 		width: 100%;
+	}
+
+	.live-obj-file-input {
+		display: none;
 	}
 
 	.live-obj-save-helper {

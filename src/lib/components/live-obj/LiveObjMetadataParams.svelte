@@ -33,7 +33,18 @@
 		const out: string[] = [];
 		let buf = '';
 		let depth = 0;
+		let quote: '"' | "'" | null = null;
 		for (const ch of raw) {
+			if ((ch === '"' || ch === "'") && !quote) {
+				quote = ch;
+				buf += ch;
+				continue;
+			}
+			if (quote) {
+				if (ch === quote) quote = null;
+				buf += ch;
+				continue;
+			}
 			if (ch === '[' || ch === '{' || ch === '(') depth += 1;
 			if (ch === ']' || ch === '}' || ch === ')') depth = Math.max(0, depth - 1);
 			if (ch === ',' && depth === 0) {
@@ -47,15 +58,32 @@
 		return out;
 	};
 
+	const unquoteValue = (value: string) => {
+		const trimmed = value.trim();
+		if (
+			(trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+			(trimmed.startsWith("'") && trimmed.endsWith("'"))
+		) {
+			return trimmed.slice(1, -1);
+		}
+		return trimmed;
+	};
+
+	const splitParamPieces = (raw: string): string[] => {
+		const commaPieces = splitTopLevel(raw);
+		if (commaPieces.length > 1) return commaPieces;
+		return splitTopLevelWhitespace(raw);
+	};
+
 	const parseParams = (raw: string): Record<string, string> => {
 		if (typeof raw !== 'string') return {};
 		const map: Record<string, string> = {};
-		for (const piece of splitTopLevel(raw)) {
+		for (const piece of splitParamPieces(raw)) {
 			if (typeof piece !== 'string') continue;
 			const eq = String(piece).indexOf('=');
 			if (eq <= 0) continue;
 			const key = piece.slice(0, eq).trim();
-			const value = piece.slice(eq + 1).trim();
+			const value = unquoteValue(piece.slice(eq + 1));
 			if (!key) continue;
 			map[key] = value;
 		}
@@ -71,7 +99,18 @@
 		const out: string[] = [];
 		let buf = '';
 		let depth = 0;
+		let quote: '"' | "'" | null = null;
 		for (const ch of raw) {
+			if ((ch === '"' || ch === "'") && !quote) {
+				quote = ch;
+				buf += ch;
+				continue;
+			}
+			if (quote) {
+				if (ch === quote) quote = null;
+				buf += ch;
+				continue;
+			}
 			if (ch === '[' || ch === '{' || ch === '(') depth += 1;
 			if (ch === ']' || ch === '}' || ch === ')') depth = Math.max(0, depth - 1);
 			if (/\s/.test(ch) && depth === 0) {
@@ -91,7 +130,7 @@
 			const eq = token.indexOf('=');
 			if (eq <= 0) continue;
 			const key = token.slice(0, eq).trim();
-			const value = token.slice(eq + 1).trim();
+			const value = unquoteValue(token.slice(eq + 1));
 			if (key) map[key] = value;
 		}
 		return map;
@@ -122,6 +161,22 @@
 			...(params.step !== undefined ? { step: params.step } : {}),
 			...(options && options.length > 0 ? { options } : {})
 		};
+	};
+
+	const controlFromInline = (raw: string): MetaControl | null => {
+		const tokens = splitTopLevelWhitespace(raw);
+		const params: Record<string, string> = {};
+		let key = '';
+		for (const token of tokens) {
+			const eq = token.indexOf('=');
+			if (eq > 0) {
+				params[token.slice(0, eq).trim()] = unquoteValue(token.slice(eq + 1));
+			} else if (!key) {
+				key = token.trim();
+			}
+		}
+		const kind = params.type ?? params.kind ?? 'number';
+		return controlFromTokens(kind, { ...params, key: params.key ?? params.param ?? params.name ?? key });
 	};
 
 	const parseObjects = (text: string): MetaObject[] => {
@@ -189,6 +244,13 @@
 					continue;
 				}
 				if (line.match(/^#@controls:\s*$/)) {
+					block = 'controls';
+					continue;
+				}
+				const inlineControlMatch = line.match(/^#@controls:\s*(.+)$/);
+				if (inlineControlMatch && typeof inlineControlMatch[1] === 'string') {
+					const control = controlFromInline(inlineControlMatch[1]);
+					if (control) activeControls.push(control);
 					block = 'controls';
 					continue;
 				}

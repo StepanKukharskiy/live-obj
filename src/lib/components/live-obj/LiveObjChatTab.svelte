@@ -20,6 +20,7 @@
 	type SendPayload = {
 		text: string;
 		useProcedural?: boolean;
+		targetObjectId?: string;
 		imageDataUrl?: string;
 		imageDataUrls?: string[];
 		feedbackLoop?: boolean;
@@ -577,6 +578,8 @@ f 90 81 161 170`
 		onLaunchObjExample,
 		input = $bindable(''),
 		useProcedural = $bindable(false),
+		targetObjectId = $bindable(''),
+		targetObjectOptions = [],
 		feedbackLoop = $bindable(false),
 		feedbackPasses = $bindable(3),
 		attachedDataUrl = $bindable<string | undefined>(undefined)
@@ -588,6 +591,8 @@ f 90 81 161 170`
 		onLaunchObjExample?: (liveObj: string) => void;
 		input?: string;
 		useProcedural?: boolean;
+		targetObjectId?: string;
+		targetObjectOptions?: string[];
 		feedbackLoop?: boolean;
 		feedbackPasses?: number;
 		attachedDataUrl?: string | undefined;
@@ -678,7 +683,14 @@ f 90 81 161 170`
 		const text = input.trim();
 		const img = attachedDataUrl;
 		if ((!text && !img) || busy) return;
-		onSend?.({ text, useProcedural, imageDataUrl: img, feedbackLoop, feedbackPasses });
+		onSend?.({
+			text,
+			useProcedural,
+			...(targetObjectId ? { targetObjectId } : {}),
+			imageDataUrl: img,
+			feedbackLoop,
+			feedbackPasses
+		});
 		input = '';
 		clearAttachment();
 	}
@@ -842,6 +854,17 @@ f 90 81 161 170`
 		></textarea>
 		<div class="planner-chat-input-toolbar">
 			<div class="planner-chat-toolbar-left">
+				{#if targetObjectOptions.length > 0}
+					<label class="planner-chat-procedural-label planner-chat-target-label">
+						<span class="planner-chat-procedural-text">Target</span>
+						<select class="planner-chat-target-select" bind:value={targetObjectId} disabled={busy}>
+							<option value="">Scene</option>
+							{#each targetObjectOptions as objectId}
+								<option value={objectId}>{objectId}</option>
+							{/each}
+						</select>
+					</label>
+				{/if}
 				<label class="planner-chat-procedural-label">
 					<input
 						type="checkbox"
@@ -849,7 +872,7 @@ f 90 81 161 170`
 						disabled={busy}
 						class="planner-chat-procedural-checkbox"
 					/>
-					<span class="planner-chat-procedural-text">Use tools</span>
+					<span class="planner-chat-procedural-text">Procedural mode</span>
 				</label>
 				<label class="planner-chat-procedural-label">
 					<input
@@ -1009,7 +1032,7 @@ f 90 81 161 170`
 
 	.planner-chat-input-toolbar {
 		display: flex;
-		align-items: center;
+		align-items: flex-end;
 		justify-content: space-between;
 		gap: 10px;
 		flex-wrap: wrap;
@@ -1018,9 +1041,16 @@ f 90 81 161 170`
 	.planner-chat-toolbar-left {
 		display: flex;
 		align-items: center;
+		flex-wrap: wrap;
 		gap: 8px;
 		min-width: 0;
 		flex: 1;
+		max-width: 100%;
+	}
+
+	.planner-chat-input-toolbar > .send-button {
+		flex: 0 0 auto;
+		margin-left: auto;
 	}
 
 	.planner-chat-procedural-label {
@@ -1033,6 +1063,28 @@ f 90 81 161 170`
 		color: #333;
 		cursor: pointer;
 		user-select: none;
+	}
+
+	.planner-chat-target-label {
+		flex: 1 1 100%;
+		min-width: 0;
+		max-width: 100%;
+	}
+
+	.planner-chat-target-select {
+		box-sizing: border-box;
+		min-width: 0;
+		max-width: 100%;
+		flex: 1 1 auto;
+		height: 32px;
+		font-family: inherit;
+		font-size: 13px;
+		font-weight: 600;
+		color: #111827;
+		border: 1px solid rgba(0, 0, 0, 0.16);
+		border-radius: 8px;
+		padding: 0 30px 0 10px;
+		background: rgba(255, 255, 255, 0.95);
 	}
 
 	.planner-chat-procedural-checkbox {
