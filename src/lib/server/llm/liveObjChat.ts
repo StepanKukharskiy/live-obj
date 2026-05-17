@@ -25,7 +25,7 @@ const LIVE_OBJ_IMAGE_GENERATION_BUDGET_HINT = `Image-to-scene budget:
 - Avoid dense per-window/per-brick/per-cell geometry unless the user explicitly asks for exhaustive detail.
 - Begin the response immediately with #@scene or #@live_obj_version; do not spend output budget on planning text.`;
 const RAW_OBJ_IMAGE_GENERATION_BUDGET_HINT = `Image-to-raw-OBJ budget:
-- Make a compact low-poly interpretation of the reference image, not an exhaustive mesh reconstruction.
+- Make a compact direct-mesh interpretation of the reference image, not an exhaustive mesh reconstruction.
 - Target roughly 8-24 semantic object groups with direct v/f mesh.
 - Use simplified silhouettes, major volumes, representative facade/window/detail groups, and clear object names.
 - Do not hand-author every repeated window, panel, brick, cell, or ornament.
@@ -111,7 +111,7 @@ Return only JSON with this shape:
 
 Planning rules:
 - Prefer 5-8 parts for rich scenes; fewer for simple objects.
-- First pass should be low-poly semantic massing: major ground/support, primary structure, main envelope/shell, major infill/openings, and one restrained interior/context part only when important.
+- First pass should be compact semantic massing: major ground/support, primary structure, main envelope/shell, major infill/openings, and one restrained interior/context part only when important.
 - Build from coarse support/massing to envelope, structure, major infill, then one optional accent/detail part.
 - Merge related elements into one part instead of producing many small parts.
 - Do not plan separate first-pass parts for seams, fasteners, bolts, handles, bollards, expansion joints, connection plates, tiny context objects, or micro facade details unless the user explicitly asks for them.
@@ -139,7 +139,7 @@ Part rules:
 - Generate only the requested part, not the whole scene.
 - Fit the part to the existing scene summary and dependencies.
 - Use y as the vertical/up axis unless the current scene summary says otherwise.
-- Keep geometry compact and low-poly: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell/roof.
+- Keep geometry compact and clean: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell/roof. Use simple topology for the first pass; use supported smoothing/refinement metadata when a softer surface is intended.
 - Prefer quads and simple polygons. Avoid dense grids, seam networks, individual fasteners, tiny bolts, repeated micro-panels, or context clutter in the first pass.
 - Prefer one named object per requested part. Use multiple named objects only when the part naturally has a few major sub-parts.
 - Add #@post comments only as generic refinement intent; do not invent custom executor ops.`;
@@ -164,7 +164,7 @@ Raw-first part rules:
 - Generate only the requested part, not the whole scene.
 - Fit the part to the existing scene summary and dependencies.
 - Use y as the vertical/up axis unless the current scene summary says otherwise.
-- Keep geometry compact and low-poly: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell.
+- Keep geometry compact and clean: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell. Use simple topology for the first pass; use #@post smooth/subdivide when a softer surface is intended.
 - Prefer quads and simple polygons. Avoid dense grids, seam networks, individual fasteners, tiny bolts, repeated micro-panels, or context clutter in the first pass.
 - Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
@@ -414,7 +414,7 @@ export async function requestLiveObjPartPlanFromLlm(
 					'Generation mode: tools-off raw-first OBJ.',
 					'Plan ONLY raw mesh parts. Each part method must be "llm_mesh".',
 					'Do not use method values "procedural", "recipe", or "hybrid" in this mode.',
-					'If a part could be procedural conceptually, still describe it as direct low-poly OBJ mesh with optional #@post material/tag/smooth/symmetrize notes.'
+					'If a part could be procedural conceptually, still describe it as direct compact OBJ mesh with optional #@post material/tag/smooth/symmetrize notes.'
 				].join('\n')
 			: 'Generation mode: Live OBJ with procedural/recipe/raw mesh parts as appropriate.',
 		options?.currentLiveObjSummary

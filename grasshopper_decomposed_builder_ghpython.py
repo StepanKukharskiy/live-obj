@@ -83,7 +83,7 @@ Return only JSON with this shape:
 
 Planning rules:
 - Prefer 5-8 parts for rich scenes; fewer for simple objects.
-- First pass should be low-poly semantic massing: major ground/support, primary structure, main envelope/shell, major infill/openings, and one restrained interior/context part only when important.
+- First pass should be compact semantic massing: major ground/support, primary structure, main envelope/shell, major infill/openings, and one restrained interior/context part only when important.
 - Build from coarse support/massing to envelope, structure, major infill, then one optional accent/detail part.
 - Merge related elements into one part instead of producing many small parts.
 - Do not plan separate first-pass parts for seams, fasteners, bolts, handles, bollards, expansion joints, connection plates, tiny context objects, or micro facade details unless the user explicitly asks for them.
@@ -116,7 +116,7 @@ Raw-first part rules:
 - Generate only the requested part, not the whole scene.
 - Fit the part to the existing scene summary and dependencies.
 - Use y as the vertical/up axis unless the current scene summary says otherwise.
-- Keep geometry compact and low-poly: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell.
+- Keep geometry compact and clean: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell. Use simple topology for the first pass; use #@post smooth/subdivide when a softer surface is intended.
 - Prefer quads and simple polygons. Avoid dense grids, seam networks, individual fasteners, tiny bolts, repeated micro-panels, or context clutter in the first pass.
 - Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
