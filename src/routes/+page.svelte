@@ -72,10 +72,13 @@
 
 	<main class="landing-main">
 		<section class="hero">
-			<h1>Make editable 3D models from text</h1>
+			<h1>Discover 3D forms from text</h1>
 			<p class="hero-subtitle">
-				Describe a scene, object, or structure. Spellshape turns it into a 3D model you can edit
-				part by part, export as an OBJ file, and reopen later without starting over.
+				Spellshape turns rough ideas and visual vibes into expressive 3D shapes you can explore,
+				edit, and export.
+			</p>
+			<p class="hero-tagline">
+				Vibe modelling for the messy stage before CAD.
 			</p>
 
 			<div class="link-buttons">
@@ -257,8 +260,16 @@
 	.hero-subtitle {
 		font-size: 20px;
 		color: #555;
-		margin: 0 0 24px 0;
+		margin: 0 0 12px 0;
 		line-height: 1.5;
+	}
+
+	.hero-tagline {
+		font-size: 18px;
+		color: #1a1a1a;
+		margin: 0 0 24px 0;
+		line-height: 1.4;
+		font-weight: 600;
 	}
 
 	.video-placeholder {
@@ -388,6 +399,10 @@
 		}
 
 		.hero-subtitle {
+			font-size: 16px;
+		}
+
+		.hero-tagline {
 			font-size: 16px;
 		}
 
