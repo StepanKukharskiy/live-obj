@@ -132,7 +132,23 @@ o cube
 	let toonOutline = $state(true);
 	let renderObject = $state<THREE.Object3D | null>(null);
 
-	let backgroundColor = $state('#e8ebf2');
+	const DEFAULT_CANVAS_BACKGROUND = '#f4f4f2';
+	const DEFAULT_CLAY_MATERIAL = {
+		color: '#e6e4dd',
+		metalness: 0,
+		roughness: 0.82
+	};
+	const PART_FALLBACK_PALETTE = [
+		'#e6e4dd',
+		'#d6d9d8',
+		'#aeb7bd',
+		'#575c63',
+		'#d6d3e6',
+		'#cfdccf',
+		'#e5dcba'
+	];
+
+	let backgroundColor = $state(DEFAULT_CANVAS_BACKGROUND);
 	let showGrid = $state(true);
 	let showAxes = $state(true);
 	let ambientLightIntensity = $state(1);
@@ -146,7 +162,7 @@ o cube
 	let cameraFov = $state(50);
 	let toneMappingExposure = $state(1);
 
-	let objectColor = $state('#0000eb');
+	let objectColor = $state(DEFAULT_CLAY_MATERIAL.color);
 	let objectScale = $state(1);
 	let objectPosX = $state(0);
 	let objectPosY = $state(0);
@@ -161,8 +177,8 @@ o cube
 			hash = (hash << 5) - hash + name.charCodeAt(i);
 			hash |= 0;
 		}
-		const hue = ((hash % 360) + 360) % 360;
-		return new THREE.Color().setHSL(hue / 360, 0.45, 0.56);
+		const index = Math.abs(hash) % PART_FALLBACK_PALETTE.length;
+		return new THREE.Color(PART_FALLBACK_PALETTE[index]);
 	}
 
 	type MaterialPreset = {
@@ -460,9 +476,9 @@ o cube
 		preserveObjMaterials =
 			hasPerObjectMaterials || hasMultipleNamedObjects || hasMetadataMaterialTags;
 		const fallbackMat = new THREE.MeshStandardMaterial({
-			color: objectColor,
-			metalness: 0.12,
-			roughness: 0.48,
+			color: objectColor || DEFAULT_CLAY_MATERIAL.color,
+			metalness: DEFAULT_CLAY_MATERIAL.metalness,
+			roughness: DEFAULT_CLAY_MATERIAL.roughness,
 			side: THREE.DoubleSide,
 			flatShading: false,
 			wireframe
@@ -490,8 +506,8 @@ o cube
 						: new THREE.Color(objectColor);
 				return new THREE.MeshStandardMaterial({
 					color,
-					metalness: preset?.metalness ?? 0.12,
-					roughness: preset?.roughness ?? 0.48,
+					metalness: preset?.metalness ?? DEFAULT_CLAY_MATERIAL.metalness,
+					roughness: preset?.roughness ?? DEFAULT_CLAY_MATERIAL.roughness,
 					side: THREE.DoubleSide,
 					flatShading: preset?.shadeSmooth === false,
 					wireframe

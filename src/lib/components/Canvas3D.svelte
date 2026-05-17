@@ -15,7 +15,7 @@
 
 	export let className = '';
 	export let renderObject: any = null;
-	export let backgroundColor = '#f0f0f0';
+	export let backgroundColor = '#f4f4f2';
 	export let backgroundImageUrl = '';
 	export let transparentBackground = false;
 	export let showGrid = true;
@@ -24,7 +24,7 @@
 	export let directionalLightIntensity = 1.5;
 	export let showWireframe = false;
 	/** Applied to the loaded `renderObject` mesh materials only (not grid/axes). */
-	export let objectColor = '#0000eb';
+	export let objectColor = '#e6e4dd';
 	export let respectObjectMaterials = false;
 	export let enableShadows = false;
 	export let fogEnabled = false;

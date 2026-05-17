@@ -2,7 +2,7 @@
 	type RenderingMode = 'standard' | 'outline' | 'toon';
 
 	let {
-		backgroundColor = $bindable('#e8ebf2'),
+		backgroundColor = $bindable('#f4f4f2'),
 		showGrid = $bindable(true),
 		showAxes = $bindable(true),
 		wireframe = $bindable(false),

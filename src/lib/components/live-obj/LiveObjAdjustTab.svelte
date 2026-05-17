@@ -5,7 +5,7 @@
 
 	let {
 		sourceTab = $bindable<SourceTab>('executed'),
-		objectColor = $bindable('#0000eb'),
+		objectColor = $bindable('#e6e4dd'),
 		objectScale = $bindable(1),
 		objectPosX = $bindable(0),
 		objectPosY = $bindable(0),
@@ -55,7 +55,7 @@
 			</div>
 			<div class="planner-chain">
 				<label class="planner-context-field"
-					><span class="planner-label-inline">Global mesh color</span>
+					><span class="planner-label-inline">Fallback mesh color</span>
 					<input class="planner-text-input" type="color" bind:value={objectColor} />
 				</label>
 				<label class="planner-context-field"
