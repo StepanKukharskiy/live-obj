@@ -28,6 +28,7 @@
 					>Download .gh</a
 				>
 			</div>
+			<p class="hero-note">Runs with your own API key. No subscription required.</p>
 
 			<div class="video-section">
 				<div class="video-placeholder">
@@ -226,6 +227,13 @@
 		justify-content: center;
 		align-items: center;
 		flex-wrap: wrap;
+	}
+
+	.hero-note {
+		color: #666;
+		font-size: 14px;
+		line-height: 1.4;
+		margin: -16px 0 0;
 	}
 
 	.video-placeholder {
