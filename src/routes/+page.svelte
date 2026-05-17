@@ -72,13 +72,10 @@
 
 	<main class="landing-main">
 		<section class="hero">
-			<h1>Create Editable 3D Scenes as Live OBJ</h1>
+			<h1>Make editable 3D models from text</h1>
 			<p class="hero-subtitle">
-				Describe a concept, iterate on semantic parts, and save a standard OBJ that reopens in Spellshape with editable metadata.
-			</p>
-
-			<p class="byo-text">
-				Portable OBJ everywhere. Live metadata in Spellshape. Bring Your Own API Key now; Bring Your Own Model soon.
+				Describe a scene, object, or structure. Spellshape turns it into a 3D model you can edit
+				part by part, export as an OBJ file, and reopen later without starting over.
 			</p>
 
 			<div class="link-buttons">
@@ -262,14 +259,6 @@
 		color: #555;
 		margin: 0 0 24px 0;
 		line-height: 1.5;
-	}
-
-	.byo-text {
-		font-size: 16px;
-		color: #0000eb;
-		margin: 0 0 32px 0;
-		line-height: 1.5;
-		font-weight: 500;
 	}
 
 	.video-placeholder {
