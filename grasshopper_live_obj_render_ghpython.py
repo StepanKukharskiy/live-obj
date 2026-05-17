@@ -13,6 +13,7 @@
 #   values            list access, item access also works if one value
 #   refresh_controls  bool
 #   clear_controls    bool
+#   controls_below_px int optional, default 170
 #
 # Outputs to create:
 #   meshes
@@ -900,13 +901,20 @@ def create_or_refresh_controls(ctrls):
     remove_generated_controls()
 
     pivot = ghenv.Component.Attributes.Pivot
+    try:
+        below_px = int(controls_below_px)
+    except Exception:
+        below_px = 170
+    below_px = max(80, min(600, below_px))
     x = pivot.X - 220
-    y = pivot.Y
+    y = pivot.Y + below_px
 
+    created = []
     for i, ctrl in enumerate(ctrls):
         obj = create_control_object(ctrl)
         obj.Attributes.Pivot = System.Drawing.PointF(x, y + i * 32)
         doc.AddObject(obj, False)
+        created.append(obj)
         try:
             input_param.AddSource(obj)
         except Exception:

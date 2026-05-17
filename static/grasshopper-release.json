@@ -1,7 +1,7 @@
 {
   "latest_date": "2026-05-17",
   "bundle_name": "Spellshape Grasshopper GHPython scripts",
-  "download_url": "https://live-obj-production.up.railway.app/",
+  "download_url": "https://live-obj-production.up.railway.app/downloads/spellshape-grasshopper.gh",
   "message": "A newer Spellshape Grasshopper script bundle is available. Download the latest GH file from the Spellshape site.",
   "scripts": [
     {

@@ -7,15 +7,29 @@ Copy these into large Grasshopper Panels in the downloadable `.gh` file.
 ```text
 SPELLSHAPE GRASSHOPPER QUICK START
 
-1. Choose a provider: openai, openrouter, anthropic, google, gemini, or custom.
+There are two main GHPython nodes:
+
+1. Decomposed Builder
+   Calls your chosen LLM provider and outputs current_obj.
+
+2. Live OBJ Renderer
+   Reads current_obj, creates Rhino meshes, and creates automatic controls.
+
+Basic wiring:
+Builder current_obj -> Renderer live_obj
+Renderer meshes -> Mesh preview / Custom Preview / Bake workflow
+Generated sliders/toggles -> Renderer values
+
+How to run:
+1. In the Decomposed Builder node, choose provider: openai, openrouter, anthropic, google, gemini, or custom.
 2. Paste your own API key into the api_key Panel.
-3. Type a scene prompt.
-4. Press plan_run once.
-5. Press next_run repeatedly, or enable auto_run.
-6. Watch progress / active_part / status.
-7. The builder current_obj output goes into the renderer live_obj input.
-8. The renderer creates Rhino meshes and automatic sliders from #@controls.
-9. Press reset before starting a totally unrelated object.
+3. Type a scene prompt into the prompt Panel.
+4. Press the Builder plan_run button once.
+5. Press the Builder next_run button repeatedly, or enable auto_run.
+6. Watch Builder progress / active_part / status.
+7. In the Renderer node, press refresh_controls after new #@controls appear.
+8. Adjust generated sliders/toggles. They feed the Renderer values input.
+9. Press Builder reset before starting a totally unrelated object.
 
 Never share a GH file with your API key still inside it.
 ```

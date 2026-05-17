@@ -26,6 +26,7 @@
 
 import json
 import System
+import scriptcontext as sc
 from System.IO import StreamReader
 from System.Net import WebRequest, ServicePointManager, SecurityProtocolType
 
@@ -53,6 +54,31 @@ def set_message(text):
         ghenv.Component.Message = text
     except Exception:
         pass
+
+
+def sticky_key(name):
+    try:
+        guid = str(ghenv.Component.InstanceGuid)
+    except Exception:
+        guid = "default"
+    return "spellshape_update_check:%s:%s" % (guid, name)
+
+
+def get_cached(name, fallback=None):
+    return sc.sticky.get(sticky_key(name), fallback)
+
+
+def set_cached(name, value):
+    sc.sticky[sticky_key(name)] = value
+
+
+def save_result():
+    set_cached("info", info)
+    set_cached("update_available", update_available)
+    set_cached("latest_date", latest_date)
+    set_cached("release_url", release_url)
+    set_cached("raw_json", raw_json)
+    set_cached("error", error)
 
 
 def parse_timeout_ms(value):
@@ -102,12 +128,12 @@ def date_key(text):
         return (0, 0, 0)
 
 
-info = "Press check to look for Spellshape Grasshopper updates."
-update_available = False
-latest_date = ""
 release_url = release_endpoint(input_value("site_url", DEFAULT_SITE_URL))
-raw_json = ""
-error = ""
+info = safe_str(get_cached("info", "Press check to look for Spellshape Grasshopper updates."))
+update_available = bool(get_cached("update_available", False))
+latest_date = safe_str(get_cached("latest_date", ""))
+raw_json = safe_str(get_cached("raw_json", ""))
+error = safe_str(get_cached("error", ""))
 
 local = safe_str(input_value("local_date", LOCAL_RELEASE_DATE), LOCAL_RELEASE_DATE).strip() or LOCAL_RELEASE_DATE
 
@@ -136,9 +162,14 @@ if bool(input_value("check", False)):
                 "Latest date: " + (latest_date or "unknown"),
             ])
             set_message("up to date")
+        save_result()
     except Exception as e:
         error = str(e)
         info = "Update check failed: " + error
         set_message("check failed")
+        save_result()
 else:
-    set_message("idle")
+    if latest_date:
+        set_message("last checked")
+    else:
+        set_message("idle")
