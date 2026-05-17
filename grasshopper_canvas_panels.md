@@ -77,7 +77,11 @@ API keys, prompts, and OBJ files stay between you and your selected provider.
 ```text
 UPDATES
 
-Check the Spellshape Grasshopper download page for the latest .gh file.
+Use the Spellshape Update Checker node to check for the latest .gh file.
+Default site URL:
+https://live-obj-production.up.railway.app/
+
 The GHPython scripts include a release date at the top.
-If your local release date is older than the website release date, download the new GH file.
+If the checker says your local release date is older than the website release date, download the new GH file.
+The checker only sends one GET request when you press check.
 ```

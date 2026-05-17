@@ -1,0 +1,23 @@
+{
+  "latest_date": "2026-05-17",
+  "bundle_name": "Spellshape Grasshopper GHPython scripts",
+  "download_url": "https://live-obj-production.up.railway.app/",
+  "message": "A newer Spellshape Grasshopper script bundle is available. Download the latest GH file from the Spellshape site.",
+  "scripts": [
+    {
+      "name": "Decomposed Raw OBJ Builder",
+      "file": "grasshopper_decomposed_builder_ghpython.py",
+      "date": "2026-05-17"
+    },
+    {
+      "name": "Live OBJ / Raw OBJ Renderer",
+      "file": "grasshopper_live_obj_render_ghpython.py",
+      "date": "2026-05-17"
+    },
+    {
+      "name": "Grasshopper Update Checker",
+      "file": "grasshopper_update_check_ghpython.py",
+      "date": "2026-05-17"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 # Spellshape Grasshopper - Decomposed Raw OBJ Builder
-# Release date: 2026-05-16
+# Release date: 2026-05-17
 # License: MIT
 # Source: https://github.com/StepanKukharskiy/live-obj
 #
