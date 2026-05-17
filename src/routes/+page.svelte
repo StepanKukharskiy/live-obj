@@ -64,17 +64,14 @@
 			</div>
 		</section>
 
-		<section class="platforms">
-			<p class="platforms-text">
-				<span class="platform-item">Web <span class="platform-status beta">(Beta)</span></span>
-				<span class="platform-separator">•</span>
-				<span class="platform-item">
-					Grasshopper <span class="platform-status beta">(Beta)</span>
-				</span>
-				<span class="platform-separator">•</span>
-				<span class="platform-item"
-					>Blender <span class="platform-status coming-soon">(Coming Soon)</span></span
-				>
+		<section class="use-cases">
+			<h2>Built for early 3D exploration</h2>
+			<p>
+				Use Spellshape for architectural massing, stylized objects, low-poly scenes, product
+				concepts, and sculptural forms.
+			</p>
+			<p class="use-cases-tagline">
+				Describe the vibe. Discover the form. Edit the parts. Export the model.
 			</p>
 		</section>
 
@@ -241,7 +238,7 @@
 		max-width: 800px;
 		aspect-ratio: 16/9;
 		background: #0f1117;
-		border-radius: 16px;
+		border-radius: 12px;
 		margin: 0 auto;
 		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
 		overflow: hidden;
@@ -285,35 +282,32 @@
 		transform: translateY(-2px);
 	}
 
-	.platforms {
-		text-align: center;
+	.use-cases {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+		text-align: left;
 		width: 100%;
-		max-width: 900px;
+		max-width: 620px;
 	}
 
-	.platforms-text {
+	.use-cases h2 {
+		color: #1a1a1a;
+		font-size: 28px;
+		line-height: 1.2;
+		margin: 0;
+	}
+
+	.use-cases p {
 		font-size: 18px;
 		color: #555;
 		margin: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-wrap: wrap;
-		gap: 16px;
+		line-height: 1.5;
 	}
 
-	.platform-item {
-		font-weight: 500;
-	}
-
-	.platform-separator {
-		color: #888;
-	}
-
-	.platform-status {
-		font-size: 14px;
-		font-weight: 500;
-		color: #22c55e;
+	.use-cases-tagline {
+		color: #0000eb;
+		font-weight: 600;
 	}
 
 	.credits {
@@ -347,14 +341,6 @@
 	}
 
 	.credit-separator {
-		color: #888;
-	}
-
-	.platform-status.beta {
-		color: #f59e0b;
-	}
-
-	.platform-status.coming-soon {
 		color: #888;
 	}
 
@@ -398,14 +384,12 @@
 			box-sizing: border-box;
 		}
 
-		.platforms-text {
-			font-size: 16px;
-			flex-direction: column;
-			gap: 8px;
+		.use-cases h2 {
+			font-size: 24px;
 		}
 
-		.platform-separator {
-			display: none;
+		.use-cases p {
+			font-size: 16px;
 		}
 
 		.landing-header {
