@@ -1,6 +1,8 @@
 <script lang="ts">
 	import gehryVideo from '$lib/assets/Gehry.mp4';
 
+	let menuOpen = $state(false);
+
 	function goToApp() {
 		window.location.href = '/app';
 	}
@@ -8,7 +10,41 @@
 
 <div class="landing">
 	<header class="landing-header">
-		<img class="landing-logo" src="/images/spellshape_text_logo.svg" alt="Spellshape" />
+		<nav class:open={menuOpen} class="landing-nav" aria-label="Primary">
+			<a class="nav-logo-link" href="/" aria-label="Spellshape home">
+				<img class="landing-logo" src="/images/spellshape_text_logo.svg" alt="Spellshape" />
+			</a>
+			<div class="nav-links">
+				<a
+					class="nav-link"
+					href="https://github.com/StepanKukharskiy/live-obj"
+					target="_blank"
+					rel="noopener noreferrer"
+					onclick={() => (menuOpen = false)}
+				>
+					GitHub
+				</a>
+				<a
+					class="nav-link"
+					href="https://discord.gg/58zSgpaGc"
+					target="_blank"
+					rel="noopener noreferrer"
+					onclick={() => (menuOpen = false)}
+				>
+					Discord
+				</a>
+			</div>
+			<button
+				class="nav-menu-button"
+				type="button"
+				aria-label="Toggle navigation"
+				aria-expanded={menuOpen}
+				onclick={() => (menuOpen = !menuOpen)}
+			>
+				<span></span>
+				<span></span>
+			</button>
+		</nav>
 	</header>
 
 	<main class="landing-main">
@@ -24,8 +60,11 @@
 
 			<div class="hero-actions">
 				<button class="cta-button" onclick={goToApp}>Open Spellshape</button>
-				<a class="secondary-button" href="/downloads/spellshape-grasshopper.gh" download
-					>Download .gh</a
+				<a
+					class="secondary-button"
+					href="/downloads/spellshape-grasshopper.gh"
+					download
+					data-umami-event="Download Grasshopper GH">Download .gh</a
 				>
 			</div>
 			<p class="hero-note">Runs with your own API key. No subscription required.</p>
@@ -42,25 +81,6 @@
 						aria-label="Spellshape generating a Gehry-inspired pavilion"
 					></video>
 				</div>
-			</div>
-
-			<div class="link-buttons">
-				<a
-					class="github-link"
-					href="https://github.com/StepanKukharskiy/live-obj"
-					target="_blank"
-					rel="noopener noreferrer"
-				>
-					GitHub
-				</a>
-				<a
-					class="discord-link"
-					href="https://discord.gg/58zSgpaGc"
-					target="_blank"
-					rel="noopener noreferrer"
-				>
-					Discord
-				</a>
 			</div>
 		</section>
 
@@ -132,38 +152,84 @@
 	}
 
 	.landing-header {
-		padding: 32px 24px 0;
+		padding: 0 24px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		position: sticky;
+		top: 0;
+		z-index: 10;
+	}
+
+	.landing-nav {
+		display: flex;
+		align-items: center;
+		gap: 22px;
+		justify-content: space-between;
+		width: min(760px, 100%);
+		padding: 12px 18px 12px 24px;
+		border: 1px solid rgba(255, 255, 255, 0.7);
+		border-top: none;
+		border-radius: 0 0 28px 28px;
+		background: rgba(255, 255, 255, 0.68);
+		box-shadow: 0 18px 48px rgba(20, 28, 46, 0.12);
+		backdrop-filter: blur(18px) saturate(1.35);
+		-webkit-backdrop-filter: blur(18px) saturate(1.35);
 		position: relative;
-		z-index: 1;
+	}
+
+	.nav-logo-link {
+		display: flex;
+		align-items: center;
 	}
 
 	.landing-logo {
-		width: 220px;
-		max-width: 60vw;
+		display: block;
+		width: 148px;
 		height: auto;
 	}
 
-	.link-buttons {
+	.nav-links {
 		display: flex;
-		gap: 24px;
-		justify-content: center;
+		align-items: center;
+		gap: 18px;
 	}
 
-	.github-link,
-	.discord-link {
+	.nav-link {
 		color: #0000eb;
-		text-decoration: none;
+		font-size: 15px;
 		font-weight: 600;
-		font-size: 16px;
-		display: inline-block;
+		text-decoration: none;
 	}
 
-	.github-link:hover,
-	.discord-link:hover {
+	.nav-link:hover {
 		text-decoration: underline;
+	}
+
+	.nav-menu-button {
+		display: none;
+		width: 38px;
+		height: 32px;
+		align-items: center;
+		justify-content: center;
+		flex-direction: column;
+		gap: 5px;
+		border: 1px solid rgba(0, 0, 235, 0.16);
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.48);
+		cursor: pointer;
+	}
+
+	.nav-menu-button span {
+		display: block;
+		width: 14px;
+		height: 2px;
+		border-radius: 999px;
+		background: #0000eb;
+	}
+
+	.nav-menu-button:hover {
+		background: rgba(0, 0, 235, 0.06);
 	}
 
 	.landing-main {
@@ -393,11 +459,53 @@
 		}
 
 		.landing-header {
-			padding: 24px 16px 0;
+			padding: 0 16px;
+		}
+
+		.landing-nav {
+			width: min(100%, 420px);
+			padding: 10px 10px 10px 18px;
+			border-radius: 0 0 24px 24px;
 		}
 
 		.landing-logo {
-			width: 180px;
+			width: 136px;
+		}
+
+		.nav-links {
+			display: none;
+			position: absolute;
+			top: calc(100% + 8px);
+			right: 0;
+			flex-direction: column;
+			align-items: stretch;
+			min-width: 150px;
+			gap: 0;
+			padding: 8px;
+			border: 1px solid rgba(255, 255, 255, 0.72);
+			border-radius: 18px;
+			background: rgba(255, 255, 255, 0.82);
+			box-shadow: 0 18px 44px rgba(20, 28, 46, 0.14);
+			backdrop-filter: blur(18px) saturate(1.35);
+			-webkit-backdrop-filter: blur(18px) saturate(1.35);
+		}
+
+		.landing-nav.open .nav-links {
+			display: flex;
+		}
+
+		.nav-link {
+			padding: 10px 12px;
+			border-radius: 12px;
+		}
+
+		.nav-link:hover {
+			background: rgba(0, 0, 235, 0.06);
+			text-decoration: none;
+		}
+
+		.nav-menu-button {
+			display: flex;
 		}
 
 		.landing-main {
