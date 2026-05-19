@@ -381,8 +381,8 @@ export async function requestLiveObjAssistantMessageFromLlm(
 		rawLlm?: string;
 	},
 	model: string = DEFAULT_LIVE_OBJ_MODEL
-): Promise<string> {
-	const { content } = await requestChatCompletion({
+): Promise<LiveObjLlmResult> {
+	const { content, usage } = await requestChatCompletion({
 		messages: [
 			{ role: 'system', content: LIVE_OBJ_CHAT_MESSAGE_SYSTEM_PROMPT },
 			{ role: 'user', content: chatMessagePrompt(input) }
@@ -392,7 +392,7 @@ export async function requestLiveObjAssistantMessageFromLlm(
 		maxTokens: 1000,
 		timeoutMs: 90000
 	});
-	return content.replace(/^["'`]+|["'`]+$/g, '').trim();
+	return { content: content.replace(/^["'`]+|["'`]+$/g, '').trim(), usage };
 }
 
 export async function requestLiveObjPartPlanFromLlm(

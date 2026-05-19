@@ -6,6 +6,7 @@ import {
 	streamLiveObjPartFromLlm
 } from '$lib/server/llm/liveObjChat';
 import { withLlmRequestOverrides } from '$lib/server/llm/chat';
+import type { TokenUsage } from '$lib/server/llm/chat';
 import {
 	expandLiveObjWithExecutor,
 	expandRawObjWithPostExecutor,
@@ -48,6 +49,28 @@ function resolvePart(body: Body): IterativePartSpec {
 	const part = body.plan.parts.find((candidate) => candidate.id === id);
 	if (!part) throw new Error(`No part with id '${id}' found in plan`);
 	return part;
+}
+
+function summarizeTokenUsage(usages: TokenUsage[]): TokenUsage | undefined {
+	if (usages.length === 0) return undefined;
+	const sum = (key: keyof TokenUsage) => {
+		const values = usages
+			.map((usage) => usage[key])
+			.filter((value): value is number => typeof value === 'number');
+		return values.length ? values.reduce((a, b) => a + b, 0) : undefined;
+	};
+	return {
+		...(sum('promptTokens') != null ? { promptTokens: sum('promptTokens') } : {}),
+		...(sum('completionTokens') != null ? { completionTokens: sum('completionTokens') } : {}),
+		...(sum('totalTokens') != null ? { totalTokens: sum('totalTokens') } : {}),
+		...(sum('reasoningTokens') != null ? { reasoningTokens: sum('reasoningTokens') } : {}),
+		...(sum('cachedTokens') != null ? { cachedTokens: sum('cachedTokens') } : {})
+	};
+}
+
+function addUsageStep(usages: TokenUsage[], usage: TokenUsage | undefined) {
+	if (!usage) return;
+	usages.push(usage);
 }
 
 function countObjVertices(objText: string): number {
@@ -170,6 +193,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						padding: ' '.repeat(2048)
 					});
 					const rawAttempts: string[] = [];
+					const usages: TokenUsage[] = [];
 					const llmResult = await withLlmRequestOverrides(
 						reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
 						() =>
@@ -197,6 +221,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								}
 							)
 					);
+					addUsageStep(usages, llmResult.usage);
 					rawAttempts.push(llmResult.content);
 					const trailingLine = previewableObjLine(lineBuffer);
 					if (trailingLine) {
@@ -233,6 +258,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									{ imageDataUrls: imageUrls, useProcedural }
 								)
 						);
+						addUsageStep(usages, repairResult.usage);
 						rawAttempts.push(repairResult.content);
 						rawPart = stripCodeFences(repairResult.content);
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
@@ -257,6 +283,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									{ imageDataUrls: imageUrls, useProcedural }
 								)
 						);
+						addUsageStep(usages, repairResult.usage);
 						rawAttempts.push(repairResult.content);
 						rawPart = stripCodeFences(repairResult.content);
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
@@ -290,6 +317,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						executedObj,
 						validation,
 						executorWarnings,
+						...(summarizeTokenUsage(usages) ? { llmUsage: summarizeTokenUsage(usages) } : {}),
 						currentLiveObjSummary
 					});
 				} catch (e) {
@@ -302,7 +330,9 @@ export const POST: RequestHandler = async ({ request }) => {
 					clearInterval(heartbeat);
 					try {
 						controller.close();
-					} catch {}
+					} catch {
+						// The client may have already closed the stream.
+					}
 				}
 			}
 		}),

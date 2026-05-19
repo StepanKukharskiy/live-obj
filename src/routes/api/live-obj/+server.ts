@@ -457,10 +457,17 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	let rawLlm: string;
 	let correctedLiveObj: string;
-	let editMode: 'surgical' | 'rewrite' = useSurgicalEdit ? 'surgical' : 'rewrite';
+	const editMode: 'surgical' | 'rewrite' = useSurgicalEdit ? 'surgical' : 'rewrite';
 	let surgicalEditSummary: string | undefined;
 	let surgicalEditCount: number | undefined;
-	let llmUsages: TokenUsage[] = [];
+	const llmUsages: TokenUsage[] = [];
+	const recordUsage = (usage: TokenUsage | undefined) => {
+		if (!usage) return;
+		llmUsages.push(usage);
+	};
+	const recordUsages = (usages: TokenUsage[]) => {
+		for (const usage of usages) recordUsage(usage);
+	};
 	const reqApiKey = body.apiKey?.trim() || undefined;
 	const reqApiUrl = body.apiUrl?.trim() || undefined;
 	try {
@@ -485,7 +492,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				: normalizeRawPostHeader(patchResult.liveObj);
 			surgicalEditSummary = patchResult.summary;
 			surgicalEditCount = patchResult.appliedEdits;
-			llmUsages = [...llmUsages, ...patchResult.usages];
+			recordUsages(patchResult.usages);
 		} else {
 			const llmResult = await withLlmRequestOverrides(
 				reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
@@ -496,7 +503,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					})
 			);
 			rawLlm = llmResult.content;
-			if (llmResult.usage) llmUsages.push(llmResult.usage);
+			recordUsage(llmResult.usage);
 			correctedLiveObj = stripCodeFences(rawLlm);
 			correctedLiveObj = useProcedural
 				? applyKernelDefaultHeader(correctedLiveObj, kernelDefault)
@@ -546,7 +553,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					reqApiKey,
 					reqApiUrl
 				});
-				llmUsages = [...llmUsages, ...correctionPatch.usages];
+				recordUsages(correctionPatch.usages);
 				const correctionLiveObj = useProcedural
 					? correctionPatch.liveObj
 					: normalizeRawPostHeader(correctionPatch.liveObj);
@@ -564,6 +571,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					reqApiKey,
 					reqApiUrl
 				});
+				recordUsage(assistantMessage?.usage);
 				return json({
 					liveObj: correctionLiveObj,
 					rawLlm: correctionPatch.rawPatch,
@@ -572,7 +580,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					editMode,
 					surgicalEditSummary: correctionPatch.summary ?? surgicalEditSummary,
 					surgicalEditCount: (surgicalEditCount ?? 0) + correctionPatch.appliedEdits,
-					...(assistantMessage ? { assistantMessage } : {}),
+					...(assistantMessage?.content ? { assistantMessage: assistantMessage.content } : {}),
 					executorWarning: `Auto-corrected with a surgical patch after first pass:\n- ${issues.join('\n- ')}`,
 					executorWarnings: retryResult.warnings
 				});
@@ -593,7 +601,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							{ useProcedural }
 						)
 				);
-				if (correctedResult.usage) llmUsages.push(correctedResult.usage);
+				recordUsage(correctedResult.usage);
 				const retryLiveObj = useProcedural
 					? stripCodeFences(correctedResult.content)
 					: normalizeRawPostHeader(stripCodeFences(correctedResult.content), {
@@ -613,13 +621,14 @@ export const POST: RequestHandler = async ({ request }) => {
 						reqApiKey,
 						reqApiUrl
 					});
+					recordUsage(assistantMessage?.usage);
 					return json({
 						liveObj: retryLiveObj,
 						rawLlm,
 						executedObj: retryResult.executedObj,
 						...(summarizeTokenUsage(llmUsages) ? { llmUsage: summarizeTokenUsage(llmUsages) } : {}),
 						editMode,
-						...(assistantMessage ? { assistantMessage } : {}),
+						...(assistantMessage?.content ? { assistantMessage: assistantMessage.content } : {}),
 						executorWarning: `Auto-corrected after first pass:\n- ${issues.join('\n- ')}`,
 						executorWarnings: retryResult.warnings
 					});
@@ -646,6 +655,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		reqApiKey,
 		reqApiUrl
 	});
+	recordUsage(assistantMessage?.usage);
 	return json({
 		liveObj: correctedLiveObj,
 		rawLlm,
@@ -654,7 +664,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		editMode,
 		...(surgicalEditSummary ? { surgicalEditSummary } : {}),
 		...(surgicalEditCount != null ? { surgicalEditCount } : {}),
-		...(assistantMessage ? { assistantMessage } : {}),
+		...(assistantMessage?.content ? { assistantMessage: assistantMessage.content } : {}),
 		...(executorError || firstPassBanner
 			? { executorWarning: [executorError, firstPassBanner].filter(Boolean).join('\n\n') }
 			: {}),
@@ -664,7 +674,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
 function objectBlockByName(sourceText: string, objectId: string): string | undefined {
 	const escaped = objectId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	const match = sourceText.match(new RegExp(`^\\s*o\\s+${escaped}(?:\\s|$)[\\s\\S]*?(?=^\\s*o\\s+|\\s*$)`, 'm'));
+	const match = sourceText.match(
+		new RegExp(`^\\s*o\\s+${escaped}(?:\\s|$)[\\s\\S]*?(?=^\\s*o\\s+|\\s*$)`, 'm')
+	);
 	return match?.[0]?.trim();
 }
 
@@ -706,22 +718,20 @@ async function requestAndApplySurgicalPatch(args: {
 	usages: TokenUsage[];
 }> {
 	const imageUrls = normalizeImageUrls(args.imageUrls, args.imageUrl);
-	const userMessage = withTargetObjectContext(args.userMessage, args.baseLiveObj, args.targetObjectId);
+	const userMessage = withTargetObjectContext(
+		args.userMessage,
+		args.baseLiveObj,
+		args.targetObjectId
+	);
 	const patchResult = await withLlmRequestOverrides(
 		args.reqApiKey || args.reqApiUrl
 			? { apiKey: args.reqApiKey, apiUrl: args.reqApiUrl }
 			: undefined,
 		() =>
-			requestLiveObjSurgicalPatchFromLlm(
-				userMessage,
-				args.baseLiveObj,
-				args.history,
-				args.model,
-				{
-					imageDataUrls: imageUrls,
-					currentSceneMode: args.currentSceneMode
-				}
-			)
+			requestLiveObjSurgicalPatchFromLlm(userMessage, args.baseLiveObj, args.history, args.model, {
+				imageDataUrls: imageUrls,
+				currentSceneMode: args.currentSceneMode
+			})
 	);
 	const rawPatch = patchResult.content;
 	const usages = patchResult.usage ? [patchResult.usage] : [];
@@ -730,11 +740,7 @@ async function requestAndApplySurgicalPatch(args: {
 			args.baseLiveObj,
 			parseLiveObjSurgicalPatch(rawPatch)
 		);
-		assertSurgicalPatchPreservesExistingObjects(
-			userMessage,
-			args.baseLiveObj,
-			applied.liveObj
-		);
+		assertSurgicalPatchPreservesExistingObjects(userMessage, args.baseLiveObj, applied.liveObj);
 		return {
 			liveObj: applied.liveObj,
 			rawPatch,
@@ -766,11 +772,7 @@ async function requestAndApplySurgicalPatch(args: {
 			args.baseLiveObj,
 			parseLiveObjSurgicalPatch(repairedRawPatch)
 		);
-		assertSurgicalPatchPreservesExistingObjects(
-			userMessage,
-			args.baseLiveObj,
-			repaired.liveObj
-		);
+		assertSurgicalPatchPreservesExistingObjects(userMessage, args.baseLiveObj, repaired.liveObj);
 		return {
 			liveObj: repaired.liveObj,
 			rawPatch: repairedRawPatch,
@@ -791,7 +793,7 @@ async function requestAssistantChatMessage(args: {
 	model: string;
 	reqApiKey?: string;
 	reqApiUrl?: string;
-}): Promise<string | undefined> {
+}): Promise<{ content?: string; usage?: TokenUsage } | undefined> {
 	try {
 		const message = await withLlmRequestOverrides(
 			args.reqApiKey || args.reqApiUrl
@@ -810,7 +812,10 @@ async function requestAssistantChatMessage(args: {
 					args.model
 				)
 		);
-		return message || undefined;
+		return {
+			...(message.content ? { content: message.content } : {}),
+			...(message.usage ? { usage: message.usage } : {})
+		};
 	} catch {
 		return undefined;
 	}

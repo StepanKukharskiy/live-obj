@@ -505,7 +505,8 @@ export async function streamChatCompletion({
 			maxTokens,
 			temperature
 		}),
-		stream: true
+		stream: true,
+		...(isOpenAiApiUrl(apiUrl) ? { stream_options: { include_usage: true } } : {})
 	};
 	onAttempt?.({ model: currentModel, attempt: 1, status: 'started' });
 
@@ -535,6 +536,7 @@ export async function streamChatCompletion({
 		const decoder = new TextDecoder();
 		let sseBuffer = '';
 		let content = '';
+		let usage: TokenUsage | undefined;
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
@@ -548,6 +550,7 @@ export async function streamChatCompletion({
 				if (!dataLine || dataLine === '[DONE]') continue;
 				try {
 					const parsed = JSON.parse(dataLine);
+					usage = extractTokenUsage(parsed, currentModel, label, 1) ?? usage;
 					const delta = extractStreamingDelta(parsed);
 					if (!delta) continue;
 					content += delta;
@@ -562,16 +565,19 @@ export async function streamChatCompletion({
 			if (dataLine && dataLine !== '[DONE]') {
 				try {
 					const parsed = JSON.parse(dataLine);
+					usage = extractTokenUsage(parsed, currentModel, label, 1) ?? usage;
 					const delta = extractStreamingDelta(parsed);
 					if (delta) {
 						content += delta;
 						await onDelta(delta);
 					}
-				} catch {}
+				} catch {
+					// Ignore malformed trailing SSE data.
+				}
 			}
 		}
 		onAttempt?.({ model: currentModel, attempt: 1, status: 'succeeded' });
-		return { data: {}, content };
+		return { data: usage ? { usage } : {}, content, usage };
 	} catch (error) {
 		const streamError = isAbortError(error)
 			? new Error(`LLM stream timed out after ${timeoutMs}ms`)
