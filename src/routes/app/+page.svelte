@@ -80,6 +80,15 @@
 		llmUsage?: TokenUsageSummary;
 	};
 
+	type IterativePlanSuccessPayload = IterativePlanPayload & {
+		plan: IterativeScenePlan;
+	};
+
+	type IterativePlanStreamEvent =
+		| { type: 'status'; message?: string }
+		| ({ type: 'final' } & IterativePlanPayload)
+		| { type: 'error'; message?: string };
+
 	type IterativeAppendPayload = {
 		message?: string;
 		liveObj?: string;
@@ -943,6 +952,70 @@ f 4 5 1
 		return finalPayload;
 	}
 
+	async function requestIterativePlanWithStreaming(args: {
+		text: string;
+		initialImageUrls: string[];
+		model: string;
+		useProcedural: boolean;
+	}): Promise<IterativePlanSuccessPayload> {
+		const { text, initialImageUrls, model, useProcedural } = args;
+		const res = await fetch('/api/live-obj/plan/stream', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				userMessage: text,
+				...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
+				...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
+				currentLiveObj: '',
+				model,
+				useProcedural,
+				apiKey: providerSettings.apiKey?.trim() || undefined,
+				apiUrl: providerSettings.apiUrl?.trim() || undefined
+			})
+		});
+		if (!res.ok) {
+			const payload = (await res.json().catch(() => ({}))) as IterativePlanPayload;
+			throw new Error(payload.message || res.statusText || 'Part planning failed');
+		}
+		if (!res.body) throw new Error('Part planning failed: response had no body');
+
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+		let finalPayload: IterativePlanPayload | null = null;
+
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split(/\r?\n/);
+			buffer = lines.pop() ?? '';
+			for (const line of lines) {
+				if (!line.trim()) continue;
+				const event = JSON.parse(line) as IterativePlanStreamEvent;
+				if (event.type === 'status') {
+					statusLine = event.message ?? 'Planning scene parts.';
+				} else if (event.type === 'final') {
+					finalPayload = event;
+				} else if (event.type === 'error') {
+					throw new Error(event.message || 'Part planning failed');
+				}
+			}
+		}
+		if (buffer.trim()) {
+			const event = JSON.parse(buffer) as IterativePlanStreamEvent;
+			if (event.type === 'final') {
+				finalPayload = event;
+			} else if (event.type === 'error') {
+				throw new Error(event.message || 'Part planning failed');
+			}
+		}
+		if (!finalPayload?.plan?.parts?.length) {
+			throw new Error(finalPayload?.message || 'Part planning failed');
+		}
+		return finalPayload as IterativePlanSuccessPayload;
+	}
+
 	async function appendPartWithoutStreaming(args: {
 		text: string;
 		initialImageUrls: string[];
@@ -1001,24 +1074,12 @@ f 4 5 1
 			statusLine = 'Planning scene parts.';
 			appendProgressMessage('Planning the scene as separate buildable parts...');
 			showThinkingMessage('Thinking through scene parts...');
-			const planRes = await fetch('/api/live-obj/plan', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					userMessage: text,
-					...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
-					...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
-					currentLiveObj: '',
-					model,
-					useProcedural,
-					apiKey: providerSettings.apiKey?.trim() || undefined,
-					apiUrl: providerSettings.apiUrl?.trim() || undefined
-				})
+			const planPayload = await requestIterativePlanWithStreaming({
+				text,
+				initialImageUrls,
+				model,
+				useProcedural
 			});
-			const planPayload = (await planRes.json().catch(() => ({}))) as IterativePlanPayload;
-			if (!planRes.ok || !planPayload.plan?.parts?.length) {
-				throw new Error(planPayload.message || planRes.statusText || 'Part planning failed');
-			}
 			clearThinkingMessage();
 
 			const plan = planPayload.plan;
