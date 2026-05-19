@@ -10,7 +10,8 @@ Supported post ops:
     transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz] pivot=[x,y,z]
     symmetrize axis=x|y|z side=positive|negative
     mirror axis=x|y|z
-    array count=n offset=[x,y,z] centered=true|false
+    array count=n offset=[x,y,z] centered=true|false scale=[sx,sy,sz] position=[x,y,z] pivot=[x,y,z]
+    deform position=[x,y,z]
     subdivide level=n
     smooth iterations=n strength=v
     simplify ratio=v
@@ -71,6 +72,16 @@ class Scene:
 
 
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
+EXPR_FUNCTIONS = {
+    "abs": abs,
+    "min": min,
+    "max": max,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "sqrt": math.sqrt,
+}
+EXPR_CONSTANTS = {"pi": math.pi, "tau": math.tau}
 TEMPLATE_PLACEHOLDER_RE = re.compile(r"\$\{[^}]+\}|(?<!\[)\{[A-Za-z_][A-Za-z0-9_]*\}")
 
 
@@ -403,12 +414,22 @@ def op_array(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
     out = Mesh()
     for n in range(count):
         step = n + origin_shift
+        scope = {
+            "i": float(n),
+            "index": float(n),
+            "step": float(step),
+            "count": float(count),
+            "t": float(n / max(1, count - 1)),
+        }
+        scale = parse_vec3(op.get("scale", [1, 1, 1]), params, (1.0, 1.0, 1.0), scope)
+        position = parse_vec3(op.get("position", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope)
+        pivot = parse_vec3(op.get("pivot", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope)
         copy = Mesh(
             [
                 (
-                    v[0] + offset[0] * step,
-                    v[1] + offset[1] * step,
-                    v[2] + offset[2] * step,
+                    pivot[0] + (v[0] - pivot[0]) * scale[0] + offset[0] * step + position[0],
+                    pivot[1] + (v[1] - pivot[1]) * scale[1] + offset[1] * step + position[1],
+                    pivot[2] + (v[2] - pivot[2]) * scale[2] + offset[2] * step + position[2],
                 )
                 for v in mesh.vertices
             ],
@@ -431,7 +452,8 @@ def parse_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-def eval_numeric_expr(value: Any, params: Dict[str, Any]) -> float:
+def eval_numeric_expr(value: Any, params: Dict[str, Any], scope: Optional[Dict[str, Any]] = None) -> float:
+    scope = scope or {}
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
@@ -446,8 +468,12 @@ def eval_numeric_expr(value: Any, params: Dict[str, Any]) -> float:
             return float(text)
         except ValueError:
             pass
+        if text in scope:
+            return eval_numeric_expr(scope[text], params, scope)
         if text in params:
-            return eval_numeric_expr(params[text], params)
+            return eval_numeric_expr(params[text], params, scope)
+        if text in EXPR_CONSTANTS:
+            return EXPR_CONSTANTS[text]
         node = ast.parse(text, mode="eval")
 
         def visit(n: ast.AST) -> float:
@@ -456,9 +482,21 @@ def eval_numeric_expr(value: Any, params: Dict[str, Any]) -> float:
             if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
                 return float(n.value)
             if isinstance(n, ast.Name):
-                if n.id not in params:
+                if n.id in scope:
+                    return eval_numeric_expr(scope[n.id], params, scope)
+                if n.id in params:
+                    return eval_numeric_expr(params[n.id], params, scope)
+                if n.id in EXPR_CONSTANTS:
+                    return EXPR_CONSTANTS[n.id]
+                if n.id in EXPR_FUNCTIONS:
+                    raise ValueError(f"function '{n.id}' must be called")
+                else:
                     raise ValueError(f"unknown parameter '{n.id}'")
-                return eval_numeric_expr(params[n.id], params)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                if n.func.id not in EXPR_FUNCTIONS:
+                    raise ValueError(f"unsupported function '{n.func.id}'")
+                args = [visit(arg) for arg in n.args]
+                return float(EXPR_FUNCTIONS[n.func.id](*args))
             if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.UAdd, ast.USub)):
                 val = visit(n.operand)
                 return val if isinstance(n.op, ast.UAdd) else -val
@@ -483,7 +521,12 @@ def eval_numeric_expr(value: Any, params: Dict[str, Any]) -> float:
     raise ValueError(f"expected numeric value, got {value!r}")
 
 
-def parse_vec3(value: Any, params: Dict[str, Any], default: Vec3) -> Vec3:
+def parse_vec3(
+    value: Any,
+    params: Dict[str, Any],
+    default: Vec3,
+    scope: Optional[Dict[str, Any]] = None,
+) -> Vec3:
     raw = value
     if isinstance(raw, str):
         text = raw.strip()
@@ -495,9 +538,9 @@ def parse_vec3(value: Any, params: Dict[str, Any], default: Vec3) -> Vec3:
         return default
     try:
         return (
-            eval_numeric_expr(raw[0], params),
-            eval_numeric_expr(raw[1], params),
-            eval_numeric_expr(raw[2], params),
+            eval_numeric_expr(raw[0], params, scope),
+            eval_numeric_expr(raw[1], params, scope),
+            eval_numeric_expr(raw[2], params, scope),
         )
     except Exception as e:
         warn(f"invalid vector expression {value!r}: {e}; using default {default}")
@@ -530,6 +573,33 @@ def op_transform(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh
             vertices[-1][1] + pivot[1],
             vertices[-1][2] + pivot[2],
         )
+    return Mesh(vertices, [list(face) for face in mesh.faces])
+
+
+def op_deform(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
+    expr = op.get("position", op.get("expr", op.get("xyz", ["x", "y", "z"])))
+    min_corner, max_corner = mesh_bbox(mesh)
+    spans = [
+        max(max_corner[0] - min_corner[0], 1e-9),
+        max(max_corner[1] - min_corner[1], 1e-9),
+        max(max_corner[2] - min_corner[2], 1e-9),
+    ]
+    vertices: List[Vec3] = []
+    vertex_count = max(1, len(mesh.vertices))
+    for idx, (x, y, z) in enumerate(mesh.vertices):
+        scope = {
+            "x": x,
+            "y": y,
+            "z": z,
+            "u": (x - min_corner[0]) / spans[0],
+            "v": (y - min_corner[1]) / spans[1],
+            "w": (z - min_corner[2]) / spans[2],
+            "i": float(idx),
+            "index": float(idx),
+            "vertex_count": float(vertex_count),
+            "t": float(idx / max(1, vertex_count - 1)),
+        }
+        vertices.append(parse_vec3(expr, params, (x, y, z), scope))
     return Mesh(vertices, [list(face) for face in mesh.faces])
 
 
@@ -675,6 +745,8 @@ def apply_post_ops(obj: RawObject) -> None:
             mesh = op_mirror(mesh, op)
         elif cmd == "array":
             mesh = op_array(mesh, op, obj.params)
+        elif cmd == "deform":
+            mesh = op_deform(mesh, op, obj.params)
         elif cmd == "subdivide":
             mesh = op_subdivide(mesh, op)
         elif cmd == "smooth":

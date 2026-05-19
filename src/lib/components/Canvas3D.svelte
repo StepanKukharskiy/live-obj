@@ -15,18 +15,18 @@
 
 	export let className = '';
 	export let renderObject: any = null;
-	export let backgroundColor = '#f4f4f2';
+	export let backgroundColor = '#3a3a36';
 	export let backgroundImageUrl = '';
 	export let transparentBackground = false;
-	export let showGrid = true;
-	export let showAxes = true;
+	export let showGrid = false;
+	export let showAxes = false;
 	export let ambientLightIntensity = 1.0;
 	export let directionalLightIntensity = 1.5;
 	export let showWireframe = false;
 	/** Applied to the loaded `renderObject` mesh materials only (not grid/axes). */
 	export let objectColor = '#e6e4dd';
 	export let respectObjectMaterials = false;
-	export let enableShadows = false;
+	export let enableShadows = true;
 	export let fogEnabled = false;
 	export let fogNear = 10;
 	export let fogFar = 50;
@@ -76,6 +76,22 @@
 		side: THREE.DoubleSide
 	});
 
+	function isShadowGroundPlane(object: any) {
+		return object === objects?.groundPlane || object?.name === 'shadow_ground_plane';
+	}
+
+	function withShadowGroundHidden<T>(renderFn: () => T): T {
+		const groundPlane = objects?.groundPlane;
+		if (!groundPlane) return renderFn();
+		const wasVisible = groundPlane.visible;
+		groundPlane.visible = false;
+		try {
+			return renderFn();
+		} finally {
+			groundPlane.visible = wasVisible;
+		}
+	}
+
 	// ---- Toon (anime cel-shading) support ----
 	const toonGradientCache = new Map<number, THREE.DataTexture>();
 	function getToonGradientMap(steps: number): THREE.DataTexture {
@@ -124,6 +140,7 @@
 		if (!scene) return renderFn();
 		const swapped: Array<{ mesh: any; original: any }> = [];
 		scene.traverse((child: any) => {
+			if (isShadowGroundPlane(child)) return;
 			if (!child?.isMesh || !child.material || child.visible === false) return;
 			const original = child.material;
 			if (Array.isArray(original)) {
@@ -386,6 +403,7 @@
 		scene.background = transparentBackground ? null : new THREE.Color(backgroundColor);
 		if (objects?.gridHelper) objects.gridHelper.visible = showGrid;
 		if (objects?.axesHelper) objects.axesHelper.visible = showAxes;
+		if (objects?.groundPlane) objects.groundPlane.visible = enableShadows;
 
 		if (lights) {
 			if (lights.ambientLight) lights.ambientLight.intensity = ambientLightIntensity;
@@ -424,8 +442,10 @@
 			});
 
 			meshesToUpdate.forEach((mesh) => {
-				mesh.castShadow = enableShadows;
+				const isGroundPlane = mesh === objects?.groundPlane || mesh.name === 'shadow_ground_plane';
+				mesh.castShadow = enableShadows && !isGroundPlane;
 				mesh.receiveShadow = enableShadows;
+				if (isGroundPlane) mesh.visible = enableShadows;
 			});
 
 			lightsToUpdate.forEach((light) => {
@@ -497,11 +517,13 @@
 		if (!renderer || !scene || !camera) return;
 		const edges = ensureCadEdges();
 		if (!edges) return;
-		edges.render(scene, camera, {
-			edgeColor: outlineColor,
-			thickness: outlineThickness,
-			depthBias: outlineDepthSensitivity,
-			normalBias: outlineNormalSensitivity
+		withShadowGroundHidden(() => {
+			edges.render(scene, camera, {
+				edgeColor: outlineColor,
+				thickness: outlineThickness,
+				depthBias: outlineDepthSensitivity,
+				normalBias: outlineNormalSensitivity
+			});
 		});
 	}
 
@@ -540,7 +562,7 @@
 		}
 		scene.overrideMaterial = outlineFillMaterial;
 		scene.fog = null;
-		renderer.render(scene, camera);
+		withShadowGroundHidden(() => renderer.render(scene, camera));
 		scene.overrideMaterial = previousOverrideMaterial;
 		scene.fog = previousFog;
 		renderEdgeLayer();

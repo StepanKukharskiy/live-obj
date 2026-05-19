@@ -33,540 +33,164 @@
 		{ value: 'gpt-4o', label: 'GPT-4o' }
 	] as const;
 
-	const PROCEDURAL_EXAMPLES = [
-		{ text: 'Create a box at position [0,0,0] with size [1,1,1]', category: 'Primitives' },
-		{ text: 'Create a sphere with radius 0.5 at origin', category: 'Primitives' },
-		{ text: 'Extrude a rectangular profile to create a wall', category: 'Profile' },
-		{ text: 'Revolve a profile around the z-axis to create a vase', category: 'Profile' },
-		{ text: 'Subtract a cylinder from a box to create a hole', category: 'Boolean' },
-		{ text: 'Union two spheres to create a merged shape', category: 'Boolean' },
-		{ text: 'Scale the object by factor 2.0', category: 'Transform' },
-		{ text: 'Rotate the object 45 degrees around the z-axis', category: 'Transform' },
-		{ text: 'Apply a taper deformation along the z-axis', category: 'Deformation' },
-		{ text: 'Add a bevel with 0.05 distance to all edges', category: 'Modifiers' },
-		{ text: 'Generate a cellular automata coral structure', category: 'Simulation' },
-		{
-			text: 'Create a Nakagin-style capsule tower using cellular_automata_instances where each capsule rotates based on alive neighbor count',
-			category: 'Simulation'
-		},
-		{ text: 'Create a differential growth pattern', category: 'Simulation' }
-	];
-
-	const LLM_ONLY_EXAMPLES = [
-		{
-			text: 'Create a simple cube with 8 vertices and 12 triangular faces',
-			category: 'Basic Shapes'
-		},
-		{ text: 'Create a pyramid with a square base and triangular sides', category: 'Basic Shapes' },
-		{ text: 'Create a low-poly sphere with approximately 100 vertices', category: 'Basic Shapes' },
-		{
-			text: 'Create a torus (donut shape) with tube radius 0.2 and ring radius 1.0',
-			category: 'Basic Shapes'
-		},
-		{ text: 'Create a simple chair with seat, back, and 4 legs', category: 'Objects' },
-		{ text: 'Create a table with a rectangular top and 4 cylindrical legs', category: 'Objects' },
-		{ text: 'Create a simple lamp with a base, stem, and shade', category: 'Objects' },
-		{ text: 'Create a low-poly tree trunk and foliage', category: 'Organic' },
-		{ text: 'Create a simple flower with petals and stem', category: 'Organic' },
-		{ text: 'Create a simple house with walls, roof, and door', category: 'Architecture' },
-		{ text: 'Create a simple car body with wheels', category: 'Objects' },
-		{ text: 'Create a rock formation with irregular geometry', category: 'Organic' }
+	const PROMPT_EXAMPLES = [
+		{ text: 'Create a fluid sculptural vase as raw OBJ with width, depth, and height controls', category: 'Raw + Post' },
+		{ text: 'Create a parametric pavilion with raw OBJ triangular frames whose peaks follow a sine wave', category: 'Raw + Post' },
+		{ text: 'Make a sculptural vase mesh and expose post-transform scale controls', category: 'Controls' },
+		{ text: 'Make a pavilion with sine-wave roof peaks and expose frame count, wave, spacing, span, and height controls', category: 'Controls' },
+		{ text: 'Refine the current mesh with #@post simplify, center_origin, and snap_to_ground', category: 'Cleanup' }
 	];
 
 	const OBJ_EXAMPLES = [
 		{
-			name: 'Arched Wall Opening',
+			name: 'Fluid Sculptural Vase',
 			liveObj: `#@scene
 #@units: meters
 #@up: z
 #@live_obj_version: 0.1
-#@kernel_default: cadquery
+#@material_preset: basic_clay color=#e6e4dd roughness=0.82 metalness=0.0
 
-o wall_arch_profile_hole
-#@source: procedural
-#@type: extrude
-#@params: kernel=cadquery, profile=[[0,0,0],[4.0,0,0],[4.0,0,3.0],[0,0,3.0],[0,0,0],None,[1.0,0,0],[3.0,0,0],[3.0,0,1.8],[2.97,0,2.0],[2.88,0,2.2],[2.75,0,2.37],[2.57,0,2.55],[2.4,0,2.68],[2.2,0,2.77],[2.0,0,2.8],[1.8,0,2.77],[1.6,0,2.68],[1.43,0,2.55],[1.25,0,2.37],[1.12,0,2.2],[1.03,0,2.0],[1.0,0,1.8],[1.0,0,0]], height=0.25, segments=32`
+o fluid_sculptural_vase
+#@source: llm_mesh
+#@semantic: fluid asymmetric sculptural vase
+#@bbox min=[-0.48,-0.46,0] max=[0.52,0.48,1.8]
+#@params: width=1.0, depth=1.0, height=1.0
+#@controls:
+#@ - slider key=width label=Width min=0.6 max=1.6 step=0.05
+#@ - slider key=depth label=Depth min=0.6 max=1.6 step=0.05
+#@ - slider key=height label=Height min=0.7 max=1.8 step=0.05
+#@post:
+#@ - smooth iterations=2 strength=0.35
+#@ - transform scale=[width,depth,height]
+#@ - center_origin axes=xz
+#@ - snap_to_ground axis=z
+#@ - material name=basic_clay
+v 0.38 0.00 0.00
+v 0.25 0.32 0.00
+v -0.16 0.36 0.00
+v -0.34 0.08 0.00
+v -0.22 -0.30 0.00
+v 0.22 -0.34 0.00
+v 0.52 0.02 0.42
+v 0.29 0.42 0.42
+v -0.20 0.39 0.42
+v -0.44 0.05 0.42
+v -0.27 -0.38 0.42
+v 0.26 -0.42 0.42
+v 0.42 0.05 0.92
+v 0.18 0.32 0.92
+v -0.24 0.26 0.92
+v -0.36 -0.04 0.92
+v -0.13 -0.30 0.92
+v 0.32 -0.24 0.92
+v 0.30 0.00 1.34
+v 0.12 0.24 1.34
+v -0.18 0.21 1.34
+v -0.28 -0.02 1.34
+v -0.10 -0.23 1.34
+v 0.22 -0.18 1.34
+v 0.22 0.03 1.80
+v 0.08 0.17 1.80
+v -0.10 0.15 1.80
+v -0.18 -0.01 1.80
+v -0.08 -0.15 1.80
+v 0.16 -0.12 1.80
+f 1 2 8 7
+f 2 3 9 8
+f 3 4 10 9
+f 4 5 11 10
+f 5 6 12 11
+f 6 1 7 12
+f 7 8 14 13
+f 8 9 15 14
+f 9 10 16 15
+f 10 11 17 16
+f 11 12 18 17
+f 12 7 13 18
+f 13 14 20 19
+f 14 15 21 20
+f 15 16 22 21
+f 16 17 23 22
+f 17 18 24 23
+f 18 13 19 24
+f 19 20 26 25
+f 20 21 27 26
+f 21 22 28 27
+f 22 23 29 28
+f 23 24 30 29
+f 24 19 25 30
+f 1 6 5 4 3 2`
 		},
 		{
-			name: 'Nakagin Capsule CA Placement',
+			name: 'Parametric Pavilion',
 			liveObj: `#@scene
 #@units: meters
 #@up: z
 #@live_obj_version: 0.1
-#@kernel_default: cadquery
+#@workflow: raw_post
+#@material_preset: basic_clay color=#e6e4dd roughness=0.82 metalness=0.0
 
-o nakagin_capsule_body
-#@source: procedural
-#@type: box
-#@params: size=[1.2,1.2,1.2]
-#@parent: nakagin_capsule_assembly
-#@anchors: body_center=[0,0,0]
-
-o nakagin_capsule_window
-#@source: procedural
-#@type: cylinder
-#@params: axis=z radius=0.4 height=1.3
-#@parent: nakagin_capsule_assembly
-#@anchors: window_center=anchor(nakagin_capsule_assembly.body_center)
-
-o nakagin_capsule_assembly
-#@source: assembly
-#@params: capsule_size=1.2
-#@ops:
-#@ - transform rotation=[90,0,0]
-
-o nakagin_capsule_ca
-#@source: simulation
-#@sim: cellular_automata_instances
-#@params: grid=[8,8,12],cell=1.35,fill=0.22,seed=11,instance=nakagin_capsule_assembly,instance_scale=0.8,rotation_step=90,steps=5,birth_rules=3,survival_rules=2,3
-#@ops:
-#@ - material name=capsule_white
-
-#@material_preset: capsule_white color=#d9d9d4 roughness=0.55 metalness=0.05`
-		},
-		{
-			name: 'Coral Growth',
-			liveObj: `#@scene
-#@units: meters
-#@up: z
-#@live_obj_version: 0.1
-#@kernel_default: cadquery
-#@material_preset: coral_pink color=#ff8f9f roughness=0.68 metalness=0.0
-#@material_preset: reef_base color=#6d5b4b roughness=0.9 metalness=0.0
-
-o coral_growth_01
-#@source: simulation
-#@sim: cellular_automata
-#@params: grid=[10,10,14],cell=0.08,steps=38,seed=2718,mode=coral,surface=smooth,mc_resolution=0.04
-#@ops:
-#@ - smooth iterations=3 strength=0.45
-#@ - material name=coral_pink
-#@ - tag value=art
-
-o reef_base_01
-#@source: sdf
-#@sdf:
-#@ - sphere id=base_mass center=[0,0,-0.12] radius=1.35
-#@ - box id=base_cut center=[0,0,-1.0] size=[3.2,3.2,1.6]
-#@ - intersect base_mass base_cut
-#@ - noise_displace strength=0.08 frequency=5.0 seed=91
-#@ - mesh_from_sdf resolution=0.04
-#@ops:
-#@ - material name=reef_base
-#@ - tag value=decorative`
-		},
-		{
-			name: 'Spiral Staircase',
-			liveObj: `#@scene
-#@units: meters
-#@up: z
-#@live_obj_version: 0.1
-#@material_preset: matte_black_steel color=#17191c roughness=0.58 metalness=0.75
-#@material_preset: warm_oak color=#9b6a3f roughness=0.72 metalness=0.05
-#@material_preset: brushed_steel color=#9ca3a8 roughness=0.38 metalness=0.85
-
-o spiral_staircase_01
-#@source: assembly
-#@children: center_post,treads,balusters,handrail_curve,handrail
-#@params: stair_height=3.2,turns=1.5,step_count=18,outer_radius=1.15,inner_radius=0.18,tread_thickness=0.07,tread_angle=18,tread_depth=0.72,post_radius=0.08,baluster_radius=0.025,handrail_radius=0.045,rail_height=0.92
-#@anchors:
-#@ - base_center=[0,0,0]
-#@ - post_center=[0,0,stair_height/2]
-#@ - top_center=[0,0,stair_height]
-#@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
-
-o center_post
-#@parent: spiral_staircase_01
-#@source: procedural
-#@type: cylinder
-#@params: axis=z, radius=0.08, depth=3.2, segments=48, center=[0,0,1.6]
-#@ops:
-#@ - bevel amount=0.012 segments=2
-#@ - material name=matte_black_steel
-#@ - tag value=structural
-#@ - collision proxy=convex
-#@material: matte_black_steel
-
-o treads
-#@parent: spiral_staircase_01
-#@source: procedural
-#@type: mesh
-#@params: generator=helix_array, count=parent.step_count, turns=parent.turns, height=parent.stair_height, radius=(parent.outer_radius+parent.inner_radius)/2, base_size=[parent.outer_radius-parent.inner_radius,(parent.outer_radius+parent.inner_radius)/2*3.14159*parent.turns/parent.step_count,parent.tread_thickness], center=[0,0,0]
-#@ops:
-#@ - material name=warm_oak
-#@ - tag value=structural
-#@ - collision proxy=mesh
-#@material: warm_oak
-
-o balusters
-#@parent: spiral_staircase_01
-#@source: procedural
-#@type: mesh
-#@params: generator=spiral_post_array, count=parent.step_count, turns=parent.turns, height=parent.stair_height, radius=parent.outer_radius, post_radius=parent.baluster_radius, post_height=parent.rail_height, start_z=parent.tread_thickness, center=[0,0,0]
-#@ops:
-#@ - bevel amount=0.006 segments=2
-#@ - material name=brushed_steel
-#@ - tag value=structural
-#@ - collision proxy=convex
-#@material: brushed_steel
-
-o handrail_curve
-#@parent: spiral_staircase_01
-#@source: procedural
-#@type: curve
-#@params: kind=helix, radius=parent.outer_radius, height=parent.stair_height, turns=parent.turns, z_offset=parent.rail_height, segments=parent.step_count*8, center=[0,0,0]
-#@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
-#@ops:
-#@ - tag value=structural
-
-o handrail
-#@parent: spiral_staircase_01
-#@source: procedural
-#@type: sweep
-#@params: profile=circle, radius=parent.handrail_radius, along=handrail_curve, segments=24
-#@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]
-#@ops:
-#@ - material name=matte_black_steel
-#@ - tag value=structural
-#@ - collision proxy=convex
-#@material: matte_black_steel`
-		},
-		{
-			name: 'Fluid Organic Vase',
-			liveObj: `#@kernel_default: cadquery
-o fluid_organic_vase
-v 0.390000 0.000000 0.000000
-v 0.291000 0.212000 0.000000
-v 0.124000 0.380000 0.000000
-v -0.114000 0.352000 0.000000
-v -0.332000 0.241000 0.000000
-v -0.380000 0.000000 0.000000
-v -0.283000 -0.206000 0.000000
-v -0.124000 -0.380000 0.000000
-v 0.111000 -0.342000 0.000000
-v 0.316000 -0.229000 0.000000
-v 0.580000 -0.010000 0.180000
-v 0.449000 0.302000 0.180000
-v 0.199000 0.542000 0.180000
-v -0.141000 0.485000 0.180000
-v -0.441000 0.325000 0.180000
-v -0.530000 -0.010000 0.180000
-v -0.385000 -0.304000 0.180000
-v -0.147000 -0.524000 0.180000
-v 0.181000 -0.505000 0.180000
-v 0.473000 -0.339000 0.180000
-v 0.850000 0.020000 0.550000
-v 0.657000 0.461000 0.550000
-v 0.303000 0.800000 0.550000
-v -0.185000 0.743000 0.550000
-v -0.589000 0.485000 0.550000
-v -0.690000 0.020000 0.550000
-v -0.573000 -0.433000 0.550000
-v -0.200000 -0.750000 0.550000
-v 0.291000 -0.722000 0.550000
-v 0.721000 -0.468000 0.550000
-v 0.480000 0.040000 0.950000
-v 0.352000 0.310000 0.950000
-v 0.138000 0.525000 0.950000
-v -0.165000 0.487000 0.950000
-v -0.416000 0.328000 0.950000
-v -0.470000 0.040000 0.950000
-v -0.425000 -0.254000 0.950000
-v -0.184000 -0.464000 0.950000
-v 0.128000 -0.416000 0.950000
-v 0.401000 -0.266000 0.950000
-v 0.570000 0.000000 1.350000
-v 0.425000 0.353000 1.350000
-v 0.144000 0.628000 1.350000
-v -0.242000 0.561000 1.350000
-v -0.586000 0.382000 1.350000
-v -0.670000 0.000000 1.350000
-v -0.529000 -0.341000 1.350000
-v -0.258000 -0.609000 1.350000
-v 0.132000 -0.590000 1.350000
-v 0.482000 -0.394000 1.350000
-v 0.720000 -0.040000 1.750000
-v 0.550000 0.360000 1.750000
-v 0.226000 0.654000 1.750000
-v -0.207000 0.597000 1.750000
-v -0.574000 0.377000 1.750000
-v -0.690000 -0.040000 1.750000
-v -0.534000 -0.428000 1.750000
-v -0.222000 -0.725000 1.750000
-v 0.216000 -0.706000 1.750000
-v 0.599000 -0.475000 1.750000
-v 0.410000 -0.020000 2.050000
-v 0.315000 0.180000 2.050000
-v 0.157000 0.341000 2.050000
-v -0.068000 0.313000 2.050000
-v -0.251000 0.192000 2.050000
-v -0.290000 -0.020000 2.050000
-v -0.235000 -0.220000 2.050000
-v -0.074000 -0.372000 2.050000
-v 0.148000 -0.353000 2.050000
-v 0.356000 -0.249000 2.050000
-v 0.450000 0.010000 2.280000
-v 0.344000 0.245000 2.280000
-v 0.159000 0.438000 2.280000
-v -0.107000 0.400000 2.280000
-v -0.336000 0.269000 2.280000
-v -0.370000 0.010000 2.280000
-v -0.304000 -0.225000 2.280000
-v -0.113000 -0.399000 2.280000
-v 0.147000 -0.380000 2.280000
-v 0.384000 -0.255000 2.280000
-v 0.510000 0.020000 2.420000
-v 0.380000 0.296000 2.420000
-v 0.161000 0.515000 2.420000
-v -0.148000 0.477000 2.420000
-v -0.405000 0.314000 2.420000
-v -0.460000 0.020000 2.420000
-v -0.380000 -0.256000 2.420000
-v -0.158000 -0.465000 2.420000
-v 0.151000 -0.446000 2.420000
-v 0.429000 -0.292000 2.420000
-v 0.420000 -0.010000 0.280000
-v 0.319000 0.208000 0.280000
-v 0.150000 0.389000 0.280000
-v -0.091000 0.332000 0.280000
-v -0.312000 0.231000 0.280000
-v -0.370000 -0.010000 0.280000
-v -0.255000 -0.210000 0.280000
-v -0.097000 -0.371000 0.280000
-v 0.131000 -0.352000 0.280000
-v 0.344000 -0.245000 0.280000
-v 0.730000 0.020000 0.550000
-v 0.560000 0.390000 0.550000
-v 0.266000 0.686000 0.550000
-v -0.148000 0.629000 0.550000
-v -0.492000 0.414000 0.550000
-v -0.570000 0.020000 0.550000
-v -0.476000 -0.362000 0.550000
-v -0.163000 -0.636000 0.550000
-v 0.254000 -0.608000 0.550000
-v 0.624000 -0.397000 0.550000
-v 0.370000 0.040000 0.950000
-v 0.263000 0.246000 0.950000
-v 0.104000 0.420000 0.950000
-v -0.131000 0.382000 0.950000
-v -0.327000 0.263000 0.950000
-v -0.360000 0.040000 0.950000
-v -0.336000 -0.189000 0.950000
-v -0.150000 -0.359000 0.950000
-v 0.094000 -0.312000 0.950000
-v 0.312000 -0.201000 0.950000
-v 0.450000 0.000000 1.350000
-v 0.328000 0.282000 1.350000
-v 0.107000 0.514000 1.350000
-v -0.205000 0.447000 1.350000
-v -0.489000 0.312000 1.350000
-v -0.550000 0.000000 1.350000
-v -0.432000 -0.270000 1.350000
-v -0.221000 -0.495000 1.350000
-v 0.095000 -0.476000 1.350000
-v 0.385000 -0.323000 1.350000
-v 0.600000 -0.040000 1.750000
-v 0.453000 0.289000 1.750000
-v 0.188000 0.540000 1.750000
-v -0.170000 0.483000 1.750000
-v -0.477000 0.307000 1.750000
-v -0.570000 -0.040000 1.750000
-v -0.437000 -0.358000 1.750000
-v -0.185000 -0.611000 1.750000
-v 0.179000 -0.592000 1.750000
-v 0.502000 -0.405000 1.750000
-v 0.320000 -0.020000 2.050000
-v 0.242000 0.127000 2.050000
-v 0.130000 0.256000 2.050000
-v -0.040000 0.227000 2.050000
-v -0.178000 0.139000 2.050000
-v -0.200000 -0.020000 2.050000
-v -0.162000 -0.167000 2.050000
-v -0.047000 -0.286000 2.050000
-v 0.120000 -0.267000 2.050000
-v 0.283000 -0.196000 2.050000
-v 0.360000 0.010000 2.280000
-v 0.271000 0.192000 2.280000
-v 0.131000 0.352000 2.280000
-v -0.079000 0.314000 2.280000
-v -0.263000 0.216000 2.280000
-v -0.280000 0.010000 2.280000
-v -0.231000 -0.172000 2.280000
-v -0.085000 -0.313000 2.280000
-v 0.119000 -0.294000 2.280000
-v 0.311000 -0.202000 2.280000
-v 0.400000 0.020000 2.420000
-v 0.291000 0.232000 2.420000
-v 0.127000 0.410000 2.420000
-v -0.114000 0.372000 2.420000
-v -0.316000 0.249000 2.420000
-v -0.350000 0.020000 2.420000
-v -0.291000 -0.192000 2.420000
-v -0.124000 -0.360000 2.420000
-v 0.117000 -0.341000 2.420000
-v 0.340000 -0.227000 2.420000
-f 10 9 8 7 6 5 4 3 2 1
-f 1 2 12 11
-f 2 3 13 12
-f 3 4 14 13
-f 4 5 15 14
-f 5 6 16 15
-f 6 7 17 16
-f 7 8 18 17
-f 8 9 19 18
-f 9 10 20 19
-f 10 1 11 20
-f 11 12 22 21
-f 12 13 23 22
-f 13 14 24 23
-f 14 15 25 24
-f 15 16 26 25
-f 16 17 27 26
-f 17 18 28 27
-f 18 19 29 28
-f 19 20 30 29
-f 20 11 21 30
-f 21 22 32 31
-f 22 23 33 32
-f 23 24 34 33
-f 24 25 35 34
-f 25 26 36 35
-f 26 27 37 36
-f 27 28 38 37
-f 28 29 39 38
-f 29 30 40 39
-f 30 21 31 40
-f 31 32 42 41
-f 32 33 43 42
-f 33 34 44 43
-f 34 35 45 44
-f 35 36 46 45
-f 36 37 47 46
-f 37 38 48 47
-f 38 39 49 48
-f 39 40 50 49
-f 40 31 41 50
-f 41 42 52 51
-f 42 43 53 52
-f 43 44 54 53
-f 44 45 55 54
-f 45 46 56 55
-f 46 47 57 56
-f 47 48 58 57
-f 48 49 59 58
-f 49 50 60 59
-f 50 41 51 60
-f 51 52 62 61
-f 52 53 63 62
-f 53 54 64 63
-f 54 55 65 64
-f 55 56 66 65
-f 56 57 67 66
-f 57 58 68 67
-f 58 59 69 68
-f 59 60 70 69
-f 60 51 61 70
-f 61 62 72 71
-f 62 63 73 72
-f 63 64 74 73
-f 64 65 75 74
-f 65 66 76 75
-f 66 67 77 76
-f 67 68 78 77
-f 68 69 79 78
-f 69 70 80 79
-f 70 61 71 80
-f 71 72 82 81
-f 72 73 83 82
-f 73 74 84 83
-f 74 75 85 84
-f 75 76 86 85
-f 76 77 87 86
-f 77 78 88 87
-f 78 79 89 88
-f 79 80 90 89
-f 80 71 81 90
-f 91 92 93 94 95 96 97 98 99 100
-f 91 101 102 92
-f 92 102 103 93
-f 93 103 104 94
-f 94 104 105 95
-f 95 105 106 96
-f 96 106 107 97
-f 97 107 108 98
-f 98 108 109 99
-f 99 109 110 100
-f 100 110 101 91
-f 101 111 112 102
-f 102 112 113 103
-f 103 113 114 104
-f 104 114 115 105
-f 105 115 116 106
-f 106 116 117 107
-f 107 117 118 108
-f 108 118 119 109
-f 109 119 120 110
-f 110 120 111 101
-f 111 121 122 112
-f 112 122 123 113
-f 113 123 124 114
-f 114 124 125 115
-f 115 125 126 116
-f 116 126 127 117
-f 117 127 128 118
-f 118 128 129 119
-f 119 129 130 120
-f 120 130 121 111
-f 121 131 132 122
-f 122 132 133 123
-f 123 133 134 124
-f 124 134 135 125
-f 125 135 136 126
-f 126 136 137 127
-f 127 137 138 128
-f 128 138 139 129
-f 129 139 140 130
-f 130 140 131 121
-f 131 141 142 132
-f 132 142 143 133
-f 133 143 144 134
-f 134 144 145 135
-f 135 145 146 136
-f 136 146 147 137
-f 137 147 148 138
-f 138 148 149 139
-f 139 149 150 140
-f 140 150 141 131
-f 141 151 152 142
-f 142 152 153 143
-f 143 153 154 144
-f 144 154 155 145
-f 145 155 156 146
-f 146 156 157 147
-f 147 157 158 148
-f 148 158 159 149
-f 149 159 160 150
-f 150 160 151 141
-f 151 161 162 152
-f 152 162 163 153
-f 153 163 164 154
-f 154 164 165 155
-f 155 165 166 156
-f 156 166 167 157
-f 157 167 168 158
-f 158 168 169 159
-f 159 169 170 160
-f 160 170 161 151
-f 81 82 162 161
-f 82 83 163 162
-f 83 84 164 163
-f 84 85 165 164
-f 85 86 166 165
-f 86 87 167 166
-f 87 88 168 167
-f 88 89 169 168
-f 89 90 170 169
-f 90 81 161 170`
+o pavilion_sine_frame
+#@source: llm_mesh
+#@semantic: parametric pavilion triangular frame module with expression-driven sine array
+#@bbox min=[-0.08,-0.8,0] max=[0.08,0.8,1.5]
+#@params: frame_count=7, bay_spacing=0.42, pavilion_width=1.0, pavilion_height=1.0, wave_amount=0.10
+#@controls:
+#@ - slider key=frame_count label=Frames min=2 max=14 step=1
+#@ - slider key=bay_spacing label=Bay spacing min=0.22 max=0.8 step=0.02
+#@ - slider key=pavilion_width label=Span min=0.7 max=1.6 step=0.05
+#@ - slider key=pavilion_height label=Height min=0.6 max=1.5 step=0.05
+#@ - slider key=wave_amount label=Wave min=0.0 max=0.28 step=0.01
+#@post:
+#@ - transform scale=[1,pavilion_width,pavilion_height]
+#@ - array count=frame_count offset=[bay_spacing,0,0] centered=true
+#@ - deform position=[x,y+(w*w*sin(u*tau)*wave_amount),z]
+#@ - center_origin axes=xz
+#@ - snap_to_ground axis=z
+#@ - material name=basic_clay
+#@ - tag value=architectural
+v -0.060 -0.740 0.120
+v -0.060 -0.740 0.000
+v -0.060 0.740 0.000
+v -0.060 0.740 0.120
+v 0.060 -0.740 0.120
+v 0.060 -0.740 0.000
+v 0.060 0.740 0.000
+v 0.060 0.740 0.120
+v -0.060 -0.744 0.104
+v -0.060 -0.656 0.056
+v -0.060 0.044 1.356
+v -0.060 -0.044 1.404
+v 0.060 -0.744 0.104
+v 0.060 -0.656 0.056
+v 0.060 0.044 1.356
+v 0.060 -0.044 1.404
+v -0.060 0.044 1.404
+v -0.060 -0.044 1.356
+v -0.060 0.656 0.056
+v -0.060 0.744 0.104
+v 0.060 0.044 1.404
+v 0.060 -0.044 1.356
+v 0.060 0.656 0.056
+v 0.060 0.744 0.104
+f 1 2 3 4
+f 5 8 7 6
+f 1 5 6 2
+f 2 6 7 3
+f 3 7 8 4
+f 4 8 5 1
+f 9 10 11 12
+f 13 16 15 14
+f 9 13 14 10
+f 10 14 15 11
+f 11 15 16 12
+f 12 16 13 9
+f 17 18 19 20
+f 21 24 23 22
+f 17 21 22 18
+f 18 22 23 19
+f 19 23 24 20
+f 20 24 21 17`
 		}
 	];
 
@@ -577,7 +201,6 @@ f 90 81 161 170`
 		onSend,
 		onLaunchObjExample,
 		input = $bindable(''),
-		useProcedural = $bindable(false),
 		targetObjectId = $bindable(''),
 		targetObjectOptions = [],
 		feedbackLoop = $bindable(false),
@@ -590,7 +213,6 @@ f 90 81 161 170`
 		onSend?: (payload: SendPayload) => void;
 		onLaunchObjExample?: (liveObj: string) => void;
 		input?: string;
-		useProcedural?: boolean;
 		targetObjectId?: string;
 		targetObjectOptions?: string[];
 		feedbackLoop?: boolean;
@@ -685,7 +307,7 @@ f 90 81 161 170`
 		if ((!text && !img) || busy) return;
 		onSend?.({
 			text,
-			useProcedural,
+			useProcedural: false,
 			...(targetObjectId ? { targetObjectId } : {}),
 			imageDataUrl: img,
 			feedbackLoop,
@@ -696,7 +318,6 @@ f 90 81 161 170`
 	}
 
 	let canSend = $derived(Boolean((input.trim() || attachedDataUrl) && !busy));
-	let promptExamples = $derived(useProcedural ? PROCEDURAL_EXAMPLES : LLM_ONLY_EXAMPLES);
 
 	function usePrompt(example: { text: string; category: string }) {
 		input = example.text;
@@ -750,12 +371,12 @@ f 90 81 161 170`
 		{#if msgs.length === 0}
 			<div class="planner-chat-welcome">
 				<p class="planner-chat-guide-copy">
-					Describe a scene or ask for edits like "add a lamp", "remove the sphere", or "make the
-					table red". You can attach a reference image instead of or in addition to text.
+					Describe raw OBJ geometry and the small #@post stack you want on top: symmetry,
+					arrays, cleanup, placement, materials, or targeted mesh edits.
 				</p>
 				{#if OBJ_EXAMPLES.length > 0}
 					<div class="planner-obj-examples">
-						<h3 class="planner-obj-examples-title">Launch OBJ Examples</h3>
+						<h3 class="planner-obj-examples-title">Launch Raw OBJ Examples</h3>
 						<div class="planner-obj-grid">
 							{#each OBJ_EXAMPLES as example (example.name)}
 								<button
@@ -773,9 +394,9 @@ f 90 81 161 170`
 					</div>
 				{/if}
 				<div class="planner-prompt-examples">
-					<h3 class="planner-prompt-examples-title">Quick Prompts</h3>
+					<h3 class="planner-prompt-examples-title">Raw OBJ Prompts</h3>
 					<div class="planner-prompt-grid">
-						{#each promptExamples as example (example.text)}
+						{#each PROMPT_EXAMPLES as example (example.text)}
 							<button
 								type="button"
 								class="planner-prompt-chip"
@@ -842,7 +463,7 @@ f 90 81 161 170`
 		{/if}
 		<textarea
 			rows="2"
-			placeholder="Ask for generation or iterative edits..."
+			placeholder="Ask for raw OBJ generation or a #@post edit..."
 			bind:value={input}
 			disabled={busy}
 			onkeydown={(e) => {
@@ -865,15 +486,6 @@ f 90 81 161 170`
 						</select>
 					</label>
 				{/if}
-				<label class="planner-chat-procedural-label">
-					<input
-						type="checkbox"
-						bind:checked={useProcedural}
-						disabled={busy}
-						class="planner-chat-procedural-checkbox"
-					/>
-					<span class="planner-chat-procedural-text">Procedural mode</span>
-				</label>
 				<label class="planner-chat-procedural-label">
 					<input
 						type="checkbox"

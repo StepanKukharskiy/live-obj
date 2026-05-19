@@ -20,712 +20,164 @@
 		operations: Operation[];
 	}
 
-	let expandedCategories = $state(new Set(['profile', 'primitives', 'boolean', 'sdf', 'transform', 'deformation', 'modifiers', 'other', 'simulations']));
+	let expandedCategories = $state(new Set(['raw obj setup', 'post transforms', 'post mesh cleanup', 'post metadata']));
 
 	const categories: Category[] = [
 		{
-			name: 'profile',
+			name: 'raw obj setup',
 			operations: [
 				{
-					name: 'extrude',
-					category: 'Profile operations',
-					description: 'Extrude 2D profile to 3D',
+					name: '#@source: llm_mesh',
+					category: 'Raw OBJ metadata',
+					description: 'Marks an object as raw LLM-authored OBJ geometry for raw-post execution.',
 					params: [
-						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery (v02) or auto', default: 'auto' },
-						{ name: 'profile', type: 'list', description: 'List of 2D/3D points defining the profile' },
-						{ name: 'height', type: 'float', description: 'Extrusion height', default: '1.0' },
-						{ name: 'axis', type: 'string', description: 'Extrusion axis (x, y, or z)', default: 'z' }
+						{ name: 'o', type: 'string', description: 'Stable object name used by target edits' },
+						{ name: '#@semantic', type: 'string', description: 'Short editable intent for the mesh' },
+						{ name: '#@bbox', type: 'vec3 pairs', description: 'Approximate min and max bounds for validation and targeting' }
 					],
-					example: 'o wall\n#@source: procedural\n#@type: extrude\n#@params: kernel=cadquery, profile=[[0,0,0],[4,0,0],[4,0,3],[0,0,3]], height=0.2'
+					example: 'o half_mask_raw\n#@source: llm_mesh\n#@semantic: sculptural half mask\n#@bbox min=[0,-0.35,0] max=[0.55,0.35,0.9]\nv 0.00 0.00 0.00\nv 0.50 0.00 0.00\nv 0.20 0.20 0.60\nf 1 2 3'
 				},
 				{
-					name: 'loft',
-					category: 'Profile operations',
-					description: 'Loft between multiple profiles',
+					name: '#@params',
+					category: 'Raw OBJ metadata',
+					description: 'Defines simple numeric values that #@post ops can reuse.',
 					params: [
-						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery (v02) or auto', default: 'auto' },
-						{ name: 'sections', type: 'list', description: 'List of profile sections' }
+						{ name: 'name', type: 'number | vec3', description: 'Bare parameter names, referenced without ${...} templating' }
 					],
-					example: 'o lofted_shape\n#@source: procedural\n#@type: loft\n#@params: kernel=cadquery, sections=[[[0,0,0],[1,0,0],[1,1,0],[0,1,0]], [[0,0,2],[1.5,0,2],[1.5,1.5,2],[0,1.5,2]]]'
-				},
-				{
-					name: 'sweep',
-					category: 'Profile operations',
-					description: 'Sweep profile along curve',
-					params: [
-						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery (v02) or auto', default: 'auto' },
-						{ name: 'rail', type: 'list', description: 'Rail curve points' },
-						{ name: 'profile', type: 'list', description: 'Profile curve points' }
-					],
-					example: 'o swept_pipe\n#@source: procedural\n#@type: sweep\n#@params: kernel=cadquery, profile=[[0,0,0],[0.1,0,0],[0.1,0.1,0],[0,0.1,0]], along=[[0,0,0],[0,0,1],[0,1,2],[1,2,2]]'
-				},
-				{
-					name: 'revolve / lathe',
-					category: 'Profile operations',
-					description: 'Revolve profile around axis',
-					params: [
-						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery (v02) or auto', default: 'auto' },
-						{ name: 'profile', type: 'list', description: 'Profile points' },
-						{ name: 'axis', type: 'string', description: 'Rotation axis (x, y, or z)', default: 'y' },
-						{ name: 'angle', type: 'float', description: 'Rotation angle in degrees', default: '360' }
-					],
-					example: 'o vase\n#@source: procedural\n#@type: revolve\n#@params: kernel=cadquery, profile=[[0,0,0],[0.1,0,0.2],[0.05,0,0.4],[0,0,0.8]], axis=z, angle=360'
+					example: '#@params: module_count=4, lift=0.28\n\no module\n#@source: llm_mesh\n#@post:\n#@ - array count=module_count offset=[0,0,lift]'
 				}
 			]
 		},
 		{
-			name: 'primitives',
+			name: 'post transforms',
 			operations: [
 				{
-					name: 'box',
-					category: 'Primitives',
-					description: 'Box/cube primitive',
+					name: 'transform',
+					category: '#@post',
+					description: 'Moves, rotates, scales, or pivots raw mesh vertices after generation.',
 					params: [
-						{ name: 'center', type: 'vec3', description: 'Center position', default: '[0,0,0]' },
-						{ name: 'size', type: 'vec3', description: 'Dimensions [width, depth, height]', default: '[1,1,1]' },
-						{ name: 'segments', type: 'int', description: 'Subdivision segments', default: '1' }
+						{ name: 'position', type: 'vec3', description: 'Translation after rotation and scale', default: '[0,0,0]' },
+						{ name: 'rotation', type: 'vec3', description: 'Euler rotation in degrees', default: '[0,0,0]' },
+						{ name: 'scale', type: 'vec3', description: 'Per-axis scale', default: '[1,1,1]' },
+						{ name: 'pivot', type: 'vec3', description: 'Pivot point for scale and rotation', default: '[0,0,0]' }
 					],
-					example: 'o cube\n#@source: procedural\n#@type: box\n#@params: center=[0,0,0], size=[1,1,1]'
+					example: '#@post:\n#@ - transform position=[0,0,0.2] rotation=[0,0,12] scale=[1.1,1,1] pivot=[0,0,0]'
 				},
 				{
-					name: 'sphere',
-					category: 'Primitives',
-					description: 'Sphere primitive',
+					name: 'symmetrize',
+					category: '#@post',
+					description: 'Keeps one side of the mesh and mirrors it across an axis.',
 					params: [
-						{ name: 'center', type: 'vec3', description: 'Center position', default: '[0,0,0]' },
-						{ name: 'radius', type: 'float', description: 'Sphere radius', default: '0.5' },
-						{ name: 'segments', type: 'int', description: 'Radial/latitudinal segments', default: '16' }
+						{ name: 'axis', type: 'x | y | z', description: 'Mirror plane normal', default: 'x' },
+						{ name: 'side', type: 'positive | negative', description: 'Side to preserve before mirroring', default: 'positive' }
 					],
-					example: 'o ball\n#@source: procedural\n#@type: sphere\n#@params: center=[0,0,0], radius=0.5'
-				},
-				{
-					name: 'cylinder',
-					category: 'Primitives',
-					description: 'Cylinder primitive',
-					params: [
-						{ name: 'center', type: 'vec3', description: 'Center position', default: '[0,0,0]' },
-						{ name: 'radius', type: 'float', description: 'Cylinder radius', default: '0.5' },
-						{ name: 'depth/height', type: 'float', description: 'Cylinder height', default: '1.0' },
-						{ name: 'axis', type: 'string', description: 'Cylinder axis (x, y, or z)', default: 'z' },
-						{ name: 'segments', type: 'int', description: 'Radial segments', default: '16' }
-					],
-					example: 'o column\n#@source: procedural\n#@type: cylinder\n#@params: center=[0,0,0], radius=0.5, height=1.0, axis=z'
-				},
-				{
-					name: 'cone',
-					category: 'Primitives',
-					description: 'Cone primitive',
-					params: [
-						{ name: 'center', type: 'vec3', description: 'Center position', default: '[0,0,0]' },
-						{ name: 'radius', type: 'float', description: 'Base radius', default: '0.5' },
-						{ name: 'height', type: 'float', description: 'Cone height', default: '1.0' },
-						{ name: 'axis', type: 'string', description: 'Cone axis (x, y, or z)', default: 'z' }
-					],
-					example: 'o roof_cone\n#@source: procedural\n#@type: cone\n#@params: center=[0,0,1], radius=0.5, height=0.8, axis=z'
-				},
-				{
-					name: 'capsule',
-					category: 'Primitives (SDF)',
-					description: 'Capsule primitive (SDF only)',
-					params: [
-						{ name: 'a', type: 'vec3', description: 'Start point [x,y,z]' },
-						{ name: 'b', type: 'vec3', description: 'End point [x,y,z]' },
-						{ name: 'radius', type: 'float', description: 'Capsule radius' }
-					],
-					example: 'o capsule\n#@source: sdf\n#@sdf:\n#@ - capsule id=capsule a=[0,0,0] b=[0,0,1] radius=0.2'
-				},
-				{
-					name: 'torus',
-					category: 'Primitives (SDF)',
-					description: 'Torus primitive (SDF only)',
-					params: [
-						{ name: 'center', type: 'vec3', description: 'Center position', default: '[0,0,0]' },
-						{ name: 'major', type: 'float', description: 'Major radius (ring radius)' },
-						{ name: 'minor', type: 'float', description: 'Minor radius (tube radius)' }
-					],
-					example: 'o ring\n#@source: sdf\n#@sdf:\n#@ - torus id=ring center=[0,0,0] major=1.0 minor=0.2'
-				},
-				{
-					name: 'polyline',
-					category: 'Primitives',
-					description: 'Polyline curve',
-					params: [
-						{ name: 'points', type: 'list', description: 'List of 3D points' }
-					],
-					example: 'o line\n#@source: procedural\n#@type: polyline\n#@params: points=[[0,0,0],[1,0,0],[1,1,0]]'
-				}
-			]
-		},
-		{
-			name: 'boolean',
-			operations: [
-				{
-					name: 'union',
-					category: 'Boolean operations',
-					description: 'Combine objects (A ∪ B)',
-					params: [
-						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery or sdf', default: 'sdf' },
-						{ name: 'target', type: 'string', description: 'Target object name (kernel)' },
-						{ name: 'ids', type: 'string', description: 'Comma-separated object IDs (SDF)' }
-					],
-					examples: [
-						{
-							label: 'SDF',
-							code: '#@sdf:\n#@ - box id=a center=[0,0,0] size=[1,1,1]\n#@ - box id=b center=[0.5,0,0] size=[1,1,1]\n#@ - union a b'
-						},
-						{
-							label: 'Kernel (CADQuery)',
-							code: 'o box_a\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0,0,0], size=[1,1,1]\n#@op:\n#@ - boolean op=union target=box_a ids=box_b\n\no box_b\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0.5,0,0], size=[1,1,1]'
-						}
-					]
-				},
-				{
-					name: 'subtract',
-					category: 'Boolean operations',
-					description: 'Subtract B from A (A - B)',
-					params: [
-						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery or sdf', default: 'sdf' },
-						{ name: 'target', type: 'string', description: 'Target object to subtract from (kernel)' },
-						{ name: 'ids', type: 'string', description: 'Comma-separated object IDs (SDF)' }
-					],
-					examples: [
-						{
-							label: 'SDF',
-							code: '#@sdf:\n#@ - box id=base center=[0,0,0] size=[2,2,2]\n#@ - box id=cut center=[0.6,0.6,0] size=[1,1,1]\n#@ - subtract base cut'
-						},
-						{
-							label: 'Kernel (CADQuery)',
-							code: 'o box_base\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0,0,0], size=[2,2,2]\n#@op:\n#@ - boolean op=subtract target=box_base ids=box_cut\n\no box_cut\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0.6,0.6,0], size=[1,1,1]'
-						}
-					]
-				},
-				{
-					name: 'intersect',
-					category: 'Boolean operations',
-					description: 'Intersection of objects (A ∩ B)',
-					params: [
-						{ name: 'kernel', type: 'string', description: 'Kernel: cadquery or sdf', default: 'sdf' },
-						{ name: 'target', type: 'string', description: 'Target object (kernel)' },
-						{ name: 'ids', type: 'string', description: 'Comma-separated object IDs (SDF)' }
-					],
-					examples: [
-						{
-							label: 'SDF',
-							code: '#@sdf:\n#@ - box id=a center=[0,0,0] size=[1,1,1]\n#@ - box id=b center=[0.3,0.3,0] size=[1,1,1]\n#@ - intersect a b'
-						},
-						{
-							label: 'Kernel (CADQuery)',
-							code: 'o box_a\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0,0,0], size=[1,1,1]\n#@op:\n#@ - boolean op=intersect target=box_a ids=box_b\n\no box_b\n#@source: procedural\n#@type: box\n#@params: kernel=cadquery, center=[0.3,0.3,0], size=[1,1,1]'
-						}
-					]
-				},
-				{
-					name: 'smooth_union',
-					category: 'Boolean operations',
-					description: 'Smooth blend between objects (SDF only)',
-					params: [
-						{ name: 'radius', type: 'float', description: 'Blend radius', default: '0.1' },
-						{ name: 'ids', type: 'string', description: 'Comma-separated object IDs' }
-					],
-					example: '#@sdf:\n#@ - box id=a center=[0,0,0] size=[1,1,1]\n#@ - box id=b center=[0.5,0,0] size=[1,1,1]\n#@ - smooth_union radius=0.2 a b'
-				}
-			]
-		},
-		{
-			name: 'sdf',
-			operations: [
-				{
-					name: 'repeat',
-					category: 'SDF operations',
-					description: 'Repeat SDF pattern in grid',
-					params: [
-						{ name: 'cell', type: 'vec3', description: 'Grid cell size [x,y,z]' }
-					],
-					example: '#@sdf:\n#@ - sphere id=s center=[0,0,0] radius=0.3\n#@ - repeat cell=[1,1,1]'
-				}
-			]
-		},
-		{
-			name: 'transform',
-			operations: [
-				{
-					name: 'move / offset',
-					category: 'Transform operations',
-					description: 'Translate object',
-					params: [
-						{ name: 'offset', type: 'vec3', description: 'Translation vector [x,y,z]', default: '[0,0,0]' }
-					],
-					example: '#@ops:\n#@ - move offset=[1,0,0]'
-				},
-				{
-					name: 'scale',
-					category: 'Transform operations',
-					description: 'Scale object',
-					params: [
-						{ name: 'factor', type: 'float', description: 'Scale factor', default: '1.0' }
-					],
-					example: '#@ops:\n#@ - scale factor=2.0'
-				},
-				{
-					name: 'rotate',
-					category: 'Transform operations',
-					description: 'Rotate object',
-					params: [
-						{ name: 'angle', type: 'float', description: 'Rotation angle in degrees' },
-						{ name: 'axis', type: 'string', description: 'Rotation axis (x, y, or z)' }
-					],
-					example: '#@ops:\n#@ - rotate angle=45 axis=z'
+					example: '#@post:\n#@ - symmetrize axis=x side=positive'
 				},
 				{
 					name: 'mirror',
-					category: 'Transform operations',
-					description: 'Mirror object across plane',
+					category: '#@post',
+					description: 'Duplicates the whole mesh as a mirrored copy.',
 					params: [
-						{ name: 'axis', type: 'string', description: 'Mirror axis (x, y, or z)', default: 'x' }
+						{ name: 'axis', type: 'x | y | z', description: 'Axis to negate', default: 'x' }
 					],
-					example: '#@ops:\n#@ - mirror axis=x'
+					example: '#@post:\n#@ - mirror axis=x'
 				},
 				{
 					name: 'array',
-					category: 'Transform operations',
-					description: 'Linear array of copies',
+					category: '#@post',
+					description: 'Repeats the raw mesh in a linear stack.',
 					params: [
-						{ name: 'count', type: 'int', description: 'Number of copies', default: '2' },
-						{ name: 'offset', type: 'vec3', description: 'Offset between copies', default: '[1,0,0]' }
+						{ name: 'count', type: 'int', description: 'Number of copies', default: '1' },
+						{ name: 'offset', type: 'vec3', description: 'Per-copy translation', default: '[0,0,0]' },
+						{ name: 'centered', type: 'boolean', description: 'Center the array around the original', default: 'false' },
+						{ name: 'scale', type: 'vec3 expr', description: 'Per-copy scale; supports i, t, step, count, sin/cos, pi/tau', default: '[1,1,1]' },
+						{ name: 'position', type: 'vec3 expr', description: 'Extra per-copy translation expression', default: '[0,0,0]' },
+						{ name: 'pivot', type: 'vec3 expr', description: 'Scale pivot for per-copy transforms', default: '[0,0,0]' }
 					],
-					example: '#@ops:\n#@ - array count=5 offset=[0.5,0,0]'
+					example: '#@post:\n#@ - array count=frame_count offset=[bay_spacing,0,0] centered=true scale=[1,1,1+sin(t*tau)*wave_amount] pivot=[0,0,0]'
 				},
 				{
-					name: 'array_linear',
-					category: 'Transform operations',
-					description: 'Linear array (alias for array)',
+					name: 'deform',
+					category: '#@post',
+					description: 'Moves each vertex with an expression after previous post ops.',
 					params: [
-						{ name: 'count', type: 'int', description: 'Number of copies' },
-						{ name: 'offset', type: 'vec3', description: 'Offset between copies' }
+						{ name: 'position', type: 'vec3 expr', description: 'New vertex position using x, y, z plus normalized u, v, w', default: '[x,y,z]' }
 					],
-					example: '#@ops:\n#@ - array_linear count=3 offset=[0,0.3,0]'
-				},
-				{
-					name: 'radial_array',
-					category: 'Transform operations',
-					description: 'Radial/circular array',
-					params: [
-						{ name: 'count', type: 'int', description: 'Number of copies', default: '6' },
-						{ name: 'axis', type: 'string', description: 'Rotation axis', default: 'z' },
-						{ name: 'radius', type: 'float', description: 'Array radius', default: '0.0' }
-					],
-					example: '#@ops:\n#@ - radial_array count=8 axis=z radius=1.0'
+					example: '#@post:\n#@ - deform position=[x,y+(w*w*sin(u*tau)*wave_amount),z]'
 				}
 			]
 		},
 		{
-			name: 'deformation',
+			name: 'post mesh cleanup',
 			operations: [
 				{
-					name: 'taper',
-					category: 'Deformations',
-					description: 'Taper mesh along axis',
-					params: [
-						{ name: 'axis', type: 'string', description: 'Taper axis (x, y, or z)', default: 'z' },
-						{ name: 'amount', type: 'float', description: 'Taper amount', default: '0.0' }
-					],
-					example: '#@ops:\n#@ - taper axis=z amount=0.5'
-				},
-				{
-					name: 'twist',
-					category: 'Deformations',
-					description: 'Twist mesh along axis',
-					params: [
-						{ name: 'axis', type: 'string', description: 'Twist axis (x, y, or z)', default: 'z' },
-						{ name: 'angle_deg', type: 'float', description: 'Twist angle in degrees', default: '0.0' }
-					],
-					example: '#@ops:\n#@ - twist axis=z angle_deg=45'
-				},
-				{
-					name: 'bend',
-					category: 'Deformations',
-					description: 'Bend mesh',
-					params: [
-						{ name: 'axis', type: 'string', description: 'Bend axis (x, y, or z)', default: 'x' },
-						{ name: 'angle_deg', type: 'float', description: 'Bend angle in degrees', default: '0.0' }
-					],
-					example: '#@ops:\n#@ - bend axis=x angle_deg=30'
-				},
-				{
-					name: 'displace',
-					category: 'Deformations',
-					description: 'Displace vertices with field',
-					params: [
-						{ name: 'field', type: 'string', description: 'Displacement field (wave, noise)', default: 'wave' },
-						{ name: 'axis', type: 'string', description: 'Displacement axis', default: 'z' },
-						{ name: 'amplitude/strength', type: 'float', description: 'Displacement strength', default: '0.1' }
-					],
-					example: '#@ops:\n#@ - displace field=wave axis=z amplitude=0.15'
-				},
-				{
-					name: 'noise_displace',
-					category: 'Deformations',
-					description: 'Noise-based displacement (SDF)',
-					params: [
-						{ name: 'strength', type: 'float', description: 'Noise strength', default: '0.15' },
-						{ name: 'frequency', type: 'float', description: 'Noise frequency', default: '4.0' },
-						{ name: 'seed', type: 'int', description: 'Random seed', default: '0' }
-					],
-					example: '#@sdf:\n#@ - box id=base center=[0,0,0] size=[2,2,2]\n#@ - noise_displace strength=0.15 frequency=4 seed=3'
-				},
-				{
 					name: 'subdivide',
-					category: 'Deformations',
-					description: 'Subdivide mesh faces',
+					category: '#@post',
+					description: 'Splits faces to add simple mesh density before smoothing.',
 					params: [
-						{ name: 'level', type: 'int', description: 'Subdivision levels', default: '1' }
+						{ name: 'level', type: 'int', description: 'Subdivision passes, clamped to 0-3', default: '1' }
 					],
-					example: '#@ops:\n#@ - subdivide level=2'
+					example: '#@post:\n#@ - subdivide level=1'
 				},
 				{
 					name: 'smooth',
-					category: 'Deformations',
-					description: 'Laplacian smoothing',
+					category: '#@post',
+					description: 'Applies Laplacian smoothing to soften raw vertices.',
 					params: [
-						{ name: 'iterations', type: 'int', description: 'Smoothing iterations', default: '1' },
-						{ name: 'strength', type: 'float', description: 'Smoothing strength', default: '0.5' }
+						{ name: 'iterations', type: 'int', description: 'Smoothing passes', default: '1' },
+						{ name: 'strength', type: 'float', description: 'Blend toward neighbor average, 0-1', default: '0.5' }
 					],
-					example: '#@ops:\n#@ - smooth iterations=3 strength=0.5'
+					example: '#@post:\n#@ - smooth iterations=3 strength=0.35'
 				},
 				{
 					name: 'simplify',
-					category: 'Deformations',
-					description: 'Reduce mesh complexity',
+					category: '#@post',
+					description: 'Keeps a ratio of faces for lighter raw meshes.',
 					params: [
-						{ name: 'ratio', type: 'float', description: 'Face retention ratio (0-1)', default: '1.0' }
+						{ name: 'ratio', type: 'float', description: 'Face ratio to keep, clamped to 0.05-1.0', default: '1.0' }
 					],
-					example: '#@ops:\n#@ - simplify ratio=0.5'
+					example: '#@post:\n#@ - simplify ratio=0.65'
 				},
 				{
-					name: 'remesh',
-					category: 'Deformations',
-					description: 'Remesh topology (not implemented)',
-					params: [],
-					example: '#@ops:\n#@ - remesh'
+					name: 'snap_to_ground',
+					category: '#@post',
+					description: 'Moves the mesh so its minimum bound on the chosen axis is zero.',
+					params: [
+						{ name: 'axis', type: 'x | y | z', description: 'Ground axis', default: 'y' }
+					],
+					example: '#@post:\n#@ - snap_to_ground axis=z'
+				},
+				{
+					name: 'center_origin',
+					category: '#@post',
+					description: 'Centers the mesh around the origin on selected axes.',
+					params: [
+						{ name: 'axes', type: 'xz | xy | yz | xyz', description: 'Axes to center', default: 'xz' }
+					],
+					example: '#@post:\n#@ - center_origin axes=xz'
 				}
 			]
 		},
 		{
-			name: 'modifiers',
+			name: 'post metadata',
 			operations: [
 				{
-					name: 'bevel',
-					category: 'Modifiers',
-					description: 'Bevel edges',
+					name: 'material',
+					category: '#@post',
+					description: 'Assigns a named material preset without changing geometry.',
 					params: [
-						{ name: 'amount/distance', type: 'float', description: 'Bevel distance', default: '0.05' },
-						{ name: 'segments', type: 'int', description: 'Bevel segments', default: '1' }
+						{ name: 'name', type: 'string', description: 'Material preset id' }
 					],
-					example: '#@ops:\n#@ - bevel amount=0.05 segments=2'
+					example: '#@material_preset: clay_warm color=#b98d72 roughness=0.82 metalness=0.0\n\n#@post:\n#@ - material name=clay_warm'
 				},
 				{
-					name: 'chamfer',
-					category: 'Modifiers',
-					description: 'Chamfer edges',
+					name: 'tag',
+					category: '#@post',
+					description: 'Adds a lightweight semantic category for downstream tools.',
 					params: [
-						{ name: 'distance', type: 'float', description: 'Chamfer distance', default: '0.2' }
+						{ name: 'value', type: 'string', description: 'Tag such as product, art, architectural, prop, or structural' }
 					],
-					example: '#@ops:\n#@ - chamfer distance=0.1'
-				},
-				{
-					name: 'shell',
-					category: 'Modifiers',
-					description: 'Create hollow shell',
-					params: [
-						{ name: 'thickness', type: 'float', description: 'Shell thickness', default: '0.05' }
-					],
-					example: '#@ops:\n#@ - shell thickness=0.02'
-				},
-				{
-					name: 'thicken',
-					category: 'Modifiers',
-					description: 'Thicken surface (alias for shell)',
-					params: [
-						{ name: 'thickness', type: 'float', description: 'Thickness amount' }
-					],
-					example: '#@ops:\n#@ - thicken thickness=0.03'
-				},
-				{
-					name: 'offset',
-					category: 'Modifiers',
-					description: 'Offset surface',
-					params: [
-						{ name: 'thickness/amount', type: 'float', description: 'Offset distance' }
-					],
-					example: '#@ops:\n#@ - offset amount=0.05'
-				},
-				{
-					name: 'trace_paths',
-					category: 'Modifiers',
-					description: 'Extract path curves from mesh',
-					params: [
-						{ name: 'sample_every', type: 'int', description: 'Vertex sampling interval', default: '1' }
-					],
-					example: '#@ops:\n#@ - trace_paths sample_every=2'
-				},
-				{
-					name: 'sdf_tubes',
-					category: 'Modifiers',
-					description: 'Generate tubes along mesh paths',
-					params: [
-						{ name: 'radius', type: 'float', description: 'Tube radius', default: '0.03' },
-						{ name: 'sample_every', type: 'int', description: 'Sampling interval', default: '1' }
-					],
-					example: '#@ops:\n#@ - trace_paths sample_every=1\n#@ - sdf_tubes radius=0.03'
-				}
-			]
-		},
-		{
-			name: 'other',
-			operations: [
-				{
-					name: 'surface_grid',
-					category: 'Other',
-					description: 'Grid surface from points',
-					params: [
-						{ name: 'points', type: 'list', description: 'Grid of 3D points' }
-					],
-					example: 'o grid\n#@source: procedural\n#@type: surface_grid\n#@params: width=10, depth=10, resolution=20'
-				},
-				{
-					name: 'heightfield',
-					category: 'Other',
-					description: 'Terrain from height map',
-					params: [
-						{ name: 'heights', type: 'list', description: '2D height values' },
-						{ name: 'size', type: 'vec3', description: 'Grid dimensions' }
-					],
-					example: 'o terrain\n#@source: procedural\n#@type: heightfield\n#@params: width=20, depth=20, resolution=30'
-				},
-				{
-					name: 'mesh',
-					category: 'Other',
-					description: 'Custom mesh from vertices/faces',
-					params: [
-						{ name: 'vertices', type: 'list', description: 'Vertex positions' },
-						{ name: 'faces', type: 'list', description: 'Face indices' }
-					],
-					example: 'o custom\n#@source: procedural\n#@type: mesh\n#@params: generator=spiral_treads, count=12, total_height=3'
-				},
-				{
-					name: 'curve',
-					category: 'Other',
-					description: 'Curve from points',
-					params: [
-						{ name: 'points', type: 'list', description: 'Curve control points' }
-					],
-					example: 'o path\n#@source: procedural\n#@type: curve\n#@params: points=[[0,0,0],[1,0,0.5],[2,0,1]]'
-				},
-				{
-					name: 'voxelize',
-					category: 'Other',
-					description: 'Convert mesh to voxels',
-					params: [
-						{ name: 'resolution', type: 'float', description: 'Voxel cell size', default: '0.1' }
-					],
-					example: '#@ops:\n#@ - voxelize resolution=0.1'
-				},
-				{
-					name: 'mesh_from_volume',
-					category: 'Other',
-					description: 'Generate mesh from voxel volume',
-					params: [
-						{ name: 'resolution', type: 'float', description: 'Mesh resolution' }
-					],
-					example: '#@ops:\n#@ - mesh_from_volume resolution=0.15'
-				},
-				{
-					name: 'tread',
-					category: 'Other',
-					description: 'Add tread pattern',
-					params: [
-						{ name: 'count', type: 'int', description: 'Number of treads', default: '12' },
-						{ name: 'depth', type: 'float', description: 'Tread depth', default: '0.035' }
-					],
-					example: 'o stairs\n#@source: procedural\n#@type: mesh\n#@params: generator=spiral_treads, count=12, total_height=3'
-				},
-				{
-					name: 'mesh_from_sdf',
-					category: 'Other',
-					description: 'Convert SDF to mesh',
-					params: [
-						{ name: 'resolution', type: 'float', description: 'Voxel resolution' },
-						{ name: 'method', type: 'string', description: 'Meshing method (voxel/marching_cubes)' }
-					],
-					example: '#@sdf:\n#@ - sphere id=s center=[0,0,0] radius=0.5\n#@ - mesh_from_sdf resolution=0.1'
-				}
-			]
-		},
-		{
-			name: 'simulations',
-			operations: [
-				{
-					name: 'cellular_automata',
-					category: 'Simulations',
-					description: 'Cellular automata growth shell (voxel or smooth marching cubes)',
-					params: [
-						{ name: 'grid', type: 'vec3', description: 'Grid dimensions [x,y,z]', default: '[32,32,32]' },
-						{ name: 'cell', type: 'float', description: 'Cell size', default: '0.08' },
-						{ name: 'fill', type: 'float', description: 'Initial alive probability (0..1)', default: '0.18' },
-						{ name: 'steps', type: 'int', description: 'Simulation steps', default: '45' },
-						{ name: 'seed', type: 'int', description: 'Random seed', default: '8' },
-						{ name: 'surface', type: 'string', description: 'Surface mode: voxel or smooth', default: 'voxel' },
-						{ name: 'mc_resolution', type: 'float', description: 'Marching cubes resolution (smooth mode)', default: '0.04' }
-					],
-					example: 'o coral_shell\n#@source: simulation\n#@sim: cellular_automata\n#@params: grid=[32,32,32], cell=0.08, fill=0.2, seed=8, surface=smooth, mc_resolution=0.04'
-				},
-				{
-					name: 'cellular_automata_instances',
-					category: 'Simulations',
-					description: 'Cellular automata placement of repeated primitives in space',
-					params: [
-						{ name: 'grid', type: 'vec3', description: 'Grid dimensions [x,y,z]', default: '[20,20,8]' },
-						{ name: 'cell', type: 'float', description: 'Grid spacing', default: '0.2' },
-						{ name: 'fill', type: 'float', description: 'Initial alive probability (0..1)', default: '0.15' },
-						{ name: 'seed', type: 'int', description: 'Random seed', default: '5' },
-						{ name: 'instance', type: 'string', description: 'Primitive: sphere, box, cylinder, or object reference', default: 'sphere' },
-						{ name: 'instance_scale', type: 'float', description: 'Primitive scale relative to cell', default: '0.35' },
-						{ name: 'steps', type: 'int', description: 'CA simulation steps (0 for random fill only)', default: '0' },
-						{ name: 'birth_rules', type: 'string', description: 'Neighbor counts for birth (comma-separated, e.g. "3")', default: '3' },
-						{ name: 'survival_rules', type: 'string', description: 'Neighbor counts for survival (comma-separated, e.g. "2,3")', default: '2,3' },
-						{ name: 'rotation_step', type: 'float', description: 'Rotation per neighbor count (degrees)', default: '90' }
-					],
-					example: 'o ca_instances\n#@source: simulation\n#@sim: cellular_automata_instances\n#@params: grid=[20,20,8], cell=0.2, fill=0.15, seed=5, instance=sphere, instance_scale=0.35, steps=10, birth_rules=3, survival_rules=2,3, rotation_step=90'
-				},
-				{
-					name: 'differential_growth',
-					category: 'Simulations',
-					description: 'Differential growth curves',
-					params: [
-						{ name: 'radius', type: 'float', description: 'Initial radius', default: '1.0' },
-						{ name: 'points', type: 'int', description: 'Initial point count', default: '40' },
-						{ name: 'steps', type: 'int', description: 'Growth steps', default: '180' },
-						{ name: 'split_distance', type: 'float', description: 'Edge split threshold', default: '0.18' },
-						{ name: 'repel_radius', type: 'float', description: 'Repulsion radius', default: '0.25' },
-						{ name: 'thickness', type: 'float', description: 'Tube thickness', default: '0.035' },
-						{ name: 'seed', type: 'int', description: 'Random seed', default: '2' }
-					],
-					example: 'o growth\n#@source: simulation\n#@sim: differential_growth\n#@params: radius=1.0, points=40, steps=180, split_distance=0.18, repel_radius=0.25, thickness=0.035, seed=2'
-				},
-				{
-					name: 'differential_growth_stack',
-					category: 'Simulations',
-					description: 'Vertical progression of sampled differential-growth curves with optional lofted skin',
-					params: [
-						{ name: 'mode', type: 'string', description: 'Use pleated_wall for hollow folded vessels, boundary for contour growth, infill for constrained grown interior, or path_infill for simple serpentine fill', default: 'boundary' },
-						{ name: 'profile', type: 'string', description: 'Initial profile: circle, rectangle, square, or custom', default: 'circle' },
-						{ name: 'radius', type: 'float', description: 'Initial circle radius', default: '0.35' },
-						{ name: 'width', type: 'float', description: 'Initial rectangle width', default: '0.7' },
-						{ name: 'depth', type: 'float', description: 'Initial rectangle depth', default: '0.7' },
-						{ name: 'corner_radius', type: 'float', description: 'Rounded rectangle corner radius for printable walls', default: '0.0' },
-						{ name: 'wall_thickness', type: 'float', description: 'Pleated/path-infill wall thickness', default: '0.035' },
-						{ name: 'rim_thickness', type: 'float', description: 'Pleated-wall top rim thickness', default: '0.052' },
-						{ name: 'pleat_amplitude', type: 'float', description: 'Pleated-wall fold depth', default: '0.045' },
-						{ name: 'pleat_frequency', type: 'float', description: 'Pleated-wall number of folds around contour', default: '10' },
-						{ name: 'twist', type: 'float', description: 'Pleated-wall vertical phase twist in turns', default: '0.0' },
-						{ name: 'flare', type: 'float', description: 'Pleated-wall radial widening toward top', default: '0.0' },
-						{ name: 'waist', type: 'float', description: 'Pleated-wall middle pinch or bulge', default: '0.0' },
-						{ name: 'infill_spacing', type: 'float', description: 'Path-infill spacing between smooth path rows', default: '0.055' },
-						{ name: 'growth_solver', type: 'string', description: 'Infill solver: force, vector, or node for p5-style differential growth nodes', default: 'force' },
-						{ name: 'contour', type: 'string', description: 'Optional object id used as the containment contour/boundary', default: '' },
-						{ name: 'boundary_points', type: 'list', description: 'Inline custom containment contour points [[x,y,z],...]', default: '[]' },
-						{ name: 'seed_center', type: 'vec3', description: 'Optional seed center; defaults to referenced contour center when contour is set', default: 'auto' },
-						{ name: 'seed_scale', type: 'float', description: 'Infill mode starting curve scale inside the footprint', default: '0.28' },
-						{ name: 'boundary_margin', type: 'float', description: 'Infill mode clearance from the original contour', default: '0.02' },
-						{ name: 'target_spacing', type: 'float', description: 'Stable infill control: desired spacing between grown curve passes', default: '0.045' },
-						{ name: 'growth_pressure', type: 'float', description: 'Stable infill control: outward growth pressure', default: '0.55' },
-						{ name: 'normal_pressure', type: 'float', description: 'Direct curve-normal growth pressure for real contour growth', default: 'derived' },
-						{ name: 'growth_direction', type: 'string', description: 'Curve-normal growth direction: outward or inward', default: 'outward' },
-						{ name: 'growth_ramp_steps', type: 'int', description: 'Ease in growth pressure over the first N steps', default: '0' },
-						{ name: 'repulsion_ramp_steps', type: 'int', description: 'Ease in self-avoidance force over the first N steps', default: 'same as growth_ramp_steps' },
-						{ name: 'warmup_steps', type: 'int', description: 'Run this many hidden steps before the first visible layer to remove jagged startup transients', default: '0' },
-						{ name: 'show_seed_section', type: 'bool', description: 'Keep the smoothed original seed curve as the bottom visible layer', default: 'false' },
-						{ name: 'progressive', type: 'bool', description: 'Build the stack as seed curve at bottom, intermediate iterations, final grown curve at top', default: 'same as show_seed_section' },
-						{ name: 'fixed_point_count', type: 'bool', description: 'Resample every simulation generation to one stable control-point count for cleaner lofting', default: 'same as progressive' },
-						{ name: 'seed_smooth', type: 'int', description: 'Smooth the starting curve before growth begins', default: '2' },
-						{ name: 'max_step', type: 'float', description: 'Maximum point movement per simulation step', default: 'target_spacing*0.18' },
-						{ name: 'curl_strength', type: 'float', description: 'Adds persistent sinusoidal curvature during constrained growth', default: '0.0' },
-						{ name: 'curl_frequency', type: 'float', description: 'Number of curl waves around the grown contour', default: 'auto' },
-						{ name: 'curl_phase_speed', type: 'float', description: 'How quickly curl waves drift over growth steps', default: '0.12' },
-						{ name: 'profile_points', type: 'list', description: 'Custom closed profile points [[x,y,z],...]', default: '[]' },
-						{ name: 'curve_points', type: 'int', description: 'Unified visible curve/detail resolution; controls both initial and loft profile points', default: 'derived' },
-						{ name: 'points', type: 'int', description: 'Curve point count; also drives visible profile resolution unless curve_points is set', default: '48' },
-						{ name: 'steps', type: 'int', description: 'Growth steps', default: '160' },
-						{ name: 'sample_every', type: 'int', description: 'Show every nth generation as a stacked section', default: '20' },
-						{ name: 'height', type: 'float', description: 'Total vertical height for all sampled sections', default: '2.4' },
-						{ name: 'split_distance', type: 'float', description: 'Edge split threshold', default: '0.08' },
-						{ name: 'repel_radius', type: 'float', description: 'Repulsion radius', default: '0.14' },
-						{ name: 'repel_skip_neighbors', type: 'int', description: 'Ignore nearby points along the same curve when checking self-repulsion', default: 'auto' },
-						{ name: 'vector_step', type: 'float', description: 'Vector solver: maximum accepted point movement per generation', default: 'target_spacing*0.055' },
-						{ name: 'boundary_clearance', type: 'float', description: 'Vector solver: minimum allowed distance to boundary contour', default: 'target_spacing*0.45' },
-						{ name: 'collision_spacing', type: 'float', description: 'Vector solver: minimum allowed spacing from non-neighbor curve parts', default: 'target_spacing*0.72' },
-						{ name: 'boundary_weight', type: 'float', description: 'Vector solver: push away from boundary when close', default: '1.35' },
-						{ name: 'neighbor_weight', type: 'float', description: 'Vector solver: push away from non-neighbor curve parts when close', default: '0.85' },
-						{ name: 'max_nodes', type: 'int', description: 'Node solver: maximum node count before midpoint growth stops', default: '500' },
-						{ name: 'nodes_start', type: 'int', description: 'Node solver: initial node count before growth inserts midpoint nodes', default: '10' },
-						{ name: 'max_speed', type: 'float', description: 'Node solver: maximum velocity per update', default: 'target_spacing*0.16' },
-						{ name: 'max_force', type: 'float', description: 'Node solver: maximum steering force per update', default: 'max_speed*1.25' },
-						{ name: 'min_separation', type: 'float', description: 'Node solver: distance where nodes separate from each other', default: 'target_spacing*1.15' },
-						{ name: 'neighbor_dist', type: 'float', description: 'Node solver: distance where nearby nodes cohere', default: 'target_spacing*3.0' },
-						{ name: 'separate_weight', type: 'float', description: 'Node solver: separation steering multiplier', default: '1.5' },
-						{ name: 'cohesion_weight', type: 'float', description: 'Node solver: cohesion steering multiplier', default: '0.25' },
-						{ name: 'max_edge_length', type: 'float', description: 'Node solver: insert a midpoint when an edge grows longer than this', default: 'target_spacing*1.22' },
-						{ name: 'jitter', type: 'float', description: 'Initial profile perturbation', default: '0.015' },
-						{ name: 'section_points', type: 'int', description: 'Resampled points per loft section', default: '96' },
-						{ name: 'vertical_smooth', type: 'int', description: 'Fair sideways drift between stacked loft sections before meshing', default: '0' },
-						{ name: 'vertical_smooth_strength', type: 'float', description: 'Strength for vertical section fairing', default: '0.35' },
-						{ name: 'max_section_delta', type: 'float', description: 'Optional maximum sideways movement from one visible section to the next', default: '0.0' },
-						{ name: 'triangulate_loft', type: 'bool', description: 'Triangulate loft faces with the shorter diagonal to reduce twisted quad artifacts', default: 'false' },
-						{ name: 'thickness', type: 'float', description: 'Visible section tube thickness', default: '0.012' },
-						{ name: 'tube_segments', type: 'int', description: 'Tube radial segments for printable curves', default: '10' },
-						{ name: 'max_points', type: 'int', description: 'Maximum points in the grown contour before resampling', default: '900' },
-						{ name: 'max_path_points', type: 'int', description: 'Maximum points per infill path layer', default: '420' },
-						{ name: 'loft', type: 'bool', description: 'Create continuous surface between sections', default: 'true' },
-						{ name: 'show_sections', type: 'bool', description: 'Draw sampled generation curves', default: 'true' },
-						{ name: 'show_infill', type: 'bool', description: 'Path-infill mode: draw the smooth interior path layers', default: 'true' },
-						{ name: 'seed', type: 'int', description: 'Random seed', default: '4' }
-					],
-					example: '#@kernel_default: cadquery\no growth_boundary\n#@source: procedural\n#@type: curve\n#@params: points=[[-0.75,-0.28,0],[0.75,-0.28,0],[0.75,0.28,0],[-0.75,0.28,0]]\n#@transform: position=[0,0,0],rotation=[0,0,0],scale=[1,1,1]\n#@visible: false\n\no growth_column\n#@source: simulation\n#@sim: differential_growth_stack\n#@params: mode=infill, growth_solver=node, contour=growth_boundary, profile=circle, radius=0.5, boundary_margin=0.02, target_spacing=0.034, nodes_start=10, max_nodes=500, max_speed=0.0015, max_force=0.0068, min_separation=0.05, neighbor_dist=0.12, separate_weight=1.5, cohesion_weight=0.25, max_edge_length=0.038, boundary_clearance=0.014, boundary_weight=1.2, show_seed_section=true, progressive=true, curve_points=500, steps=220, sample_every=10, height=0.5, jitter=0.0, seed_smooth=1, section_smooth=1, thickness=0.0, tube_segments=8, loft=true, show_sections=false, seed=4\n#@transform: position=[0,0,0],rotation=[-90,0,0],scale=[1,1,1]\n#@ops:\n#@ - smooth iterations=1 strength=0.10'
-				},
-				{
-					name: 'boids',
-					category: 'Simulations',
-					description: 'Boids flocking simulation',
-					params: [
-						{ name: 'agents', type: 'int', description: 'Number of boids', default: '40' },
-						{ name: 'steps', type: 'int', description: 'Simulation steps', default: '160' },
-						{ name: 'step_size', type: 'float', description: 'Step size per agent', default: '0.05' },
-						{ name: 'bounds', type: 'vec3', description: 'Simulation bounds', default: '[8,5,5]' },
-						{ name: 'seed', type: 'int', description: 'Random seed', default: '4' },
-						{ name: 'trace_radius', type: 'float', description: 'Path trace tube radius', default: '0.035' }
-					],
-					example: 'o boids_sim\n#@source: simulation\n#@sim: boids\n#@params: agents=40, steps=160, step_size=0.05, bounds=[8,5,5], seed=4, trace_radius=0.035'
-				},
-				{
-					name: 'flow_field',
-					category: 'Simulations',
-					description: '3D noise flow field simulation',
-					params: [
-						{ name: 'agents', type: 'int', description: 'Number of particles', default: '50' },
-						{ name: 'steps', type: 'int', description: 'Simulation steps', default: '200' },
-						{ name: 'step_size', type: 'float', description: 'Step size per particle', default: '0.1' },
-						{ name: 'bounds', type: 'vec3', description: 'Simulation bounds', default: '[10,10,10]' },
-						{ name: 'mode', type: 'string', description: 'Flow mode: curl-noise, turbulence, attractor, wave, laminar', default: 'curl-noise' },
-						{ name: 'frequency', type: 'float', description: 'Noise frequency', default: '1.0' },
-						{ name: 'octaves', type: 'int', description: 'Fractal octaves for turbulence', default: '3' },
-						{ name: 'strength', type: 'float', description: 'Field strength', default: '1.0' },
-						{ name: 'scale', type: 'float', description: 'Movement scale', default: '0.1' },
-						{ name: 'time_scale', type: 'float', description: 'Time evolution speed', default: '0.01' },
-						{ name: 'damping', type: 'float', description: 'Velocity damping (0-1)', default: '0.0' },
-						{ name: 'seed', type: 'int', description: 'Random seed', default: '1' },
-						{ name: 'trace_radius', type: 'float', description: 'Path trace tube radius', default: '0.025' }
-					],
-					example: 'o flow_field_sim\n#@source: simulation\n#@sim: flow_field\n#@params: agents=50, steps=200, step_size=0.1, bounds=[10,10,10], mode=curl-noise, frequency=1.0, octaves=3, strength=1.0, scale=0.1, time_scale=0.01, damping=0.0, seed=1, trace_radius=0.025'
+					example: '#@post:\n#@ - tag value=architectural'
 				}
 			]
 		}
@@ -750,7 +202,7 @@
 
 <div class="tools-tab">
 	<div class="tools-header">
-		<h2>CAD Operations Reference</h2>
+		<h2>Raw OBJ Post Ops Reference</h2>
 		<div class="tools-actions">
 			<button type="button" onclick={expandAll} class="tools-action-btn">Expand All</button>
 			<button type="button" onclick={collapseAll} class="tools-action-btn">Collapse All</button>

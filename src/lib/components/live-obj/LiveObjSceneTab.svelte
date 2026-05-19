@@ -2,20 +2,19 @@
 	type RenderingMode = 'standard' | 'outline' | 'toon';
 
 	let {
-		backgroundColor = $bindable('#f4f4f2'),
-		showGrid = $bindable(true),
-		showAxes = $bindable(true),
+		backgroundColor = $bindable('#3a3a36'),
+		showGrid = $bindable(false),
+		showAxes = $bindable(false),
 		wireframe = $bindable(false),
 		ambientLightIntensity = $bindable(1),
 		directionalLightIntensity = $bindable(1.5),
-		enableShadows = $bindable(false),
+		enableShadows = $bindable(true),
 		fogEnabled = $bindable(false),
 		fogNear = $bindable(10),
 		fogFar = $bindable(50),
 		fogColor = $bindable('#f8fafc'),
 		cameraFov = $bindable(50),
 		toneMappingExposure = $bindable(1),
-		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery'),
 		renderingMode = $bindable<RenderingMode>('standard'),
 		outlineThickness = $bindable(1),
 		outlineDepthSensitivity = $bindable(1),
@@ -38,7 +37,6 @@
 		fogColor?: string;
 		cameraFov?: number;
 		toneMappingExposure?: number;
-		kernelDefault?: 'auto' | 'cadquery';
 		renderingMode?: RenderingMode;
 		outlineThickness?: number;
 		outlineDepthSensitivity?: number;
@@ -94,13 +92,6 @@
 		A standard OBJ with Spellshape metadata. Opens in any 3D app; reopen in Spellshape for editable parts and parameters.
 	</p>
 	<div class="planner-chain">
-		<label class="planner-context-field kernel-default">
-			<span class="planner-label-inline">Kernel</span>
-			<select bind:value={kernelDefault}>
-				<option value="auto">Auto</option>
-				<option value="cadquery">CadQuery</option>
-			</select>
-		</label>
 		<label class="planner-context-field rendering-mode">
 			<span class="planner-label-inline">Render</span>
 			<select bind:value={renderingMode}>
@@ -216,7 +207,6 @@
 		line-height: 1.35;
 	}
 
-	.kernel-default select,
 	.rendering-mode select,
 	.toon-steps select {
 		box-sizing: border-box;

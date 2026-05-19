@@ -19,6 +19,7 @@ export function createRenderer(canvas) {
 	/* false = do not set canvas CSS width/height so fluid CSS (100%) keeps sizing with the window */
 	r.setSize(canvas.clientWidth, canvas.clientHeight, false);
 	r.outputColorSpace = THREE.SRGBColorSpace;
+	r.shadowMap.type = THREE.PCFSoftShadowMap;
 	return r;
 }
 
@@ -30,11 +31,11 @@ export function setupLighting(scene) {
 	directionalLight.shadow.mapSize.width = 2048;
 	directionalLight.shadow.mapSize.height = 2048;
 	directionalLight.shadow.camera.near = 0.5;
-	directionalLight.shadow.camera.far = 500;
-	directionalLight.shadow.camera.left = -100;
-	directionalLight.shadow.camera.right = 100;
-	directionalLight.shadow.camera.top = 100;
-	directionalLight.shadow.camera.bottom = -100;
+	directionalLight.shadow.camera.far = 60;
+	directionalLight.shadow.camera.left = -12;
+	directionalLight.shadow.camera.right = 12;
+	directionalLight.shadow.camera.top = 12;
+	directionalLight.shadow.camera.bottom = -12;
 	directionalLight.shadow.bias = -0.0005;
 	scene.add(ambientLight, directionalLight);
 	return { ambientLight, directionalLight };
@@ -43,8 +44,16 @@ export function setupLighting(scene) {
 export function createDefaultObjects(scene) {
 	const gridHelper = new THREE.GridHelper(20, 20, 0x888888, 0xcccccc);
 	const axesHelper = new THREE.AxesHelper(2);
-	scene.add(gridHelper, axesHelper);
-	return { gridHelper, axesHelper };
+	const groundPlane = new THREE.Mesh(
+		new THREE.PlaneGeometry(20, 20),
+		new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.16 })
+	);
+	groundPlane.rotation.x = -Math.PI / 2;
+	groundPlane.position.y = -0.002;
+	groundPlane.receiveShadow = true;
+	groundPlane.name = 'shadow_ground_plane';
+	scene.add(groundPlane, gridHelper, axesHelper);
+	return { gridHelper, axesHelper, groundPlane };
 }
 
 export function setupControls(camera, renderer) {

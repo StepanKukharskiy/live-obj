@@ -44,6 +44,10 @@ Supported #@post ops:
 - mirror axis=x|y|z
 - array count=n offset=[x,y,z]
 - array count=n offset=[x,y,z] centered=true
+- array count=n offset=[x,y,z] centered=true scale=[sx,sy,sz] position=[x,y,z] pivot=[x,y,z]
+  Array scale/position/pivot values may use expressions with i, index, step, count, t, sin(), cos(), min(), max(), abs(), sqrt(), pi, and tau.
+- deform position=[x,y,z]
+  Deform position values may use expressions with x, y, z, normalized u, v, w bbox coordinates, i, index, t, vertex_count, params, and the same math functions.
 - subdivide level=n
 - smooth iterations=n strength=value
 - simplify ratio=value

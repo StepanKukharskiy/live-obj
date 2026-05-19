@@ -47,9 +47,9 @@
 		executedObjText = '',
 		sceneEpoch = 0,
 		sourceApplyBusy = false,
-		backgroundColor = $bindable('#f4f4f2'),
-		showGrid = $bindable(true),
-		showAxes = $bindable(true),
+		backgroundColor = $bindable('#3a3a36'),
+		showGrid = $bindable(false),
+		showAxes = $bindable(false),
 		wireframe = $bindable(false),
 		objectColor = $bindable('#e6e4dd'),
 		objectScale = $bindable(1),
@@ -59,7 +59,7 @@
 		objectRotYDeg = $bindable(0),
 		ambientLightIntensity = $bindable(1),
 		directionalLightIntensity = $bindable(1.5),
-		enableShadows = $bindable(false),
+		enableShadows = $bindable(true),
 		fogEnabled = $bindable(false),
 		fogNear = $bindable(10),
 		fogFar = $bindable(50),
@@ -148,7 +148,6 @@
 
 	let activeTab = $state<PanelTab>('chat');
 	let chatInput = $state('');
-	let chatUseProcedural = $state(false);
 	let chatFeedbackLoop = $state(false);
 	let chatFeedbackPasses = $state(3);
 	let chatAttachedDataUrl = $state<string | undefined>(undefined);
@@ -222,7 +221,6 @@
 					{onSend}
 					{onLaunchObjExample}
 					bind:input={chatInput}
-					bind:useProcedural={chatUseProcedural}
 					bind:targetObjectId={selectedTargetObjectId}
 					{targetObjectOptions}
 					bind:feedbackLoop={chatFeedbackLoop}
@@ -265,7 +263,6 @@
 					bind:fogColor
 					bind:cameraFov
 					bind:toneMappingExposure
-					bind:kernelDefault
 					bind:renderingMode
 					bind:outlineThickness
 					bind:outlineDepthSensitivity

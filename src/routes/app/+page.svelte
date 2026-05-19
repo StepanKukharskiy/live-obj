@@ -109,14 +109,34 @@
 	let iterativeGenerationActive = $state(false);
 
 	let sourceTab = $state<SourceTab>('executed');
-	let liveObjText = $state(`#@live_obj_version: 0.1
+	let liveObjText = $state(`#@scene
+#@units: meters
+#@up: z
+#@live_obj_version: 0.1
+#@workflow: raw_post
 o cube
-#@source: procedural
-#@type: box
-#@params: center=[0,0,0], size=[1,1,1]
-#@transform: rotation=[30,30,0]
+v -0.5 -0.5 0.2
+v 0.5 -0.5 0.2
+v 0.5 0.5 0.2
+v -0.5 0.5 0.2
+v -0.5 -0.5 1.2
+v 0.5 -0.5 1.2
+v 0.5 0.5 1.2
+v -0.5 0.5 1.2
+f 1 2 3
+f 1 3 4
+f 5 8 7
+f 5 7 6
+f 1 5 6
+f 1 6 2
+f 2 6 7
+f 2 7 3
+f 3 7 8
+f 3 8 4
+f 4 8 5
+f 4 5 1
 `);
-	let currentSceneMode = $state<'live_obj' | 'raw_obj'>('live_obj');
+	let currentSceneMode = $state<'live_obj' | 'raw_obj'>('raw_obj');
 	let selectedTargetObjectId = $state('');
 	const targetObjectOptions = $derived(objectNamesFromLiveObj(liveObjText));
 	let rawLlmText = $state('');
@@ -132,7 +152,7 @@ o cube
 	let toonOutline = $state(true);
 	let renderObject = $state<THREE.Object3D | null>(null);
 
-	const DEFAULT_CANVAS_BACKGROUND = '#f4f4f2';
+	const DEFAULT_CANVAS_BACKGROUND = '#3a3a36';
 	const DEFAULT_CLAY_MATERIAL = {
 		color: '#e6e4dd',
 		metalness: 0,
@@ -149,12 +169,12 @@ o cube
 	];
 
 	let backgroundColor = $state(DEFAULT_CANVAS_BACKGROUND);
-	let showGrid = $state(true);
-	let showAxes = $state(true);
+	let showGrid = $state(false);
+	let showAxes = $state(false);
 	let ambientLightIntensity = $state(1);
 	let directionalLightIntensity = $state(1.5);
 	let wireframe = $state(false);
-	let enableShadows = $state(false);
+	let enableShadows = $state(true);
 	let fogEnabled = $state(false);
 	let fogNear = $state(10);
 	let fogFar = $state(50);
@@ -612,6 +632,7 @@ o cube
 		if (!liveObj.trim()) return;
 		busy = true;
 		try {
+			currentSceneMode = hasProceduralLiveSources(liveObj) ? 'live_obj' : 'raw_obj';
 			await regenerateFromMetadata(liveObj);
 		} finally {
 			busy = false;

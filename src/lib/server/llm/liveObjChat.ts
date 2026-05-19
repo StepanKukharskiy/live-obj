@@ -169,7 +169,9 @@ Raw-first part rules:
 - Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
 - Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
-- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- For repeated modules, #@post array supports per-copy expressions in scale, position, and pivot using i, index, step, count, t, sin(), cos(), min(), max(), abs(), sqrt(), pi, and tau.
+- For per-vertex edits, #@post deform supports position=[x,y,z] expressions with x/y/z, normalized u/v/w bbox coordinates, i/index, t, vertex_count, params, and the same math functions.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
 - If the user request, plan, or part prompt asks for controls, include #@params: and #@controls: metadata for meaningful dimensions. Every control key must be referenced by executable #@post metadata such as transform, array, mirror/symmetrize, smooth, subdivide, simplify, snap_to_ground, or center_origin. For raw v/f meshes, use controls for object-level scale, height, spacing, count, smoothing, or placement rather than pretending baked vertex coordinates are parametric.
 - Parameter references in #@post expressions must use bare names such as voxel_size or (voxel_size*grid_width)/10. Never use template placeholder syntax such as dollar-brace or curly-brace parameter wrappers.
@@ -335,7 +337,7 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 					'Current scene mode: raw OBJ / raw-post output.',
 					'Important: existing v/f mesh blocks are source base geometry, not disposable cache. Preserve existing mesh object blocks unless the user asks to replace them.',
 					'For cleanup, symmetry, repetition, material, or tag edits on raw OBJ scenes, prefer adding or editing #@post blocks. Do not add #@ops and do not convert the whole scene to procedural metadata.',
-					'Supported #@post ops include transform, symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.'
+					'Supported #@post ops include transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.'
 				].join('\n')
 			: [
 					'Current scene mode: Live OBJ / tools-on output.',

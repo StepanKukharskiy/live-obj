@@ -18,14 +18,15 @@
 			navLight = window.scrollY > window.innerHeight * 0.82;
 		};
 
-		const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 		let animationFrame = 0;
+		let lastFrameTime = 0;
+		const targetFrameDuration = 1000 / 30;
 
 		function resizeFieldCanvas() {
 			const context = fieldCanvas?.getContext('2d');
 			if (!fieldCanvas || !context) return;
 			const rect = fieldCanvas.getBoundingClientRect();
-			const density = Math.min(window.devicePixelRatio || 1, 2);
+			const density = 1;
 			fieldCanvas.width = Math.max(1, Math.floor(rect.width * density));
 			fieldCanvas.height = Math.max(1, Math.floor(rect.height * density));
 			context.setTransform(density, 0, 0, density, 0, 0);
@@ -38,6 +39,12 @@
 		window.addEventListener('resize', resizeFieldCanvas);
 
 		function drawVectorField(time: number, shouldContinue = true) {
+			if (shouldContinue && time - lastFrameTime < targetFrameDuration) {
+				animationFrame = window.requestAnimationFrame(drawVectorField);
+				return;
+			}
+
+			lastFrameTime = time;
 			const context = fieldCanvas?.getContext('2d');
 			if (!fieldCanvas || !context) {
 				if (shouldContinue) animationFrame = window.requestAnimationFrame(drawVectorField);
@@ -45,7 +52,7 @@
 			}
 
 			const rect = fieldCanvas.getBoundingClientRect();
-			const density = Math.min(window.devicePixelRatio || 1, 2);
+			const density = 1;
 			const nextWidth = Math.max(1, Math.floor(rect.width * density));
 			const nextHeight = Math.max(1, Math.floor(rect.height * density));
 
@@ -63,28 +70,37 @@
 				return;
 			}
 
-			const spacing = Math.max(28, Math.min(48, width / 28));
-			const lineLength = spacing * 0.8;
-			const driftX = Math.sin(time * 0.00018) * spacing * 0.45;
-			const driftY = Math.cos(time * 0.00014) * spacing * 0.35;
+			const spacing = Math.max(34, Math.min(60, width / 25));
+			const lineLength = spacing * 0.76;
+			const driftX = Math.sin(time * 0.00018) * spacing * 0.9;
+			const driftY = Math.cos(time * 0.00016) * spacing * 0.72;
+			const fieldPhase = time * 0.00042;
+			const swirlPhase = time * 0.00034;
 
 			context.clearRect(0, 0, width, height);
 			context.lineCap = 'round';
-			context.lineWidth = 1.8;
-			context.shadowBlur = 10;
-			context.shadowColor = 'rgba(120, 170, 255, 0.28)';
+			context.lineWidth = 1.45;
+			context.shadowBlur = 0;
+			context.globalCompositeOperation = 'lighter';
 
 			for (let y = spacing * 0.55; y < height; y += spacing) {
 				for (let x = spacing * 0.5; x < width; x += spacing) {
-					const baseX = x + driftX + Math.sin(time * 0.00025 + y * 0.014) * spacing * 0.16;
-					const baseY = y + driftY + Math.cos(time * 0.00021 + x * 0.011) * spacing * 0.14;
+					const baseX =
+						x +
+						driftX +
+						Math.sin(time * 0.00036 + y * 0.014 + x * 0.004) * spacing * 0.44;
+					const baseY =
+						y +
+						driftY +
+						Math.cos(time * 0.00032 + x * 0.011 - y * 0.004) * spacing * 0.38;
 					const nx = baseX / width;
 					const ny = baseY / height;
 					let angle =
-						Math.sin(nx * 5.2 + time * 0.00023) * 0.65 +
-						Math.cos(ny * 5.8 - time * 0.00019) * 0.55 +
-						nx * 1.2 -
-						ny * 0.55;
+						Math.sin(nx * 5.2 + fieldPhase) * 0.64 +
+						Math.cos(ny * 5.8 - fieldPhase * 0.9) * 0.54 +
+						Math.sin((nx + ny) * 3.2 + swirlPhase) * 0.52 +
+						nx * 1.1 -
+						ny * 0.5;
 					let intensity = 0.62;
 					let drawX = baseX;
 					let drawY = baseY;
@@ -106,22 +122,12 @@
 						intensity += smoothInfluence * 1.05;
 					}
 
-					const pulse = 0.62 + Math.sin(time * 0.001 + nx * 7 + ny * 5) * 0.18;
+					const pulse = 0.64 + Math.sin(time * 0.00042 + nx * 7 + ny * 5) * 0.2;
 					const alpha = Math.min(0.95, intensity * pulse);
 					const activeLineLength = lineLength * (1 + pointerInfluence * 0.8);
 					const dx = Math.cos(angle) * activeLineLength;
 					const dy = Math.sin(angle) * activeLineLength;
-					const gradient = context.createLinearGradient(
-						drawX - dx / 2,
-						drawY - dy / 2,
-						drawX + dx / 2,
-						drawY + dy / 2
-					);
-
-					gradient.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.18})`);
-					gradient.addColorStop(0.48, `rgba(215, 230, 255, ${alpha})`);
-					gradient.addColorStop(1, `rgba(78, 144, 255, ${alpha * 0.44})`);
-					context.strokeStyle = gradient;
+					context.strokeStyle = `rgba(204, 224, 255, ${alpha * 0.72})`;
 					context.beginPath();
 					context.moveTo(drawX - dx / 2, drawY - dy / 2);
 					context.lineTo(drawX + dx / 2, drawY + dy / 2);
@@ -129,16 +135,14 @@
 				}
 			}
 
+			context.globalCompositeOperation = 'source-over';
+
 			if (shouldContinue) animationFrame = window.requestAnimationFrame(drawVectorField);
 		}
 
 		renderFieldNow = () => drawVectorField(window.performance.now(), false);
 
-		if (!prefersReducedMotion) {
-			animationFrame = window.requestAnimationFrame(drawVectorField);
-		} else {
-			drawVectorField(0, false);
-		}
+		animationFrame = window.requestAnimationFrame(drawVectorField);
 
 		return () => {
 			window.removeEventListener('scroll', updateNavTheme);

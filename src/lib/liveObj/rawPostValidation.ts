@@ -5,6 +5,7 @@ const SUPPORTED_RAW_POST_OPS = new Set([
 	'symmetrize',
 	'mirror',
 	'array',
+	'deform',
 	'subdivide',
 	'smooth',
 	'simplify',
