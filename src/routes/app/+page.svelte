@@ -107,6 +107,7 @@
 	};
 
 	type IterativeAppendStreamEvent =
+		| { type: 'status'; message?: string }
 		| { type: 'preview_line'; line: string }
 		| ({ type: 'final' } & IterativeAppendPayload)
 		| { type: 'error'; message?: string };
@@ -578,7 +579,9 @@ f 4 5 1
 		statusLine = null;
 		const hasLiveSources = hasProceduralLiveSources(text);
 		const useRawPostExecutor = currentSceneMode === 'raw_obj' && !hasLiveSources;
-		const sceneWithKernel = useRawPostExecutor ? normalizeRawPostHeader(text) : applyKernelDefaultHeader(text);
+		const sceneWithKernel = useRawPostExecutor
+			? normalizeRawPostHeader(text)
+			: applyKernelDefaultHeader(text);
 		try {
 			const res = await fetch(
 				useRawPostExecutor ? '/api/raw-obj/execute' : '/api/live-obj/execute',
@@ -596,9 +599,7 @@ f 4 5 1
 					payload.detail || payload.message || res.statusText || 'Metadata regeneration failed'
 				);
 			liveObjText = String(payload.liveObj ?? payload.rawObj ?? sceneWithKernel);
-			currentSceneMode = hasProceduralLiveSources(liveObjText)
-				? 'live_obj'
-				: currentSceneMode;
+			currentSceneMode = hasProceduralLiveSources(liveObjText) ? 'live_obj' : currentSceneMode;
 			executedObjText =
 				typeof payload.executedObj === 'string'
 					? payload.executedObj
@@ -920,7 +921,9 @@ f 4 5 1
 			for (const line of lines) {
 				if (!line.trim()) continue;
 				const event = JSON.parse(line) as IterativeAppendStreamEvent;
-				if (event.type === 'preview_line') {
+				if (event.type === 'status') {
+					statusLine = event.message ?? `Building ${label}.`;
+				} else if (event.type === 'preview_line') {
 					previewLines.push(event.line);
 					if (/^\s*f\s+/.test(event.line)) faceLinesSincePreview += 1;
 					if (faceLinesSincePreview > 0) clearThinkingMessage();
@@ -936,7 +939,9 @@ f 4 5 1
 		}
 		if (buffer.trim()) {
 			const event = JSON.parse(buffer) as IterativeAppendStreamEvent;
-			if (event.type === 'final') {
+			if (event.type === 'status') {
+				statusLine = event.message ?? `Building ${label}.`;
+			} else if (event.type === 'final') {
 				clearThinkingMessage();
 				finalPayload = event;
 			} else if (event.type === 'error') {

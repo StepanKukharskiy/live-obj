@@ -138,17 +138,37 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const encoder = new TextEncoder();
-	const emit = (controller: ReadableStreamDefaultController, payload: Record<string, unknown>) => {
-		controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
-	};
 
 	return new Response(
 		new ReadableStream({
 			async start(controller) {
+				let closed = false;
+				const emit = (payload: Record<string, unknown>) => {
+					if (closed) return false;
+					try {
+						controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
+						return true;
+					} catch {
+						closed = true;
+						return false;
+					}
+				};
+				const heartbeat = setInterval(() => {
+					emit({
+						type: 'status',
+						message: `Still building ${part.id}.`
+					});
+				}, 10_000);
+
 				const currentLiveObjSummary = summarizeLiveObjForPlanning(currentLiveObj);
 				const vertexOffset = countObjVertices(currentLiveObj);
 				let lineBuffer = '';
 				try {
+					emit({
+						type: 'status',
+						message: `Building ${part.id}.`,
+						padding: ' '.repeat(2048)
+					});
 					const rawAttempts: string[] = [];
 					const llmResult = await withLlmRequestOverrides(
 						reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
@@ -169,7 +189,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									for (const rawLine of lines) {
 										const line = previewableObjLine(rawLine);
 										if (!line) continue;
-										emit(controller, {
+										emit({
 											type: 'preview_line',
 											line: offsetFaceLine(line, vertexOffset)
 										});
@@ -180,7 +200,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					rawAttempts.push(llmResult.content);
 					const trailingLine = previewableObjLine(lineBuffer);
 					if (trailingLine) {
-						emit(controller, {
+						emit({
 							type: 'preview_line',
 							line: offsetFaceLine(trailingLine, vertexOffset)
 						});
@@ -191,6 +211,10 @@ export const POST: RequestHandler = async ({ request }) => {
 					try {
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
 					} catch (appendError) {
+						emit({
+							type: 'status',
+							message: `Repairing ${part.id}.`
+						});
 						const repairResult = await withLlmRequestOverrides(
 							reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
 							() =>
@@ -215,6 +239,10 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 					let validation = validateLiveObj(appended.liveObj, currentLiveObj);
 					if (!validation.valid) {
+						emit({
+							type: 'status',
+							message: `Repairing ${part.id}.`
+						});
 						const repairResult = await withLlmRequestOverrides(
 							reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
 							() =>
@@ -240,6 +268,10 @@ export const POST: RequestHandler = async ({ request }) => {
 					let executedObj = appended.liveObj;
 					let executorWarnings: string[] = [];
 					try {
+						emit({
+							type: 'status',
+							message: `Executing ${part.id}.`
+						});
 						const executed = useProcedural
 							? await expandLiveObjWithExecutor(appended.liveObj)
 							: await expandRawObjWithPostExecutor(appended.liveObj);
@@ -250,7 +282,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							`Executor failed after append: ${e instanceof Error ? e.message : String(e)}`
 						);
 					}
-					emit(controller, {
+					emit({
 						type: 'final',
 						liveObj: appended.liveObj,
 						partObj: appended.normalizedPart,
@@ -261,19 +293,24 @@ export const POST: RequestHandler = async ({ request }) => {
 						currentLiveObjSummary
 					});
 				} catch (e) {
-					emit(controller, {
+					emit({
 						type: 'error',
 						message: e instanceof Error ? e.message : String(e)
 					});
 				} finally {
-					controller.close();
+					closed = true;
+					clearInterval(heartbeat);
+					try {
+						controller.close();
+					} catch {}
 				}
 			}
 		}),
 		{
 			headers: {
 				'Content-Type': 'application/x-ndjson; charset=utf-8',
-				'Cache-Control': 'no-cache, no-transform'
+				'Cache-Control': 'no-cache, no-transform',
+				'X-Accel-Buffering': 'no'
 			}
 		}
 	);
