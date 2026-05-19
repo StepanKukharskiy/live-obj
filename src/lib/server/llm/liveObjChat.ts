@@ -432,8 +432,8 @@ export async function requestLiveObjPartPlanFromLlm(
 		],
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-iterative-plan',
-		maxTokens: 10000,
-		timeoutMs: imageDataUrls.length > 0 ? 180000 : undefined
+		maxTokens: 6000,
+		timeoutMs: imageDataUrls.length > 0 ? 180000 : 60000
 	});
 	return { content, usage };
 }
