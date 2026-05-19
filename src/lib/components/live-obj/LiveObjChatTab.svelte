@@ -34,11 +34,26 @@
 	] as const;
 
 	const PROMPT_EXAMPLES = [
-		{ text: 'Create a fluid sculptural vase as raw OBJ with width, depth, and height controls', category: 'Raw + Post' },
-		{ text: 'Create a parametric pavilion with raw OBJ triangular frames whose peaks follow a sine wave', category: 'Raw + Post' },
-		{ text: 'Make a sculptural vase mesh and expose post-transform scale controls', category: 'Controls' },
-		{ text: 'Make a pavilion with sine-wave roof peaks and expose frame count, wave, spacing, span, and height controls', category: 'Controls' },
-		{ text: 'Refine the current mesh with #@post simplify, center_origin, and snap_to_ground', category: 'Cleanup' }
+		{
+			text: 'Create a fluid sculptural vase as raw OBJ with width, depth, and height controls',
+			category: 'Raw + Post'
+		},
+		{
+			text: 'Create a parametric pavilion with raw OBJ triangular frames whose peaks follow a sine wave',
+			category: 'Raw + Post'
+		},
+		{
+			text: 'Make a sculptural vase mesh and expose post-transform scale controls',
+			category: 'Controls'
+		},
+		{
+			text: 'Make a pavilion with sine-wave roof peaks and expose frame count, wave, spacing, span, and height controls',
+			category: 'Controls'
+		},
+		{
+			text: 'Refine the current mesh with #@post simplify, center_origin, and snap_to_ground',
+			category: 'Cleanup'
+		}
 	];
 
 	const OBJ_EXAMPLES = [
@@ -370,10 +385,6 @@ f 20 24 21 17`
 	<div class="planner-chat-thread" role="log" bind:this={threadEl}>
 		{#if msgs.length === 0}
 			<div class="planner-chat-welcome">
-				<p class="planner-chat-guide-copy">
-					Describe raw OBJ geometry and the small #@post stack you want on top: symmetry,
-					arrays, cleanup, placement, materials, or targeted mesh edits.
-				</p>
 				{#if OBJ_EXAMPLES.length > 0}
 					<div class="planner-obj-examples">
 						<h3 class="planner-obj-examples-title">Launch Raw OBJ Examples</h3>

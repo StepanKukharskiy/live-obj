@@ -20,7 +20,9 @@
 		operations: Operation[];
 	}
 
-	let expandedCategories = $state(new Set(['raw obj setup', 'post transforms', 'post mesh cleanup', 'post metadata']));
+	let expandedCategories = $state(
+		new Set(['raw obj setup', 'post transforms', 'post mesh cleanup', 'post metadata'])
+	);
 
 	const categories: Category[] = [
 		{
@@ -32,19 +34,33 @@
 					description: 'Marks an object as raw LLM-authored OBJ geometry for raw-post execution.',
 					params: [
 						{ name: 'o', type: 'string', description: 'Stable object name used by target edits' },
-						{ name: '#@semantic', type: 'string', description: 'Short editable intent for the mesh' },
-						{ name: '#@bbox', type: 'vec3 pairs', description: 'Approximate min and max bounds for validation and targeting' }
+						{
+							name: '#@semantic',
+							type: 'string',
+							description: 'Short editable intent for the mesh'
+						},
+						{
+							name: '#@bbox',
+							type: 'vec3 pairs',
+							description: 'Approximate min and max bounds for validation and targeting'
+						}
 					],
-					example: 'o half_mask_raw\n#@source: llm_mesh\n#@semantic: sculptural half mask\n#@bbox min=[0,-0.35,0] max=[0.55,0.35,0.9]\nv 0.00 0.00 0.00\nv 0.50 0.00 0.00\nv 0.20 0.20 0.60\nf 1 2 3'
+					example:
+						'o half_mask_raw\n#@source: llm_mesh\n#@semantic: sculptural half mask\n#@bbox min=[0,-0.35,0] max=[0.55,0.35,0.9]\nv 0.00 0.00 0.00\nv 0.50 0.00 0.00\nv 0.20 0.20 0.60\nf 1 2 3'
 				},
 				{
 					name: '#@params',
 					category: 'Raw OBJ metadata',
 					description: 'Defines simple numeric values that #@post ops can reuse.',
 					params: [
-						{ name: 'name', type: 'number | vec3', description: 'Bare parameter names, referenced without ${...} templating' }
+						{
+							name: 'name',
+							type: 'number | vec3',
+							description: 'Bare parameter names, referenced without ${...} templating'
+						}
 					],
-					example: '#@params: module_count=4, lift=0.28\n\no module\n#@source: llm_mesh\n#@post:\n#@ - array count=module_count offset=[0,0,lift]'
+					example:
+						'#@params: module_count=4, lift=0.28\n\no module\n#@source: llm_mesh\n#@post:\n#@ - array count=module_count offset=[0,0,lift]'
 				}
 			]
 		},
@@ -56,12 +72,28 @@
 					category: '#@post',
 					description: 'Moves, rotates, scales, or pivots raw mesh vertices after generation.',
 					params: [
-						{ name: 'position', type: 'vec3', description: 'Translation after rotation and scale', default: '[0,0,0]' },
-						{ name: 'rotation', type: 'vec3', description: 'Euler rotation in degrees', default: '[0,0,0]' },
+						{
+							name: 'position',
+							type: 'vec3',
+							description: 'Translation after rotation and scale',
+							default: '[0,0,0]'
+						},
+						{
+							name: 'rotation',
+							type: 'vec3',
+							description: 'Euler rotation in degrees',
+							default: '[0,0,0]'
+						},
 						{ name: 'scale', type: 'vec3', description: 'Per-axis scale', default: '[1,1,1]' },
-						{ name: 'pivot', type: 'vec3', description: 'Pivot point for scale and rotation', default: '[0,0,0]' }
+						{
+							name: 'pivot',
+							type: 'vec3',
+							description: 'Pivot point for scale and rotation',
+							default: '[0,0,0]'
+						}
 					],
-					example: '#@post:\n#@ - transform position=[0,0,0.2] rotation=[0,0,12] scale=[1.1,1,1] pivot=[0,0,0]'
+					example:
+						'#@post:\n#@ - transform position=[0,0,0.2] rotation=[0,0,12] scale=[1.1,1,1] pivot=[0,0,0]'
 				},
 				{
 					name: 'symmetrize',
@@ -69,7 +101,12 @@
 					description: 'Keeps one side of the mesh and mirrors it across an axis.',
 					params: [
 						{ name: 'axis', type: 'x | y | z', description: 'Mirror plane normal', default: 'x' },
-						{ name: 'side', type: 'positive | negative', description: 'Side to preserve before mirroring', default: 'positive' }
+						{
+							name: 'side',
+							type: 'positive | negative',
+							description: 'Side to preserve before mirroring',
+							default: 'positive'
+						}
 					],
 					example: '#@post:\n#@ - symmetrize axis=x side=positive'
 				},
@@ -88,20 +125,51 @@
 					description: 'Repeats the raw mesh in a linear stack.',
 					params: [
 						{ name: 'count', type: 'int', description: 'Number of copies', default: '1' },
-						{ name: 'offset', type: 'vec3', description: 'Per-copy translation', default: '[0,0,0]' },
-						{ name: 'centered', type: 'boolean', description: 'Center the array around the original', default: 'false' },
-						{ name: 'scale', type: 'vec3 expr', description: 'Per-copy scale; supports i, t, step, count, sin/cos, pi/tau', default: '[1,1,1]' },
-						{ name: 'position', type: 'vec3 expr', description: 'Extra per-copy translation expression', default: '[0,0,0]' },
-						{ name: 'pivot', type: 'vec3 expr', description: 'Scale pivot for per-copy transforms', default: '[0,0,0]' }
+						{
+							name: 'offset',
+							type: 'vec3',
+							description: 'Per-copy translation',
+							default: '[0,0,0]'
+						},
+						{
+							name: 'centered',
+							type: 'boolean',
+							description: 'Center the array around the original',
+							default: 'false'
+						},
+						{
+							name: 'scale',
+							type: 'vec3 expr',
+							description: 'Per-copy scale; supports i, t, step, count, sin/cos, pi/tau',
+							default: '[1,1,1]'
+						},
+						{
+							name: 'position',
+							type: 'vec3 expr',
+							description: 'Extra per-copy translation expression',
+							default: '[0,0,0]'
+						},
+						{
+							name: 'pivot',
+							type: 'vec3 expr',
+							description: 'Scale pivot for per-copy transforms',
+							default: '[0,0,0]'
+						}
 					],
-					example: '#@post:\n#@ - array count=frame_count offset=[bay_spacing,0,0] centered=true scale=[1,1,1+sin(t*tau)*wave_amount] pivot=[0,0,0]'
+					example:
+						'#@post:\n#@ - array count=frame_count offset=[bay_spacing,0,0] centered=true scale=[1,1,1+sin(t*tau)*wave_amount] pivot=[0,0,0]'
 				},
 				{
 					name: 'deform',
 					category: '#@post',
 					description: 'Moves each vertex with an expression after previous post ops.',
 					params: [
-						{ name: 'position', type: 'vec3 expr', description: 'New vertex position using x, y, z plus normalized u, v, w', default: '[x,y,z]' }
+						{
+							name: 'position',
+							type: 'vec3 expr',
+							description: 'New vertex position using x, y, z plus normalized u, v, w',
+							default: '[x,y,z]'
+						}
 					],
 					example: '#@post:\n#@ - deform position=[x,y+(w*w*sin(u*tau)*wave_amount),z]'
 				}
@@ -115,7 +183,12 @@
 					category: '#@post',
 					description: 'Splits faces to add simple mesh density before smoothing.',
 					params: [
-						{ name: 'level', type: 'int', description: 'Subdivision passes, clamped to 0-3', default: '1' }
+						{
+							name: 'level',
+							type: 'int',
+							description: 'Subdivision passes, clamped to 0-3',
+							default: '1'
+						}
 					],
 					example: '#@post:\n#@ - subdivide level=1'
 				},
@@ -125,7 +198,12 @@
 					description: 'Applies Laplacian smoothing to soften raw vertices.',
 					params: [
 						{ name: 'iterations', type: 'int', description: 'Smoothing passes', default: '1' },
-						{ name: 'strength', type: 'float', description: 'Blend toward neighbor average, 0-1', default: '0.5' }
+						{
+							name: 'strength',
+							type: 'float',
+							description: 'Blend toward neighbor average, 0-1',
+							default: '0.5'
+						}
 					],
 					example: '#@post:\n#@ - smooth iterations=3 strength=0.35'
 				},
@@ -134,7 +212,12 @@
 					category: '#@post',
 					description: 'Keeps a ratio of faces for lighter raw meshes.',
 					params: [
-						{ name: 'ratio', type: 'float', description: 'Face ratio to keep, clamped to 0.05-1.0', default: '1.0' }
+						{
+							name: 'ratio',
+							type: 'float',
+							description: 'Face ratio to keep, clamped to 0.05-1.0',
+							default: '1.0'
+						}
 					],
 					example: '#@post:\n#@ - simplify ratio=0.65'
 				},
@@ -142,9 +225,7 @@
 					name: 'snap_to_ground',
 					category: '#@post',
 					description: 'Moves the mesh so its minimum bound on the chosen axis is zero.',
-					params: [
-						{ name: 'axis', type: 'x | y | z', description: 'Ground axis', default: 'y' }
-					],
+					params: [{ name: 'axis', type: 'x | y | z', description: 'Ground axis', default: 'y' }],
 					example: '#@post:\n#@ - snap_to_ground axis=z'
 				},
 				{
@@ -152,7 +233,12 @@
 					category: '#@post',
 					description: 'Centers the mesh around the origin on selected axes.',
 					params: [
-						{ name: 'axes', type: 'xz | xy | yz | xyz', description: 'Axes to center', default: 'xz' }
+						{
+							name: 'axes',
+							type: 'xz | xy | yz | xyz',
+							description: 'Axes to center',
+							default: 'xz'
+						}
 					],
 					example: '#@post:\n#@ - center_origin axes=xz'
 				}
@@ -165,17 +251,20 @@
 					name: 'material',
 					category: '#@post',
 					description: 'Assigns a named material preset without changing geometry.',
-					params: [
-						{ name: 'name', type: 'string', description: 'Material preset id' }
-					],
-					example: '#@material_preset: clay_warm color=#b98d72 roughness=0.82 metalness=0.0\n\n#@post:\n#@ - material name=clay_warm'
+					params: [{ name: 'name', type: 'string', description: 'Material preset id' }],
+					example:
+						'#@material_preset: clay_warm color=#b98d72 roughness=0.82 metalness=0.0\n\n#@post:\n#@ - material name=clay_warm'
 				},
 				{
 					name: 'tag',
 					category: '#@post',
 					description: 'Adds a lightweight semantic category for downstream tools.',
 					params: [
-						{ name: 'value', type: 'string', description: 'Tag such as product, art, architectural, prop, or structural' }
+						{
+							name: 'value',
+							type: 'string',
+							description: 'Tag such as product, art, architectural, prop, or structural'
+						}
 					],
 					example: '#@post:\n#@ - tag value=architectural'
 				}
@@ -211,14 +300,20 @@
 
 	<div class="tools-categories">
 		{#each categories as category (category.name)}
-			<details class="tools-category" open={expandedCategories.has(category.name)} ontoggle={(e) => {
-				const details = e.currentTarget as HTMLDetailsElement;
-				if (details.open) {
-					expandedCategories = new Set([...expandedCategories, category.name]);
-				} else {
-					expandedCategories = new Set([...expandedCategories].filter(n => n !== category.name));
-				}
-			}}>
+			<details
+				class="tools-category"
+				open={expandedCategories.has(category.name)}
+				ontoggle={(e) => {
+					const details = e.currentTarget as HTMLDetailsElement;
+					if (details.open) {
+						expandedCategories = new Set([...expandedCategories, category.name]);
+					} else {
+						expandedCategories = new Set(
+							[...expandedCategories].filter((n) => n !== category.name)
+						);
+					}
+				}}
+			>
 				<summary class="tools-category-header">
 					<span class="tools-category-title">{category.name}</span>
 					<span class="tools-category-toggle">▶</span>
@@ -255,7 +350,16 @@
 												onclick={() => copyToClipboard(ex.code)}
 												title="Copy to clipboard"
 											>
-												<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+												<svg
+													width="14"
+													height="14"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
 													<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
 													<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
 												</svg>
@@ -275,19 +379,28 @@
 											onclick={() => copyToClipboard(op.example || '')}
 											title="Copy to clipboard"
 										>
-											<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<svg
+												width="14"
+												height="14"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
 												<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
 												<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
 											</svg>
 										</button>
-										</div>
-										<pre class="tools-example-code">{op.example}</pre>
 									</div>
-								{/if}
-							</div>
-						{/each}
-					</div>
-				</details>
+									<pre class="tools-example-code">{op.example}</pre>
+								</div>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			</details>
 		{/each}
 	</div>
 </div>
@@ -304,17 +417,17 @@
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		padding: 12px 16px;
-		border-bottom: 1px solid #e2e8f0;
-		background: #f8fafc;
+		gap: 12px;
+		padding: 0 0 12px;
+		border-bottom: 1px solid var(--spell-border-soft);
 		flex-shrink: 0;
 	}
 
 	.tools-header h2 {
 		margin: 0;
 		font-size: 14px;
-		font-weight: 600;
-		color: #1e293b;
+		font-weight: 750;
+		color: var(--spell-ink);
 	}
 
 	.tools-actions {
@@ -323,33 +436,35 @@
 	}
 
 	.tools-action-btn {
-		padding: 4px 10px;
+		padding: 6px 11px;
 		font-size: 11px;
-		border: 1px solid #cbd5e1;
-		background: white;
-		border-radius: 4px;
+		font-weight: 700;
+		border: 1px solid var(--spell-border);
+		background: var(--spell-surface-soft);
+		border-radius: var(--spell-radius-pill);
 		cursor: pointer;
-		color: #64748b;
+		color: var(--spell-muted);
 		transition: all 0.15s;
 	}
 
 	.tools-action-btn:hover {
-		background: #f1f5f9;
-		border-color: #94a3b8;
-		color: #334155;
+		background: var(--spell-surface);
+		border-color: rgba(0, 0, 235, 0.16);
+		color: var(--spell-ink);
 	}
 
 	.tools-categories {
 		flex: 1;
 		overflow-y: auto;
-		padding: 8px;
+		padding: 12px 0 0;
 	}
 
 	.tools-category {
-		margin-bottom: 4px;
-		border: 1px solid #e2e8f0;
-		border-radius: 6px;
-		background: white;
+		margin-bottom: 10px;
+		border: 1px solid var(--spell-border-soft);
+		border-radius: var(--spell-radius-md);
+		background: var(--spell-surface-soft);
+		overflow: hidden;
 	}
 
 	.tools-category-header {
@@ -357,26 +472,25 @@
 		justify-content: space-between;
 		align-items: center;
 		width: 100%;
-		padding: 10px 12px;
+		padding: 11px 12px;
 		border: none;
-		background: white;
+		background: transparent;
 		cursor: pointer;
 		font-size: 12px;
-		font-weight: 600;
-		color: #334155;
+		font-weight: 750;
+		color: var(--spell-ink);
 		transition: background 0.15s;
 		list-style: none;
 		box-sizing: border-box;
 	}
 
 	.tools-category-header:hover {
-		background: #f8fafc;
+		background: rgba(255, 255, 255, 0.48);
 	}
 
 	.tools-category[open] .tools-category-header {
-		background: #f1f5f9;
-		border-bottom: 1px solid #e2e8f0;
-		border-radius: 6px 6px 0 0;
+		background: rgba(255, 255, 255, 0.56);
+		border-bottom: 1px solid var(--spell-border-soft);
 	}
 
 	.tools-category-header::-webkit-details-marker {
@@ -388,7 +502,7 @@
 	}
 
 	.tools-category-toggle {
-		color: #94a3b8;
+		color: var(--spell-muted);
 		font-size: 10px;
 	}
 
@@ -398,7 +512,7 @@
 
 	.tools-operation {
 		padding: 10px 0;
-		border-bottom: 1px solid #f1f5f9;
+		border-bottom: 1px solid var(--spell-border-soft);
 	}
 
 	.tools-operation:last-child {
@@ -409,30 +523,31 @@
 	.tools-operation-name {
 		margin: 0 0 4px;
 		font-size: 12px;
-		font-weight: 600;
-		color: #0f172a;
+		font-weight: 750;
+		color: var(--spell-ink);
 		font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
 	}
 
 	.tools-operation-description {
 		margin: 0 0 8px;
 		font-size: 11px;
-		color: #64748b;
+		color: var(--spell-muted);
 		line-height: 1.4;
 	}
 
 	.tools-params {
 		margin-top: 8px;
 		padding: 8px;
-		background: #f8fafc;
-		border-radius: 4px;
+		background: var(--spell-surface-faint);
+		border: 1px solid var(--spell-border-soft);
+		border-radius: var(--spell-radius-sm);
 	}
 
 	.tools-params-title {
 		margin: 0 0 6px;
 		font-size: 10px;
-		font-weight: 600;
-		color: #475569;
+		font-weight: 750;
+		color: var(--spell-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.5px;
 	}
@@ -451,21 +566,21 @@
 	}
 
 	.tools-param-name {
-		color: #0000eb;
-		background: rgba(0, 0, 235, 0.08);
-		padding: 1px 5px;
-		border-radius: 3px;
+		color: var(--spell-blue);
+		background: var(--spell-blue-soft);
+		padding: 2px 6px;
+		border-radius: var(--spell-radius-xs);
 		font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
 		font-size: 10px;
 	}
 
 	.tools-param-type {
-		color: #64748b;
+		color: var(--spell-muted);
 		font-style: italic;
 	}
 
 	.tools-param-desc {
-		color: #475569;
+		color: var(--spell-muted);
 		flex: 1;
 		min-width: 120px;
 	}
@@ -479,8 +594,8 @@
 	.tools-example {
 		margin-top: 8px;
 		padding: 8px;
-		background: rgba(0, 0, 235, 0.03);
-		border-radius: 4px;
+		background: rgba(0, 0, 235, 0.035);
+		border-radius: var(--spell-radius-sm);
 		border: 1px solid rgba(0, 0, 235, 0.15);
 	}
 
@@ -494,8 +609,8 @@
 	.tools-example-title {
 		margin: 0;
 		font-size: 10px;
-		font-weight: 600;
-		color: #0000eb;
+		font-weight: 750;
+		color: var(--spell-blue);
 		text-transform: uppercase;
 		letter-spacing: 0.5px;
 	}
@@ -505,11 +620,11 @@
 		align-items: center;
 		justify-content: center;
 		padding: 4px;
-		background: rgba(0, 0, 235, 0.08);
+		background: var(--spell-blue-soft);
 		border: 1px solid rgba(0, 0, 235, 0.2);
-		border-radius: 4px;
+		border-radius: var(--spell-radius-pill);
 		cursor: pointer;
-		color: #0000eb;
+		color: var(--spell-blue);
 		transition: all 0.15s;
 	}
 
@@ -525,10 +640,11 @@
 	.tools-example-code {
 		margin: 0;
 		padding: 8px;
-		background: #fff;
-		border-radius: 3px;
+		background: var(--spell-surface);
+		border: 1px solid var(--spell-border-soft);
+		border-radius: var(--spell-radius-sm);
 		font-size: 11px;
-		color: #334155;
+		color: var(--spell-ink);
 		font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
 		white-space: pre-wrap;
 		word-break: break-all;

@@ -86,13 +86,9 @@
 			for (let y = spacing * 0.55; y < height; y += spacing) {
 				for (let x = spacing * 0.5; x < width; x += spacing) {
 					const baseX =
-						x +
-						driftX +
-						Math.sin(time * 0.00036 + y * 0.014 + x * 0.004) * spacing * 0.44;
+						x + driftX + Math.sin(time * 0.00036 + y * 0.014 + x * 0.004) * spacing * 0.44;
 					const baseY =
-						y +
-						driftY +
-						Math.cos(time * 0.00032 + x * 0.011 - y * 0.004) * spacing * 0.38;
+						y + driftY + Math.cos(time * 0.00032 + x * 0.011 - y * 0.004) * spacing * 0.38;
 					const nx = baseX / width;
 					const ny = baseY / height;
 					let angle =
@@ -112,7 +108,8 @@
 						const distance = Math.hypot(dx, dy) || 1;
 						const radius = Math.min(width, height) * 0.58;
 						pointerInfluence = Math.max(0, 1 - distance / radius);
-						const smoothInfluence = pointerInfluence * pointerInfluence * (3 - 2 * pointerInfluence);
+						const smoothInfluence =
+							pointerInfluence * pointerInfluence * (3 - 2 * pointerInfluence);
 						const tangent = Math.atan2(dy, dx) + Math.PI / 2;
 						const displacement = smoothInfluence * 120;
 
@@ -287,8 +284,8 @@
 
 		<section class="thesis">
 			<p>
-				Designed by architects for architects, fashion designers, game designers, and creators.
-				It’s your ultimate playground for architectural massing, stylized objects, low-poly scenes,
+				Designed by architects for architects, fashion designers, game designers, and creators. It’s
+				your ultimate playground for architectural massing, stylized objects, low-poly scenes,
 				product concepts, and sculptural forms.
 			</p>
 		</section>
@@ -298,8 +295,7 @@
 				<p class="eyebrow">Live OBJ workflow</p>
 				<h2>Vibe modelling for the messy stage before CAD.</h2>
 				<p>
-					Prompt, inspect, tune metadata, and keep moving while the form is still becoming
-					itself.
+					Prompt, inspect, tune metadata, and keep moving while the form is still becoming itself.
 				</p>
 			</article>
 
@@ -348,10 +344,24 @@
 	}
 
 	.runway-page {
+		--spell-ink: #080816;
+		--spell-night: #02022a;
+		--spell-blue: #0000eb;
+		--spell-blue-hover: #0000c0;
+		--spell-muted: rgba(8, 8, 22, 0.62);
+		--spell-radius-sm: 8px;
+		--spell-radius-md: 12px;
+		--spell-radius-pill: 999px;
 		min-height: 100vh;
-		background: #02022a;
+		background: var(--spell-night);
 		font-family:
-			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+			Inter,
+			ui-sans-serif,
+			system-ui,
+			-apple-system,
+			BlinkMacSystemFont,
+			'Segoe UI',
+			sans-serif;
 	}
 
 	.site-header {
@@ -394,6 +404,16 @@
 			inset 0 1px 0 rgba(255, 255, 255, 0.9);
 	}
 
+	@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+		.site-nav {
+			background: rgba(2, 2, 42, 0.82);
+		}
+
+		.site-nav.light {
+			background: rgba(255, 255, 255, 0.94);
+		}
+	}
+
 	.brand {
 		display: flex;
 		align-items: center;
@@ -434,7 +454,7 @@
 	}
 
 	.site-nav.light .nav-links a:hover {
-		color: #0000eb;
+		color: var(--spell-blue);
 	}
 
 	.menu-button {
@@ -463,7 +483,7 @@
 	}
 
 	.site-nav.light .menu-button span {
-		background: #0000eb;
+		background: var(--spell-blue);
 	}
 
 	.hero {
@@ -495,7 +515,12 @@
 	}
 
 	.hero-shade {
-		background: linear-gradient(180deg, #02022a 0%, #050566 52%, #02022a 100%);
+		background: linear-gradient(
+			180deg,
+			var(--spell-night) 0%,
+			#050566 52%,
+			var(--spell-night) 100%
+		);
 	}
 
 	.vector-field {
@@ -577,7 +602,7 @@
 
 	.primary-button {
 		background: #ffffff;
-		color: #0000eb;
+		color: var(--spell-blue);
 	}
 
 	.secondary-button {
@@ -592,7 +617,7 @@
 
 	.video-showcase {
 		padding: clamp(22px, 4vw, 56px);
-		background: #02022a;
+		background: var(--spell-night);
 	}
 
 	.showcase-video {
@@ -621,7 +646,7 @@
 		align-items: center;
 		min-height: 84px;
 		padding: 22px clamp(18px, 3vw, 34px);
-		background: #02022a;
+		background: var(--spell-night);
 		color: rgba(255, 255, 255, 0.78);
 		font-size: 16px;
 		font-weight: 760;
@@ -630,13 +655,13 @@
 
 	.pathways a:hover {
 		color: #ffffff;
-		background: #0000eb;
+		background: var(--spell-blue);
 	}
 
 	.thesis {
 		padding: clamp(76px, 12vw, 160px) clamp(18px, 5vw, 72px);
 		background: #ffffff;
-		color: #080816;
+		color: var(--spell-ink);
 	}
 
 	.thesis p {
@@ -654,7 +679,7 @@
 		gap: 18px;
 		padding: clamp(18px, 4vw, 56px);
 		background: #f4f4f6;
-		color: #080816;
+		color: var(--spell-ink);
 	}
 
 	.large-panel,
@@ -669,9 +694,7 @@
 		flex-direction: column;
 		justify-content: flex-end;
 		padding: clamp(26px, 4vw, 46px);
-		background:
-			linear-gradient(180deg, rgba(0, 0, 235, 0.12), rgba(255, 255, 255, 0) 45%),
-			#ffffff;
+		background: linear-gradient(180deg, rgba(0, 0, 235, 0.12), rgba(255, 255, 255, 0) 45%), #ffffff;
 	}
 
 	.large-panel h2 {
@@ -687,7 +710,7 @@
 	.large-panel p:last-child {
 		max-width: 520px;
 		margin-bottom: 0;
-		color: rgba(8, 8, 22, 0.62);
+		color: var(--spell-muted);
 		font-size: 18px;
 		line-height: 1.5;
 	}
@@ -716,7 +739,7 @@
 
 	.workflow-card p {
 		margin: 0;
-		color: rgba(8, 8, 22, 0.62);
+		color: var(--spell-muted);
 		font-size: 15px;
 		line-height: 1.5;
 	}
@@ -724,7 +747,7 @@
 	.credits {
 		padding: clamp(58px, 9vw, 112px) clamp(18px, 5vw, 72px);
 		background: #ffffff;
-		color: #080816;
+		color: var(--spell-ink);
 		text-align: center;
 	}
 
@@ -736,7 +759,7 @@
 	}
 
 	.credits a {
-		color: #0000eb;
+		color: var(--spell-blue);
 		text-decoration: none;
 	}
 
@@ -746,7 +769,7 @@
 
 	.site-footer {
 		padding: 28px clamp(18px, 5vw, 72px);
-		background: #02022a;
+		background: var(--spell-night);
 		color: rgba(255, 255, 255, 0.58);
 		text-align: center;
 	}
@@ -791,6 +814,12 @@
 			background: rgba(2, 2, 42, 0.78);
 			backdrop-filter: blur(18px);
 			-webkit-backdrop-filter: blur(18px);
+		}
+
+		@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+			.nav-links {
+				background: rgba(2, 2, 42, 0.92);
+			}
 		}
 
 		.site-nav {

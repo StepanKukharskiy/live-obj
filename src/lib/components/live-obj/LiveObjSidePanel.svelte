@@ -313,7 +313,7 @@
 		overflow: hidden;
 	}
 	:global(.live-obj-side-panel .planner-tabs) {
-		padding: 0 12px 0 16px;
+		margin: 0 12px 10px 16px;
 	}
 	.live-obj-reopen {
 		position: absolute;

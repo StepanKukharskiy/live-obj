@@ -2,6 +2,22 @@
 /* Scoping: `pre` and global-ish rules are under `.planner-panel` to avoid page-wide side effects. */
 
 :where(.app-root) {
+	--spell-ink: #080816;
+	--spell-text: #1a1a1a;
+	--spell-muted: rgba(8, 8, 22, 0.62);
+	--spell-border: rgba(8, 8, 22, 0.1);
+	--spell-border-soft: rgba(8, 8, 22, 0.07);
+	--spell-blue: #0000eb;
+	--spell-blue-hover: #0000c0;
+	--spell-blue-soft: rgba(0, 0, 235, 0.08);
+	--spell-surface: rgba(255, 255, 255, 0.92);
+	--spell-surface-soft: rgba(255, 255, 255, 0.68);
+	--spell-surface-faint: rgba(255, 255, 255, 0.44);
+	--spell-radius-xs: 6px;
+	--spell-radius-sm: 8px;
+	--spell-radius-md: 12px;
+	--spell-radius-lg: 16px;
+	--spell-radius-pill: 999px;
 	font-family:
 		Inter,
 		ui-sans-serif,
@@ -22,18 +38,24 @@
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	border: 1px solid rgba(0, 0, 0, 0.08);
-	border-radius: 16px;
-	background: rgba(255, 255, 255, 0.95);
-	color: #1a1a1a;
-	backdrop-filter: blur(24px);
-	-webkit-backdrop-filter: blur(24px);
+	border: 1px solid var(--spell-border-soft);
+	border-radius: var(--spell-radius-lg);
+	background: rgba(255, 255, 255, 0.82);
+	color: var(--spell-text);
+	backdrop-filter: blur(24px) saturate(1.18);
+	-webkit-backdrop-filter: blur(24px) saturate(1.18);
 	box-shadow:
 		0 12px 48px rgba(0, 0, 0, 0.08),
 		0 4px 16px rgba(0, 0, 0, 0.04);
 	z-index: 10;
 	box-sizing: border-box;
 	transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+	.planner-panel {
+		background: rgba(255, 255, 255, 0.97);
+	}
 }
 
 /* Keep flex from `.planner-panel` (never use `display: block` here — it breaks the column and forces abspos hacks). */
@@ -59,23 +81,23 @@
 	margin: 0;
 	font-size: 1rem;
 	font-weight: 600;
-	color: #1a1a1a;
+	color: var(--spell-text);
 }
 
 .live-obj-panel-close {
 	border: none;
-	background: rgba(0, 0, 0, 0.05);
-	border-radius: 20px;
+	background: rgba(2, 2, 42, 0.045);
+	border-radius: var(--spell-radius-pill);
 	width: 32px;
 	height: 32px;
 	cursor: pointer;
-	color: #666;
+	color: var(--spell-muted);
 	flex-shrink: 0;
 }
 
 .live-obj-panel-close:hover {
-	background: rgba(0, 0, 0, 0.1);
-	color: #1a1a1a;
+	background: var(--spell-blue-soft);
+	color: var(--spell-blue);
 }
 
 .planner-panel-content {
@@ -98,11 +120,16 @@
 /* ——— Tabs (main) ——— */
 .planner-tabs {
 	display: flex;
-	gap: 6px;
-	flex-wrap: wrap;
+	gap: 3px;
+	flex-wrap: nowrap;
 	overflow-x: auto;
 	scrollbar-width: none;
 	flex-shrink: 0;
+	padding: 4px;
+	border: 1px solid rgba(0, 0, 235, 0.08);
+	border-radius: var(--spell-radius-pill);
+	background: rgba(2, 2, 42, 0.045);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .planner-tabs::-webkit-scrollbar {
@@ -111,32 +138,32 @@
 
 .planner-tabs button {
 	border: none;
-	border-radius: 0;
-	padding: 10px 12px;
+	border-radius: var(--spell-radius-pill);
+	padding: 7px 11px;
 	background: transparent;
-	color: #666;
-	font-size: 14px;
-	font-weight: 500;
+	color: var(--spell-muted);
+	font-size: 13px;
+	font-weight: 700;
 	font-family: inherit;
 	cursor: pointer;
 	position: relative;
 	white-space: nowrap;
+	flex: 0 0 auto;
+	transition:
+		background 0.16s ease,
+		color 0.16s ease,
+		box-shadow 0.16s ease;
+}
+
+.planner-tabs button:hover:not(.active) {
+	background: rgba(255, 255, 255, 0.6);
+	color: var(--spell-ink);
 }
 
 .planner-tabs button.active {
-	color: #0000eb;
-	font-weight: 600;
-}
-
-.planner-tabs button.active::after {
-	content: '';
-	position: absolute;
-	left: 12px;
-	right: 12px;
-	bottom: 0;
-	height: 3px;
-	background: #0000eb;
-	border-radius: 999px;
+	background: var(--spell-blue);
+	color: #fff;
+	box-shadow: 0 5px 14px rgba(0, 0, 235, 0.22);
 }
 
 /* ——— Tab panel scroll (reference) ——— */
@@ -202,9 +229,10 @@
 
 .planner-chat-welcome .planner-chat-guide-copy {
 	padding: 12px;
-	background: rgba(255, 255, 255, 0.7);
-	border-radius: 10px;
-	color: #555;
+	background: var(--spell-surface-soft);
+	border: 1px solid var(--spell-border-soft);
+	border-radius: var(--spell-radius-md);
+	color: var(--spell-muted);
 	line-height: 1.45;
 	font-size: 14px;
 }
@@ -224,7 +252,7 @@
 
 .planner-chat-bubble {
 	max-width: 88%;
-	color: #1a1a1a;
+	color: var(--spell-text);
 }
 
 .planner-chat-row.assistant .planner-chat-bubble {
@@ -241,17 +269,18 @@
 }
 
 .planner-chat-row.assistant .planner-chat-bubble .planner-chat-content {
-	background: rgba(255, 255, 255, 0.9);
+	background: var(--spell-surface);
 	padding: 7px 10px;
-	border-radius: 10px;
+	border: 1px solid var(--spell-border-soft);
+	border-radius: var(--spell-radius-md);
 }
 
 .planner-chat-row.user .planner-chat-bubble .planner-chat-content {
-	background: rgba(0, 0, 235, 0.08);
-	color: #1a1a1a;
+	background: var(--spell-blue-soft);
+	color: var(--spell-text);
 	padding: 8px 12px;
-	border-radius: 16px;
-	border-bottom-right-radius: 4px;
+	border-radius: var(--spell-radius-lg);
+	border-bottom-right-radius: var(--spell-radius-xs);
 	display: inline-block;
 }
 
@@ -260,13 +289,13 @@
 }
 
 .planner-chat-bubble-status {
-	background: rgba(0, 0, 235, 0.04);
+	background: rgba(0, 0, 235, 0.045);
 	border: 1px solid rgba(0, 0, 235, 0.1);
 	padding: 8px 12px;
-	border-radius: 12px;
-	color: #0000eb;
+	border-radius: var(--spell-radius-md);
+	color: var(--spell-blue);
 	font-size: 13px;
-	font-weight: 500;
+	font-weight: 650;
 }
 
 .planner-chat-input-shell {
@@ -275,8 +304,9 @@
 	gap: 8px;
 	padding: 8px 12px 8px 16px;
 	border-radius: 24px;
-	border: 1px solid rgba(0, 0, 0, 0.1);
-	background: rgba(255, 255, 255, 0.8);
+	border: 1px solid var(--spell-border);
+	background: var(--spell-surface);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.84);
 	margin-top: auto;
 	flex-shrink: 0;
 }
@@ -292,7 +322,7 @@
 	font-family: inherit;
 	font-size: 14px;
 	line-height: 1.5;
-	color: #1a1a1a;
+	color: var(--spell-text);
 }
 
 .planner-chat-input-shell textarea:focus {
@@ -310,29 +340,35 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	min-width: 32px;
-	height: 32px;
-	padding: 0 10px;
-	border-radius: 999px;
+	min-width: 34px;
+	height: 34px;
+	padding: 0 12px;
+	border-radius: var(--spell-radius-pill);
 	border: none;
-	background: #0000eb;
+	background: var(--spell-blue);
 	color: #fff;
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 750;
 	font-family: inherit;
 	cursor: pointer;
-	transition: all 0.2s;
+	box-shadow: 0 8px 18px rgba(0, 0, 235, 0.2);
+	transition:
+		background 0.2s ease,
+		box-shadow 0.2s ease,
+		transform 0.2s ease;
 }
 
 .send-button:hover:not(:disabled) {
-	background: #0000c0;
-	transform: scale(1.02);
+	background: var(--spell-blue-hover);
+	box-shadow: 0 10px 22px rgba(0, 0, 235, 0.26);
+	transform: translateY(-1px);
 }
 
 .send-button:disabled {
 	background: rgba(0, 0, 0, 0.1);
 	color: rgba(0, 0, 0, 0.3);
 	cursor: not-allowed;
+	box-shadow: none;
 	transform: none;
 }
 
@@ -342,13 +378,14 @@
 	align-items: center;
 	justify-content: center;
 	gap: 6px;
+	min-height: 30px;
 	padding: 6px 12px;
-	border-radius: 6px;
-	border: 1px solid rgba(0, 0, 0, 0.1);
-	background: rgba(255, 255, 255, 0.55);
-	color: #333;
+	border-radius: var(--spell-radius-pill);
+	border: 1px solid var(--spell-border);
+	background: var(--spell-surface-soft);
+	color: var(--spell-ink);
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 700;
 	font-family: inherit;
 	cursor: pointer;
 	transition:
@@ -358,8 +395,8 @@
 }
 
 .planner-panel .planner-monaco-action-btn:hover:not(:disabled) {
-	background: rgba(0, 0, 0, 0.06);
-	border-color: rgba(0, 0, 0, 0.14);
+	background: var(--spell-surface);
+	border-color: rgba(0, 0, 235, 0.16);
 }
 
 .planner-panel .planner-monaco-action-btn:disabled {
@@ -368,28 +405,29 @@
 }
 
 .planner-panel .planner-monaco-action-btn--accent {
-	border-color: #0000eb;
-	background: #0000eb;
+	border-color: var(--spell-blue);
+	background: var(--spell-blue);
 	color: #fff;
+	box-shadow: 0 8px 18px rgba(0, 0, 235, 0.18);
 }
 
 .planner-panel .planner-monaco-action-btn--accent:hover:not(:disabled) {
-	background: #0000c0;
-	border-color: #0000c0;
+	background: var(--spell-blue-hover);
+	border-color: var(--spell-blue-hover);
 }
 
 .planner-status,
 .planner-bubble-inline-status {
 	font-size: 13px;
-	color: #0000eb;
-	font-weight: 500;
+	color: var(--spell-blue);
+	font-weight: 650;
 }
 
 /* ——— Object sections & form fields ——— */
 .planner-object-section {
-	border: 1px solid rgba(0, 0, 0, 0.08);
-	border-radius: 12px;
-	background: rgba(255, 255, 255, 0.6);
+	border: 1px solid var(--spell-border-soft);
+	border-radius: var(--spell-radius-md);
+	background: var(--spell-surface-soft);
 	margin-bottom: 8px;
 	overflow: hidden;
 }
@@ -399,8 +437,8 @@
 	align-items: center;
 	gap: 6px;
 	padding: 8px 10px;
-	background: rgba(0, 0, 0, 0.02);
-	border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+	background: rgba(255, 255, 255, 0.42);
+	border-bottom: 1px solid var(--spell-border-soft);
 }
 
 .planner-object-title-stack {
@@ -433,9 +471,9 @@
 	flex-direction: column;
 	gap: 6px;
 	padding: 12px;
-	border-radius: 12px;
-	background: rgba(255, 255, 255, 0.5);
-	border: 1px solid rgba(0, 0, 0, 0.06);
+	border-radius: var(--spell-radius-md);
+	background: var(--spell-surface-faint);
+	border: 1px solid var(--spell-border-soft);
 }
 
 .planner-checkbox-row {
@@ -446,17 +484,17 @@
 
 .planner-label-inline {
 	font-size: 13px;
-	font-weight: 500;
-	color: #666;
+	font-weight: 650;
+	color: var(--spell-muted);
 }
 
 .planner-text-input {
 	width: 100%;
 	box-sizing: border-box;
-	border-radius: 16px;
-	border: 1px solid rgba(0, 0, 0, 0.1);
-	background: rgba(255, 255, 255, 0.8);
-	color: #1a1a1a;
+	border-radius: var(--spell-radius-md);
+	border: 1px solid var(--spell-border);
+	background: var(--spell-surface);
+	color: var(--spell-text);
 	padding: 12px 16px;
 	font: inherit;
 	font-size: 14px;
@@ -474,7 +512,7 @@ textarea.planner-text-input {
 .planner-structure-help {
 	margin: 0 0 12px;
 	font-size: 12px;
-	color: #64748b;
+	color: var(--spell-muted);
 }
 
 /* ——— Output / code card ——— */
@@ -488,15 +526,15 @@ textarea.planner-text-input {
 .planner-block {
 	padding: 16px;
 	margin: 0 0 12px;
-	border-radius: 16px;
-	background: rgba(255, 255, 255, 0.8);
-	border: 1px solid rgba(0, 0, 0, 0.08);
+	border-radius: var(--spell-radius-lg);
+	background: var(--spell-surface-soft);
+	border: 1px solid var(--spell-border-soft);
 }
 
 .planner-block p {
 	margin: 8px 0 0;
 	line-height: 1.5;
-	color: #666;
+	color: var(--spell-muted);
 	font-size: 14px;
 }
 
@@ -507,27 +545,27 @@ textarea.planner-text-input {
 }
 
 .live-obj-source-tabs button {
-	border: 1px solid rgba(0, 0, 0, 0.1);
-	background: rgba(255, 255, 255, 0.7);
-	border-radius: 6px;
-	padding: 4px 8px;
+	border: 1px solid var(--spell-border);
+	background: var(--spell-surface-soft);
+	border-radius: var(--spell-radius-pill);
+	padding: 5px 9px;
 	font-size: 11px;
 	cursor: pointer;
-	color: #444;
+	color: var(--spell-muted);
 }
 
 .live-obj-source-tabs button.active {
-	border-color: #0000eb;
-	background: rgba(0, 0, 235, 0.08);
-	color: #0000a8;
-	font-weight: 600;
+	border-color: rgba(0, 0, 235, 0.2);
+	background: var(--spell-blue-soft);
+	color: var(--spell-blue);
+	font-weight: 700;
 }
 
 .live-obj-source-hint {
 	margin: 0;
 	font-size: 10px;
 	line-height: 1.35;
-	color: #777;
+	color: var(--spell-muted);
 }
 
 .live-obj-source-title {
@@ -535,7 +573,7 @@ textarea.planner-text-input {
 	font-weight: 600;
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
-	color: #666;
+	color: var(--spell-muted);
 }
 
 .live-obj-source-editor {
@@ -566,11 +604,11 @@ textarea.planner-text-input {
 	margin-top: 8px;
 	padding: 10px 16px;
 	border: 1px dashed rgba(0, 0, 235, 0.3);
-	border-radius: 10px;
+	border-radius: var(--spell-radius-md);
 	background: rgba(0, 0, 235, 0.04);
-	color: #0000eb;
+	color: var(--spell-blue);
 	font-size: 13px;
-	font-weight: 500;
+	font-weight: 700;
 	cursor: pointer;
 	transition: all 0.2s;
 }
@@ -582,7 +620,7 @@ textarea.planner-text-input {
 
 .planner-error {
 	padding: 10px 12px;
-	border-radius: 10px;
+	border-radius: var(--spell-radius-md);
 	background: rgba(239, 68, 68, 0.18);
 	color: #9f1239;
 	font-size: 14px;
@@ -593,7 +631,7 @@ textarea.planner-text-input {
 .planner-tab-panel pre {
 	margin: 0;
 	padding: 12px;
-	border-radius: 12px;
+	border-radius: var(--spell-radius-md);
 	background: rgba(15, 23, 42, 0.76);
 	color: #dbeafe;
 	white-space: pre-wrap;
