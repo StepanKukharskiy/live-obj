@@ -10,6 +10,16 @@ import Rhino.Geometry as rg
 
 # Set to True for stricter Live OBJ op compatibility diagnostics.
 STRICT_COMPAT = True
+EXPR_FUNCTIONS = {
+    "abs": abs,
+    "min": min,
+    "max": max,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "sqrt": math.sqrt,
+}
+EXPR_CONSTANTS = {"pi": math.pi, "tau": math.tau}
 
 
 class ObjObject(object):
@@ -261,6 +271,95 @@ def _vec3(params, key, default):
     if isinstance(raw, (list, tuple)) and len(raw) >= 3:
         return float(raw[0]), float(raw[1]), float(raw[2])
     return default
+
+
+def _parse_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on", "center", "centered"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _eval_numeric_expr(value, params=None, scope=None):
+    params = params or {}
+    scope = scope or {}
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except Exception:
+        pass
+    if text in scope:
+        return _eval_numeric_expr(scope[text], params, scope)
+    if text in params:
+        return _eval_numeric_expr(params[text], params, scope)
+    if text in EXPR_CONSTANTS:
+        return EXPR_CONSTANTS[text]
+    node = ast.parse(text, mode="eval")
+
+    def visit(n):
+        if isinstance(n, ast.Expression):
+            return visit(n.body)
+        if hasattr(ast, "Num") and isinstance(n, ast.Num):
+            return float(n.n)
+        if hasattr(ast, "Constant") and isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            return float(n.value)
+        if isinstance(n, ast.Name):
+            if n.id in scope:
+                return _eval_numeric_expr(scope[n.id], params, scope)
+            if n.id in params:
+                return _eval_numeric_expr(params[n.id], params, scope)
+            if n.id in EXPR_CONSTANTS:
+                return EXPR_CONSTANTS[n.id]
+            raise ValueError("unknown parameter '%s'" % n.id)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            if n.func.id not in EXPR_FUNCTIONS:
+                raise ValueError("unsupported function '%s'" % n.func.id)
+            return float(EXPR_FUNCTIONS[n.func.id](*[visit(arg) for arg in n.args]))
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.UAdd, ast.USub)):
+            val = visit(n.operand)
+            return val if isinstance(n.op, ast.UAdd) else -val
+        if isinstance(n, ast.BinOp) and isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow)):
+            left = visit(n.left)
+            right = visit(n.right)
+            if isinstance(n.op, ast.Add):
+                return left + right
+            if isinstance(n.op, ast.Sub):
+                return left - right
+            if isinstance(n.op, ast.Mult):
+                return left * right
+            if isinstance(n.op, ast.Div):
+                return left / right
+            return left ** right
+        raise ValueError("unsupported expression '%s'" % text)
+
+    return visit(node)
+
+
+def _vec3_expr(params, key, default, eval_params=None, scope=None):
+    raw = params.get(key, default)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if eval_params and text in eval_params:
+            raw = eval_params[text]
+        elif text.startswith("[") and text.endswith("]"):
+            raw = _split_top_level_commas(text[1:-1])
+    if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+        return default
+    return (
+        _eval_numeric_expr(raw[0], eval_params, scope),
+        _eval_numeric_expr(raw[1], eval_params, scope),
+        _eval_numeric_expr(raw[2], eval_params, scope),
+    )
 
 
 # `anchor(assembly.anchor_id)` references resolved at orchestration time.
@@ -2923,8 +3022,9 @@ def build_procedural_advanced(obj, warnings):
     return None
 
 
-def apply_native_ops(geom, ops, warnings):
+def apply_native_ops(geom, ops, warnings, params=None):
     out = geom
+    params = params or {}
 
     def each_geom(g):
         return g if isinstance(g, list) else [g]
@@ -2989,15 +3089,31 @@ def apply_native_ops(geom, ops, warnings):
                 c.Transform(xform)
                 out = [out, c]
         elif name == "array_linear":
-            count = max(1, int(op.get("count", 2)))
-            dx, dy, dz = _vec3(op, "step", _vec3(op, "offset", (1.0, 0.0, 0.0)))
+            count = max(1, int(round(_eval_numeric_expr(op.get("count", 2), params))))
+            dx, dy, dz = _vec3_expr(op, "step", _vec3_expr(op, "offset", (1.0, 0.0, 0.0), params), params)
+            centered = _parse_bool(op.get("centered", op.get("center")), False)
+            origin_shift = -0.5 * (count - 1) if centered and count > 1 else 0.0
             base = each_geom(out)
             clones = []
             for i in range(count):
-                xf = rg.Transform.Translation(dx * i, dy * i, dz * i)
+                step = i + origin_shift
+                scope = {
+                    "i": float(i),
+                    "index": float(i),
+                    "step": float(step),
+                    "count": float(count),
+                    "t": float(i) / float(max(1, count - 1)),
+                }
+                sx, sy, sz = _vec3_expr(op, "scale", (1.0, 1.0, 1.0), params, scope)
+                px, py, pz = _vec3_expr(op, "pivot", (0.0, 0.0, 0.0), params, scope)
+                tx, ty, tz = _vec3_expr(op, "position", (0.0, 0.0, 0.0), params, scope)
+                scale_plane = rg.Plane(rg.Point3d(px, py, pz), rg.Vector3d.XAxis, rg.Vector3d.YAxis)
+                scale_xf = rg.Transform.Scale(scale_plane, sx, sy, sz)
+                translate_xf = rg.Transform.Translation(dx * step + tx, dy * step + ty, dz * step + tz)
                 for g in base:
                     c = g.Duplicate()
-                    c.Transform(xf)
+                    c.Transform(scale_xf)
+                    c.Transform(translate_xf)
                     clones.append(c)
             out = clones
         elif name == "radial_array":
@@ -3015,6 +3131,47 @@ def apply_native_ops(geom, ops, warnings):
                     c.Transform(xf)
                     clones.append(c)
             out = clones
+        elif name == "deform":
+            expr = op.get("position", op.get("expr", op.get("xyz", ["x", "y", "z"])))
+            result = []
+            for g in each_geom(out):
+                target = g
+                if isinstance(g, rg.Brep):
+                    msh = rg.Mesh.CreateFromBrep(g, rg.MeshingParameters.FastRenderMesh)
+                    if msh:
+                        target = rg.Mesh()
+                        for mm in msh:
+                            target.Append(mm)
+                elif isinstance(g, rg.Mesh):
+                    target = g.Duplicate()
+                if isinstance(target, rg.Mesh):
+                    bbox = target.GetBoundingBox(True)
+                    min_pt = bbox.Min
+                    max_pt = bbox.Max
+                    sx = max(max_pt.X - min_pt.X, 1e-9)
+                    sy = max(max_pt.Y - min_pt.Y, 1e-9)
+                    sz = max(max_pt.Z - min_pt.Z, 1e-9)
+                    vertex_count = max(1, target.Vertices.Count)
+                    for vi in range(target.Vertices.Count):
+                        vtx = target.Vertices[vi]
+                        scope = {
+                            "x": float(vtx.X),
+                            "y": float(vtx.Y),
+                            "z": float(vtx.Z),
+                            "u": float((vtx.X - min_pt.X) / sx),
+                            "v": float((vtx.Y - min_pt.Y) / sy),
+                            "w": float((vtx.Z - min_pt.Z) / sz),
+                            "i": float(vi),
+                            "index": float(vi),
+                            "vertex_count": float(vertex_count),
+                            "t": float(vi) / float(max(1, vertex_count - 1)),
+                        }
+                        nx, ny, nz = _vec3_expr({"position": expr}, "position", (vtx.X, vtx.Y, vtx.Z), params, scope)
+                        target.Vertices.SetVertex(vi, nx, ny, nz)
+                    target.Normals.ComputeNormals()
+                    target.Compact()
+                result.append(target)
+            out = result if isinstance(out, list) else result[0]
         elif name in {"displace", "noise_displace"}:
             amp = float(op.get("strength", op.get("amplitude", 0.25)))
             for g in each_geom(out):
@@ -3250,6 +3407,7 @@ def validate_compat(obj, warnings):
         "array", "array_linear", "radial_array",
         "displace", "noise_displace", "subdivide",
         "smooth", "simplify", "remesh",
+        "deform",
         "bevel", "chamfer", "trace_paths", "sdf_tubes",
         "voxelize", "mesh_from_volume", "tread",
         "union", "subtract", "intersect",
@@ -3397,6 +3555,8 @@ for o in objs:
         try:
             mesh = build_rhino_mesh(o, warnings=warn)
             mesh = apply_deformer(mesh, o, warn)
+            if o.ops:
+                mesh = apply_native_ops(mesh, o.ops, warn, o.meta.get("params", {}) or {})
             geom = mesh
             meshes.append(mesh)
         except Exception as ex:
@@ -3406,7 +3566,7 @@ for o in objs:
     if g is None and str(o.meta.get("source", "")).lower() == "procedural":
         g = build_procedural_advanced(o, warn)
     if g is not None and o.ops:
-        g = apply_native_ops(g, o.ops, warn)
+        g = apply_native_ops(g, o.ops, warn, o.meta.get("params", {}) or {})
     if g is not None:
         geom = g
         if isinstance(g, list):

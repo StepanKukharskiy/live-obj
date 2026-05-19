@@ -31,7 +31,10 @@
 #     transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz]
 #       optional: pivot=[x,y,z] for scale/rotation pivot in source coordinates
 #     mirror axis=x|y|z
-#     array count=n offset=[x,y,z] centered=true|false
+#     array count=n offset=[x,y,z] centered=true|false scale=[sx,sy,sz] position=[x,y,z] pivot=[x,y,z]
+#       expressions may use i, index, step, count, t, params, sin(), cos(), sqrt(), pi, tau
+#     deform position=[x,y,z]
+#       expressions may use x, y, z plus normalized u, v, w vertex coordinates
 #     symmetrize axis=x|y|z side=positive|negative
 #     subdivide level=n
 #     smooth iterations=n strength=0.5
@@ -50,6 +53,19 @@ import Grasshopper.Kernel.Special as ghks
 
 
 GENERATED_PREFIX = "spellshape:"
+EXPR_FUNCTIONS = {
+    "abs": abs,
+    "min": min,
+    "max": max,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "sqrt": math.sqrt,
+}
+EXPR_CONSTANTS = {
+    "pi": math.pi,
+    "tau": math.pi * 2.0,
+}
 
 
 class ControlSpec(object):
@@ -410,6 +426,57 @@ def object_scope(scene, obj):
     return scope
 
 
+def _scope_number(name, scope):
+    if name in EXPR_CONSTANTS:
+        return EXPR_CONSTANTS[name]
+    if name not in scope:
+        raise ValueError("unknown expression name: %s" % name)
+    value = eval_number_or_none(scope[name], scope)
+    if value is None:
+        raise ValueError("non-numeric expression name: %s" % name)
+    return value
+
+
+def _eval_expr_node(node, scope):
+    if isinstance(node, ast.Expression):
+        return _eval_expr_node(node.body, scope)
+    if isinstance(node, ast.Num):
+        return float(node.n)
+    if hasattr(ast, "Constant") and isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)):
+            return float(node.value)
+        raise ValueError("unsupported expression constant")
+    if isinstance(node, ast.Name):
+        return _scope_number(node.id, scope)
+    if isinstance(node, ast.UnaryOp):
+        value = _eval_expr_node(node.operand, scope)
+        if isinstance(node.op, ast.USub):
+            return -value
+        if isinstance(node.op, ast.UAdd):
+            return value
+        raise ValueError("unsupported unary expression")
+    if isinstance(node, ast.BinOp):
+        left = _eval_expr_node(node.left, scope)
+        right = _eval_expr_node(node.right, scope)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            return left / right
+        if isinstance(node.op, ast.Pow):
+            return left ** right
+        raise ValueError("unsupported binary expression")
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        fn = EXPR_FUNCTIONS.get(node.func.id)
+        if fn is None:
+            raise ValueError("unsupported expression function")
+        return float(fn(*[_eval_expr_node(arg, scope) for arg in node.args]))
+    raise ValueError("unsupported expression")
+
+
 def eval_number_or_none(raw, scope):
     if raw is None:
         return None
@@ -422,18 +489,8 @@ def eval_number_or_none(raw, scope):
         return float(text)
     except Exception:
         pass
-
-    expr = text
-    for k in sorted(scope.keys(), key=len, reverse=True):
-        try:
-            v = float(scope[k])
-        except Exception:
-            continue
-        expr = re.sub(r"\b%s\b" % re.escape(k), repr(v), expr)
-    if not re.match(r"^[0-9eE\.\+\-\*\/\(\) ]+$", expr):
-        return None
     try:
-        return float(eval(expr, {"__builtins__": {}}, {}))
+        return float(_eval_expr_node(ast.parse(text, mode="eval"), scope))
     except Exception:
         return None
 
@@ -730,6 +787,55 @@ def apply_simplify(mesh, op, scope):
     return compact_mesh_faces(mesh, selected)
 
 
+def apply_deform(mesh, op, scope, scene):
+    expr = get_arg(op, "position", get_arg(op, "xyz", "[x,y,z]"))
+    out = mesh.DuplicateMesh()
+    to_source = rhino_to_source_transform(scene)
+    to_rhino = source_to_rhino_transform(scene)
+    source_points = []
+    for i in range(out.Vertices.Count):
+        p = rg.Point3d(out.Vertices[i])
+        p.Transform(to_source)
+        source_points.append(p)
+    if not source_points:
+        return out
+
+    min_x = min(p.X for p in source_points)
+    min_y = min(p.Y for p in source_points)
+    min_z = min(p.Z for p in source_points)
+    max_x = max(p.X for p in source_points)
+    max_y = max(p.Y for p in source_points)
+    max_z = max(p.Z for p in source_points)
+    span_x = max(max_x - min_x, 0.000001)
+    span_y = max(max_y - min_y, 0.000001)
+    span_z = max(max_z - min_z, 0.000001)
+    count = max(1, len(source_points))
+
+    for i, p in enumerate(source_points):
+        local_scope = dict(scope)
+        local_scope.update({
+            "x": p.X,
+            "y": p.Y,
+            "z": p.Z,
+            "u": (p.X - min_x) / span_x,
+            "v": (p.Y - min_y) / span_y,
+            "w": (p.Z - min_z) / span_z,
+            "i": float(i),
+            "index": float(i),
+            "vertex_count": float(count),
+            "count": float(count),
+            "t": float(i) / float(max(1, count - 1)),
+        })
+        moved = parse_vec3(expr, local_scope, (p.X, p.Y, p.Z))
+        rp = rg.Point3d(moved.X, moved.Y, moved.Z)
+        rp.Transform(to_rhino)
+        out.Vertices.SetVertex(i, rp.X, rp.Y, rp.Z)
+
+    out.Normals.ComputeNormals()
+    out.Compact()
+    return out
+
+
 def apply_post_ops(mesh, obj, warn, scene):
     scope = object_scope(scene, obj)
     for op in obj.post_ops:
@@ -753,18 +859,36 @@ def apply_post_ops(mesh, obj, warn, scene):
             mesh = apply_symmetrize(mesh, op, scene, warn, obj.name)
         elif op.cmd == "array":
             count = max(1, int(round(eval_number(get_arg(op, "count", "1"), scope))))
-            offset = parse_vec3(get_arg(op, "offset", "[1,0,0]"), scope, (1, 0, 0))
             centered = eval_bool(get_arg(op, "centered", get_arg(op, "center", None)), False)
             base = mesh.DuplicateMesh()
-            if centered and count > 1:
-                mesh.Transform(sandwich_source_xform(rg.Transform.Translation(offset * (-0.5 * (count - 1))), scene))
-            for i in range(1, count):
-                copy = base.DuplicateMesh()
-                step = offset * i
+            combined = rg.Mesh()
+            for i in range(count):
+                step = float(i)
                 if centered and count > 1:
-                    step = offset * (i - 0.5 * (count - 1))
-                copy.Transform(sandwich_source_xform(rg.Transform.Translation(step), scene))
-                mesh.Append(copy)
+                    step = float(i) - 0.5 * float(count - 1)
+                local_scope = dict(scope)
+                local_scope.update({
+                    "i": float(i),
+                    "index": float(i),
+                    "step": step,
+                    "count": float(count),
+                    "t": float(i) / float(max(1, count - 1)),
+                })
+                offset = parse_vec3(get_arg(op, "offset", "[1,0,0]"), local_scope, (1, 0, 0))
+                scale = parse_vec3(get_arg(op, "scale", "[1,1,1]"), local_scope, (1, 1, 1))
+                position = parse_vec3(get_arg(op, "position", "[0,0,0]"), local_scope, (0, 0, 0))
+                pivot = parse_vec3(get_arg(op, "pivot", "[0,0,0]"), local_scope, (0, 0, 0))
+                translation = offset * step + position
+                xform = rg.Transform.Scale(rg.Plane.WorldXY, scale.X, scale.Y, scale.Z)
+                if pivot.Length > 0:
+                    xform = rg.Transform.Translation(pivot) * xform * rg.Transform.Translation(-pivot)
+                xform = rg.Transform.Translation(translation) * xform
+                copy = base.DuplicateMesh()
+                copy.Transform(sandwich_source_xform(xform, scene))
+                combined.Append(copy)
+            mesh = combined
+        elif op.cmd == "deform":
+            mesh = apply_deform(mesh, op, scope, scene)
         elif op.cmd == "subdivide":
             mesh = apply_subdivide(mesh, op, scope)
         elif op.cmd == "smooth":
