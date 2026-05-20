@@ -336,11 +336,39 @@
 	<title>Spellshape</title>
 	<meta
 		name="description"
-		content="A cinematic Spellshape landing page direction inspired by Runway."
+		content="Spellshape is a vibemodelling tool for the messy stage before CAD."
+	/>
+	<meta property="og:title" content="Spellshape" />
+	<meta
+		property="og:description"
+		content="Spellshape is a vibemodelling tool for the messy stage before CAD."
+	/>
+	<meta property="og:type" content="website" />
+	<meta property="og:site_name" content="Spellshape" />
+	<meta
+		property="og:image"
+		content="https://live-obj-production.up.railway.app/images/spellshape-share.png"
+	/>
+	<meta
+		property="og:image:secure_url"
+		content="https://live-obj-production.up.railway.app/images/spellshape-share.png"
+	/>
+	<meta property="og:image:width" content="1200" />
+	<meta property="og:image:height" content="630" />
+	<meta property="og:image:alt" content="Spellshape - vibemodelling for the messy stage before CAD." />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:title" content="Spellshape" />
+	<meta
+		name="twitter:description"
+		content="Spellshape is a vibemodelling tool for the messy stage before CAD."
+	/>
+	<meta
+		name="twitter:image"
+		content="https://live-obj-production.up.railway.app/images/spellshape-share.png"
 	/>
 </svelte:head>
 
-<div class="runway-page">
+<div class="spellshape-page">
 	<header class="site-header">
 		<nav class:open={menuOpen} class:light={navLight} class="site-nav" aria-label="Primary">
 			<a class="brand" href="/" aria-label="Spellshape home">
@@ -410,7 +438,7 @@
 				muted
 				loop
 				playsinline
-				aria-label="Spellshape generating a Gehry-inspired pavilion"
+				aria-label="Spellshape generating an expressive 3D pavilion"
 			></video>
 		</section>
 
@@ -431,7 +459,7 @@
 		<section class="studio-grid" aria-label="Spellshape workflow">
 			<article class="large-panel">
 				<p class="eyebrow">Live OBJ workflow</p>
-				<h2>Vibe modelling for the messy stage before CAD.</h2>
+				<h2>Vibemodelling for the messy stage before CAD.</h2>
 				<p>
 					Prompt, inspect, tune metadata, and keep moving while the form is still becoming
 					itself.
@@ -482,7 +510,7 @@
 		box-sizing: border-box;
 	}
 
-	.runway-page {
+	.spellshape-page {
 		min-height: 100vh;
 		background: #02022a;
 		font-family:
