@@ -46,6 +46,7 @@ import ast
 import math
 import re
 import System
+import scriptcontext as sc
 import Rhino.Geometry as rg
 import Grasshopper
 import Grasshopper.Kernel as ghk
@@ -972,8 +973,17 @@ def gh_doc():
         return None
 
 
-def remove_generated_controls():
-    doc = gh_doc()
+def control_state_key(name):
+    try:
+        guid = str(ghenv.Component.InstanceGuid)
+    except Exception:
+        guid = "default"
+    return "spellshape_renderer:%s:%s" % (guid, name)
+
+
+def remove_generated_controls(doc=None):
+    if doc is None:
+        doc = gh_doc()
     if doc is None:
         return
     mine = []
@@ -1035,8 +1045,7 @@ def create_control_object(ctrl):
     return obj
 
 
-def create_or_refresh_controls(ctrls):
-    doc = gh_doc()
+def create_or_refresh_controls_now(ctrls, doc, below_px):
     if doc is None:
         return
     try:
@@ -1045,14 +1054,9 @@ def create_or_refresh_controls(ctrls):
         return
 
     input_param.RemoveAllSources()
-    remove_generated_controls()
+    remove_generated_controls(doc)
 
     pivot = ghenv.Component.Attributes.Pivot
-    try:
-        below_px = int(controls_below_px)
-    except Exception:
-        below_px = 170
-    below_px = max(80, min(600, below_px))
     x = pivot.X - 220
     y = pivot.Y + below_px
 
@@ -1068,7 +1072,56 @@ def create_or_refresh_controls(ctrls):
             pass
 
     ghenv.Component.Params.OnParametersChanged()
-    doc.ScheduleSolution(10, lambda d: ghenv.Component.ExpireSolution(False))
+
+
+def create_or_refresh_controls(ctrls):
+    doc = gh_doc()
+    if doc is None:
+        return
+    pending_key = control_state_key("refresh_pending")
+    if sc.sticky.get(pending_key, False):
+        return
+    try:
+        below_px = int(controls_below_px)
+    except Exception:
+        below_px = 170
+    below_px = max(80, min(600, below_px))
+    ctrl_snapshot = list(ctrls)
+    sc.sticky[pending_key] = True
+
+    def callback(d):
+        try:
+            create_or_refresh_controls_now(ctrl_snapshot, d, below_px)
+        finally:
+            sc.sticky[pending_key] = False
+        try:
+            ghenv.Component.ExpireSolution(False)
+        except Exception:
+            pass
+
+    doc.ScheduleSolution(1, callback)
+
+
+def clear_generated_controls():
+    doc = gh_doc()
+    if doc is None:
+        return
+    pending_key = control_state_key("clear_pending")
+    if sc.sticky.get(pending_key, False):
+        return
+    sc.sticky[pending_key] = True
+
+    def callback(d):
+        try:
+            remove_generated_controls(d)
+        finally:
+            sc.sticky[pending_key] = False
+        try:
+            ghenv.Component.ExpireSolution(False)
+        except Exception:
+            pass
+
+    doc.ScheduleSolution(1, callback)
 
 
 # Main execution.
@@ -1076,7 +1129,7 @@ warnings = []
 scene = parse_live_obj(live_obj or "", warnings)
 
 if clear_controls:
-    remove_generated_controls()
+    clear_generated_controls()
 
 if scene.controls and (refresh_controls or controls_need_refresh(scene.controls)):
     create_or_refresh_controls(scene.controls)
