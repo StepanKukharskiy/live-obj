@@ -454,8 +454,17 @@ def split_part_text(raw_part):
             break
     if first_obj < 0:
         raise Exception("Generated part did not contain an object line: o name")
-    preamble = [l for l in lines[:first_obj] if re.match(r"^\s*#@material_preset:\s+", l)]
-    obj_text = "\n".join(lines[first_obj:]).strip()
+    preamble = []
+    object_metadata = []
+    for line in lines[:first_obj]:
+        if re.match(r"^\s*#@material_preset:\s+", line):
+            preamble.append(line)
+        elif re.match(r"^\s*#@", line):
+            object_metadata.append(line)
+    obj_lines = list(lines[first_obj:])
+    if object_metadata:
+        obj_lines = [obj_lines[0]] + object_metadata + obj_lines[1:]
+    obj_text = "\n".join(obj_lines).strip()
     return preamble, obj_text
 
 

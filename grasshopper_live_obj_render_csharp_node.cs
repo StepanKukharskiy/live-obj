@@ -246,9 +246,33 @@ private Control ParseControl(string objectName, string item)
 	var parts = SplitTopLevelWhitespace(item);
 	if (parts.Count == 0) return null;
 	var args = ParseSpaceKvs(string.Join(" ", parts.Skip(1)));
+	var knownKinds = new HashSet<string>(new[] {
+		"slider", "stepper", "toggle", "bool", "boolean", "choice", "value_list",
+		"select", "dropdown", "enum", "multi-toggle", "multi_toggle"
+	}, StringComparer.OrdinalIgnoreCase);
+
+	string kind = parts[0].Trim().ToLowerInvariant();
 	string key;
-	if (!args.TryGetValue("key", out key) && !args.TryGetValue("param", out key) && !args.TryGetValue("name", out key))
+	if (args.TryGetValue("type", out kind) || args.TryGetValue("kind", out kind))
+	{
+		kind = kind.Trim().ToLowerInvariant();
+		if (!args.TryGetValue("key", out key) && !args.TryGetValue("param", out key) && !args.TryGetValue("name", out key))
+			key = parts[0].Trim();
+	}
+	else if (parts.Count >= 2 && knownKinds.Contains(parts[1].Trim()))
+	{
+		kind = parts[1].Trim().ToLowerInvariant();
+		if (!args.TryGetValue("key", out key) && !args.TryGetValue("param", out key) && !args.TryGetValue("name", out key))
+			key = parts[0].Trim();
+	}
+	else if (!args.TryGetValue("key", out key) && !args.TryGetValue("param", out key) && !args.TryGetValue("name", out key))
+	{
 		return null;
+	}
+	if (kind == "enum" || kind == "multi-toggle" || kind == "multi_toggle")
+		kind = "choice";
+	else if (kind == "stepper")
+		kind = "slider";
 
 	string label;
 	args.TryGetValue("label", out label);
@@ -258,7 +282,7 @@ private Control ParseControl(string objectName, string item)
 
 	var c = new Control();
 	c.ObjectName = objectName;
-	c.Kind = parts[0].Trim().ToLowerInvariant();
+	c.Kind = kind;
 	c.Key = key.Trim();
 	c.Label = string.IsNullOrWhiteSpace(label) ? c.Key.Replace("_", " ") : label.Replace("_", " ");
 	args.TryGetValue("min", out c.Min);

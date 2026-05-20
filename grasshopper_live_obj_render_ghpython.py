@@ -66,6 +66,20 @@ EXPR_CONSTANTS = {
     "pi": math.pi,
     "tau": math.pi * 2.0,
 }
+CONTROL_KINDS = set([
+    "slider",
+    "stepper",
+    "toggle",
+    "bool",
+    "boolean",
+    "choice",
+    "value_list",
+    "select",
+    "dropdown",
+    "enum",
+    "multi-toggle",
+    "multi_toggle",
+])
 
 
 class ControlSpec(object):
@@ -240,6 +254,9 @@ def parse_control(object_name, line, params=None):
     if "type" in args or "kind" in args:
         kind = (args.get("type") or args.get("kind") or "slider").strip().lower()
         key = args.get("key") or args.get("param") or args.get("name") or first
+    elif len(parts) >= 2 and parts[1].strip().lower() in CONTROL_KINDS:
+        kind = parts[1].strip().lower()
+        key = args.get("key") or args.get("param") or args.get("name") or first
     elif "=" in first:
         kind = "slider"
         key = args.get("key") or args.get("param") or args.get("name") or first
@@ -248,6 +265,12 @@ def parse_control(object_name, line, params=None):
         key = args.get("key") or args.get("param") or args.get("name")
     if not key:
         return None
+    if kind == "enum":
+        kind = "choice"
+    elif kind in ("multi-toggle", "multi_toggle"):
+        kind = "choice"
+    elif kind == "stepper":
+        kind = "slider"
     options_raw = args.get("options") or args.get("values") or ""
     options = [p.strip() for p in re.split(r"[|,]", options_raw) if p.strip()]
     value = args.get("value") or args.get("default") or args.get("current")
