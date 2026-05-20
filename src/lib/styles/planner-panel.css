@@ -52,6 +52,12 @@
 	transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+@supports (backdrop-filter: blur(1px)) {
+	.planner-panel {
+		backdrop-filter: blur(24px) saturate(1.18);
+	}
+}
+
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
 	.planner-panel {
 		background: rgba(255, 255, 255, 0.97);

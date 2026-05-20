@@ -521,6 +521,12 @@
 			box-shadow 0.2s ease;
 	}
 
+	@supports (backdrop-filter: blur(1px)) {
+		.site-nav {
+			backdrop-filter: blur(22px) saturate(1.28);
+		}
+	}
+
 	.site-nav.light {
 		border-color: rgba(0, 0, 235, 0.08);
 		background: rgba(255, 255, 255, 0.72);
@@ -932,6 +938,12 @@
 			background: rgba(2, 2, 42, 0.78);
 			backdrop-filter: blur(18px);
 			-webkit-backdrop-filter: blur(18px);
+		}
+
+		@supports (backdrop-filter: blur(1px)) {
+			.nav-links {
+				backdrop-filter: blur(18px);
+			}
 		}
 
 		.site-nav {
