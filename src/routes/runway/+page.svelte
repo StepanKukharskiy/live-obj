@@ -226,6 +226,7 @@
 			let targetTimeSpeed = 0.006;
 			let morphAmount = 0;
 			let targetMorph = 0;
+			let cursorEnergy = 0;
 
 			renderer.setClearColor(0x000000, 0);
 			fluidHost.appendChild(renderer.domElement);
@@ -243,8 +244,7 @@
 			};
 
 			triggerFluid = (strength = 0.32) => {
-				targetMorph = Math.max(targetMorph, strength);
-				targetTimeSpeed = Math.max(targetTimeSpeed, 0.006 + strength * 0.024);
+				cursorEnergy = Math.min(0.5, Math.max(cursorEnergy, strength));
 			};
 
 			const animate = (frameTime: number) => {
@@ -252,11 +252,14 @@
 				if (frameTime - lastFrameTime < 1000 / 30) return;
 				lastFrameTime = frameTime;
 
+				const elapsed = frameTime * 0.001;
+				const ambientMorph = 0.16 + (0.5 + 0.5 * Math.sin(elapsed * 0.22)) * 0.18;
+				targetMorph = Math.min(0.78, ambientMorph + cursorEnergy);
+				targetTimeSpeed = 0.0055 + ambientMorph * 0.006 + cursorEnergy * 0.022;
 				timeSpeed += (targetTimeSpeed - timeSpeed) * 0.045;
 				time += timeSpeed;
-				targetTimeSpeed += (0.006 - targetTimeSpeed) * 0.018;
 				morphAmount += (targetMorph - morphAmount) * 0.05;
-				targetMorph += (0 - targetMorph) * 0.015;
+				cursorEnergy += (0 - cursorEnergy) * 0.025;
 
 				uniforms.u_time.value = time;
 				uniforms.u_morph.value = morphAmount;
@@ -295,15 +298,11 @@
 		const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
 		pointer.x = (event.clientX - rect.left) / rect.width;
 		pointer.y = 1 - (event.clientY - rect.top) / rect.height;
-		triggerFluid?.(0.24);
-	}
-
-	function pressField() {
-		triggerFluid?.(1);
+		triggerFluid?.(0.36);
 	}
 
 	function releaseFieldPointer() {
-		triggerFluid?.(0.12);
+		triggerFluid?.(0.04);
 	}
 
 	const pathways = [
@@ -385,7 +384,6 @@
 			class="hero"
 			aria-labelledby="hero-title"
 			onpointermove={updateFieldPointer}
-			onpointerdown={pressField}
 			onpointerleave={releaseFieldPointer}
 		>
 			<div class="hero-shade"></div>
