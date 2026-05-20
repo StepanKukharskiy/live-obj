@@ -1,152 +1,289 @@
 <script lang="ts">
 	import gehryVideo from '$lib/assets/Gehry.mp4';
 	import { onMount } from 'svelte';
+	import type {
+		Camera,
+		Mesh,
+		PlaneGeometry,
+		Scene,
+		ShaderMaterial,
+		Vector2,
+		WebGLRenderer
+	} from 'three';
 
 	let menuOpen = $state(false);
 	let navLight = $state(false);
-	let fieldCanvas: HTMLCanvasElement | null = $state(null);
-	let renderFieldNow: (() => void) | null = null;
+	let fluidHost: HTMLDivElement | null = $state(null);
+	let triggerFluid: ((strength?: number) => void) | null = null;
 
 	const pointer = {
-		x: 0,
-		y: 0,
-		active: false
+		x: 0.5,
+		y: 0.5
 	};
+
+	const fluidVertexShader = `
+		varying vec2 vUv;
+
+		void main() {
+			vUv = uv;
+			gl_Position = vec4(position.xy, 0.0, 1.0);
+		}
+	`;
+
+	const fluidFragmentShader = `
+		precision highp float;
+
+		uniform vec2 u_resolution;
+		uniform float u_time;
+		uniform float u_morph;
+		uniform vec2 u_pointer;
+		varying vec2 vUv;
+
+		float smin(float a, float b, float k) {
+			float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+			return mix(b, a, h) - k * h * (1.0 - h);
+		}
+
+		mat2 rot(float a) {
+			float s = sin(a);
+			float c = cos(a);
+			return mat2(c, -s, s, c);
+		}
+
+		float sdTorus(vec3 p, vec2 t) {
+			vec2 q = vec2(length(p.xz) - t.x, p.y);
+			return length(q) - t.y;
+		}
+
+		float sdBox(vec3 p, vec3 b) {
+			vec3 q = abs(p) - b;
+			return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+		}
+
+		float map(vec3 p) {
+			vec3 bp = p;
+			bp.xy -= (u_pointer - 0.5) * u_morph * 0.9;
+
+			vec3 p1 = bp;
+			p1.yz *= rot(u_time * 0.34);
+			p1.xz *= rot(u_time * 0.24);
+			float d1 = sdTorus(p1, vec2(1.2, 0.3));
+
+			vec3 p2 = bp;
+			p2.x += sin(u_time * 0.95) * 2.0;
+			p2.y += cos(u_time * 0.72) * 1.5;
+			p2.z += sin(u_time * 0.56) * 1.0;
+			float d2 = length(p2) - 0.6;
+
+			vec3 p3 = bp;
+			p3.x += cos(u_time * 0.64) * 2.2;
+			p3.y += sin(u_time * 0.88) * 1.8;
+			p3.z += cos(u_time * 1.04) * 1.2;
+			float d3 = length(p3) - 0.5;
+
+			vec3 p4 = bp;
+			p4.x += sin(u_time * 1.12) * 2.5;
+			p4.y += cos(u_time * 0.96) * 1.5;
+			p4.z += sin(u_time * 0.72) * 2.0;
+			p4.xy *= rot(u_time * 0.64);
+			p4.yz *= rot(u_time * 0.56);
+			float d4 = sdBox(p4, vec3(0.5));
+
+			vec3 p5 = bp;
+			p5.x += cos(u_time * 0.88) * -2.0;
+			p5.y += sin(u_time * 1.28) * -1.8;
+			p5.z += cos(u_time * 0.64) * -2.0;
+			p5.xz *= rot(u_time * 0.88);
+			p5.yz *= rot(u_time * 1.04);
+			float d5 = sdBox(p5, vec3(0.4));
+
+			float blend = 0.72 + u_morph * 2.4;
+			float d = smin(d1, d2, blend);
+			d = smin(d, d3, blend);
+			d = smin(d, d4, blend);
+			d = smin(d, d5, blend);
+
+			d += sin(p.x * 2.0 + u_time) * sin(p.y * 2.0 + u_time) * sin(p.z * 2.0) * 0.045;
+
+			return d;
+		}
+
+		vec3 calcNormal(vec3 p) {
+			vec2 e = vec2(0.01, 0.0);
+			return normalize(vec3(
+				map(p + e.xyy) - map(p - e.xyy),
+				map(p + e.yxy) - map(p - e.yxy),
+				map(p + e.yyx) - map(p - e.yyx)
+			));
+		}
+
+		void main() {
+			vec2 uv = gl_FragCoord.xy / u_resolution.xy;
+			uv -= 0.5;
+			uv.x *= u_resolution.x / u_resolution.y;
+
+			vec3 ro = vec3(uv * 4.25, -10.0);
+			vec3 rd = normalize(vec3(0.0, 0.0, 1.0));
+
+			float t = 0.0;
+			vec3 p = ro;
+
+			for (int i = 0; i < 64; i++) {
+				p = ro + rd * t;
+				float d = map(p);
+				if (d < 0.004 || t > 25.0) break;
+				t += d;
+			}
+
+			float vignette = smoothstep(1.2, 0.05, length(uv));
+			vec3 backgroundColor = vec3(0.006, 0.008, 0.065) + vec3(0.0, 0.0, 0.18) * vignette;
+			vec3 color = backgroundColor;
+
+			if (t < 25.0) {
+				vec3 n = calcNormal(p);
+				vec3 viewDir = normalize(-rd);
+				float caAmount = 0.1;
+
+				vec3 vR = normalize(viewDir + vec3(caAmount, 0.0, 0.0));
+				vec3 vG = viewDir;
+				vec3 vB = normalize(viewDir - vec3(caAmount, 0.0, 0.0));
+
+				float fresnelR = pow(1.0 - max(dot(n, vR), 0.0), 2.5);
+				float fresnelG = pow(1.0 - max(dot(n, vG), 0.0), 2.5);
+				float fresnelB = pow(1.0 - max(dot(n, vB), 0.0), 2.5);
+				vec3 fresnelCA = vec3(fresnelR, fresnelG, fresnelB);
+
+				vec3 baseColor = vec3(0.01, 0.03, 0.1);
+				vec3 lightDir = normalize(vec3(1.0, 1.0, -1.0));
+				float diff = max(dot(n, lightDir), 0.0);
+				vec3 objectColor = baseColor + vec3(0.0, 0.4, 0.9) * diff * 0.5;
+
+				vec3 iridescence = 0.5 + 0.5 * cos(u_time + p.y * 2.0 + vec3(0.0, 2.0, 4.0));
+				objectColor += fresnelCA * iridescence * 1.55;
+				objectColor += vec3(fresnelR * 1.1, 0.0, fresnelB * 1.18);
+
+				vec3 halfR = normalize(lightDir + vR);
+				vec3 halfG = normalize(lightDir + vG);
+				vec3 halfB = normalize(lightDir + vB);
+				float specR = pow(max(dot(n, halfR), 0.0), 64.0);
+				float specG = pow(max(dot(n, halfG), 0.0), 64.0);
+				float specB = pow(max(dot(n, halfB), 0.0), 64.0);
+				objectColor += vec3(specR, specG, specB) * 1.15;
+				color = objectColor;
+			}
+
+			gl_FragColor = vec4(color, 1.0);
+		}
+	`;
 
 	onMount(() => {
 		const updateNavTheme = () => {
 			navLight = window.scrollY > window.innerHeight * 0.82;
 		};
 
-		let animationFrame = 0;
-		let lastFrameTime = 0;
-		const targetFrameDuration = 1000 / 30;
-
-		function resizeFieldCanvas() {
-			const context = fieldCanvas?.getContext('2d');
-			if (!fieldCanvas || !context) return;
-			const rect = fieldCanvas.getBoundingClientRect();
-			const density = 1;
-			fieldCanvas.width = Math.max(1, Math.floor(rect.width * density));
-			fieldCanvas.height = Math.max(1, Math.floor(rect.height * density));
-			context.setTransform(density, 0, 0, density, 0, 0);
-		}
+		let disposed = false;
+		let cleanupFluid: (() => void) | null = null;
 
 		updateNavTheme();
-		resizeFieldCanvas();
 		window.addEventListener('scroll', updateNavTheme, { passive: true });
 		window.addEventListener('resize', updateNavTheme);
-		window.addEventListener('resize', resizeFieldCanvas);
 
-		function drawVectorField(time: number, shouldContinue = true) {
-			if (shouldContinue && time - lastFrameTime < targetFrameDuration) {
-				animationFrame = window.requestAnimationFrame(drawVectorField);
-				return;
-			}
+		void (async () => {
+			const THREE = await import('three');
+			if (disposed || !fluidHost) return;
 
-			lastFrameTime = time;
-			const context = fieldCanvas?.getContext('2d');
-			if (!fieldCanvas || !context) {
-				if (shouldContinue) animationFrame = window.requestAnimationFrame(drawVectorField);
-				return;
-			}
+			const renderer: WebGLRenderer = new THREE.WebGLRenderer({
+				alpha: true,
+				antialias: true,
+				powerPreference: 'high-performance'
+			});
+			const scene: Scene = new THREE.Scene();
+			const camera: Camera = new THREE.Camera();
+			const uniforms: {
+				u_resolution: { value: Vector2 };
+				u_time: { value: number };
+				u_morph: { value: number };
+				u_pointer: { value: Vector2 };
+			} = {
+				u_resolution: { value: new THREE.Vector2(1, 1) },
+				u_time: { value: 0 },
+				u_morph: { value: 0 },
+				u_pointer: { value: new THREE.Vector2(pointer.x, pointer.y) }
+			};
+			const geometry: PlaneGeometry = new THREE.PlaneGeometry(2, 2);
+			const material: ShaderMaterial = new THREE.ShaderMaterial({
+				uniforms,
+				vertexShader: fluidVertexShader,
+				fragmentShader: fluidFragmentShader,
+				depthTest: false,
+				depthWrite: false
+			});
+			const mesh: Mesh = new THREE.Mesh(geometry, material);
+			let animationFrame = 0;
+			let lastFrameTime = 0;
+			let time = 0;
+			let timeSpeed = 0.006;
+			let targetTimeSpeed = 0.006;
+			let morphAmount = 0;
+			let targetMorph = 0;
 
-			const rect = fieldCanvas.getBoundingClientRect();
-			const density = 1;
-			const nextWidth = Math.max(1, Math.floor(rect.width * density));
-			const nextHeight = Math.max(1, Math.floor(rect.height * density));
+			renderer.setClearColor(0x000000, 0);
+			fluidHost.appendChild(renderer.domElement);
+			scene.add(mesh);
 
-			if (fieldCanvas.width !== nextWidth || fieldCanvas.height !== nextHeight) {
-				fieldCanvas.width = nextWidth;
-				fieldCanvas.height = nextHeight;
-				context.setTransform(density, 0, 0, density, 0, 0);
-			}
+			const resizeFluid = () => {
+				if (!fluidHost) return;
+				const rect = fluidHost.getBoundingClientRect();
+				const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.2);
+				const width = Math.max(1, rect.width);
+				const height = Math.max(1, rect.height);
+				renderer.setPixelRatio(pixelRatio);
+				renderer.setSize(width, height, false);
+				uniforms.u_resolution.value.set(width * pixelRatio, height * pixelRatio);
+			};
 
-			if (!fieldCanvas || !context) return;
-			const width = fieldCanvas.clientWidth;
-			const height = fieldCanvas.clientHeight;
-			if (width === 0 || height === 0) {
-				if (shouldContinue) animationFrame = window.requestAnimationFrame(drawVectorField);
-				return;
-			}
+			triggerFluid = (strength = 0.32) => {
+				targetMorph = Math.max(targetMorph, strength);
+				targetTimeSpeed = Math.max(targetTimeSpeed, 0.006 + strength * 0.024);
+			};
 
-			const spacing = Math.max(34, Math.min(60, width / 25));
-			const lineLength = spacing * 0.76;
-			const driftX = Math.sin(time * 0.00018) * spacing * 0.9;
-			const driftY = Math.cos(time * 0.00016) * spacing * 0.72;
-			const fieldPhase = time * 0.00042;
-			const swirlPhase = time * 0.00034;
+			const animate = (frameTime: number) => {
+				animationFrame = window.requestAnimationFrame(animate);
+				if (frameTime - lastFrameTime < 1000 / 30) return;
+				lastFrameTime = frameTime;
 
-			context.clearRect(0, 0, width, height);
-			context.lineCap = 'round';
-			context.lineWidth = 1.45;
-			context.shadowBlur = 0;
-			context.globalCompositeOperation = 'lighter';
+				timeSpeed += (targetTimeSpeed - timeSpeed) * 0.045;
+				time += timeSpeed;
+				targetTimeSpeed += (0.006 - targetTimeSpeed) * 0.018;
+				morphAmount += (targetMorph - morphAmount) * 0.05;
+				targetMorph += (0 - targetMorph) * 0.015;
 
-			for (let y = spacing * 0.55; y < height; y += spacing) {
-				for (let x = spacing * 0.5; x < width; x += spacing) {
-					const baseX =
-						x + driftX + Math.sin(time * 0.00036 + y * 0.014 + x * 0.004) * spacing * 0.44;
-					const baseY =
-						y + driftY + Math.cos(time * 0.00032 + x * 0.011 - y * 0.004) * spacing * 0.38;
-					const nx = baseX / width;
-					const ny = baseY / height;
-					let angle =
-						Math.sin(nx * 5.2 + fieldPhase) * 0.64 +
-						Math.cos(ny * 5.8 - fieldPhase * 0.9) * 0.54 +
-						Math.sin((nx + ny) * 3.2 + swirlPhase) * 0.52 +
-						nx * 1.1 -
-						ny * 0.5;
-					let intensity = 0.62;
-					let drawX = baseX;
-					let drawY = baseY;
-					let pointerInfluence = 0;
+				uniforms.u_time.value = time;
+				uniforms.u_morph.value = morphAmount;
+				uniforms.u_pointer.value.set(pointer.x, pointer.y);
+				renderer.render(scene, camera);
+			};
 
-					if (pointer.active) {
-						const dx = x - pointer.x;
-						const dy = y - pointer.y;
-						const distance = Math.hypot(dx, dy) || 1;
-						const radius = Math.min(width, height) * 0.58;
-						pointerInfluence = Math.max(0, 1 - distance / radius);
-						const smoothInfluence =
-							pointerInfluence * pointerInfluence * (3 - 2 * pointerInfluence);
-						const tangent = Math.atan2(dy, dx) + Math.PI / 2;
-						const displacement = smoothInfluence * 120;
+			resizeFluid();
+			window.addEventListener('resize', resizeFluid);
+			animationFrame = window.requestAnimationFrame(animate);
 
-						drawX += (dx / distance) * displacement;
-						drawY += (dy / distance) * displacement;
-						angle = angle * (1 - smoothInfluence) + tangent * smoothInfluence;
-						intensity += smoothInfluence * 1.05;
-					}
-
-					const pulse = 0.64 + Math.sin(time * 0.00042 + nx * 7 + ny * 5) * 0.2;
-					const alpha = Math.min(0.95, intensity * pulse);
-					const activeLineLength = lineLength * (1 + pointerInfluence * 0.8);
-					const dx = Math.cos(angle) * activeLineLength;
-					const dy = Math.sin(angle) * activeLineLength;
-					context.strokeStyle = `rgba(204, 224, 255, ${alpha * 0.72})`;
-					context.beginPath();
-					context.moveTo(drawX - dx / 2, drawY - dy / 2);
-					context.lineTo(drawX + dx / 2, drawY + dy / 2);
-					context.stroke();
-				}
-			}
-
-			context.globalCompositeOperation = 'source-over';
-
-			if (shouldContinue) animationFrame = window.requestAnimationFrame(drawVectorField);
-		}
-
-		renderFieldNow = () => drawVectorField(window.performance.now(), false);
-
-		animationFrame = window.requestAnimationFrame(drawVectorField);
+			cleanupFluid = () => {
+				window.removeEventListener('resize', resizeFluid);
+				window.cancelAnimationFrame(animationFrame);
+				geometry.dispose();
+				material.dispose();
+				renderer.dispose();
+				renderer.domElement.remove();
+			};
+		})();
 
 		return () => {
+			disposed = true;
 			window.removeEventListener('scroll', updateNavTheme);
 			window.removeEventListener('resize', updateNavTheme);
-			window.removeEventListener('resize', resizeFieldCanvas);
-			window.cancelAnimationFrame(animationFrame);
-			renderFieldNow = null;
+			cleanupFluid?.();
+			triggerFluid = null;
 		};
 	});
 
@@ -156,15 +293,17 @@
 
 	function updateFieldPointer(event: PointerEvent) {
 		const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-		pointer.x = event.clientX - rect.left;
-		pointer.y = event.clientY - rect.top;
-		pointer.active = true;
-		renderFieldNow?.();
+		pointer.x = (event.clientX - rect.left) / rect.width;
+		pointer.y = 1 - (event.clientY - rect.top) / rect.height;
+		triggerFluid?.(0.24);
+	}
+
+	function pressField() {
+		triggerFluid?.(1);
 	}
 
 	function releaseFieldPointer() {
-		pointer.active = false;
-		renderFieldNow?.();
+		triggerFluid?.(0.12);
 	}
 
 	const pathways = [
@@ -246,10 +385,11 @@
 			class="hero"
 			aria-labelledby="hero-title"
 			onpointermove={updateFieldPointer}
+			onpointerdown={pressField}
 			onpointerleave={releaseFieldPointer}
 		>
 			<div class="hero-shade"></div>
-			<canvas bind:this={fieldCanvas} class="vector-field" aria-hidden="true"></canvas>
+			<div bind:this={fluidHost} class="fluid-field" aria-hidden="true"></div>
 
 			<div class="hero-content">
 				<p class="eyebrow">AI-native 3D modelling</p>
@@ -284,8 +424,8 @@
 
 		<section class="thesis">
 			<p>
-				Designed by architects for architects, fashion designers, game designers, and creators. It’s
-				your ultimate playground for architectural massing, stylized objects, low-poly scenes,
+				Designed by architects for architects, fashion designers, game designers, and creators.
+				It’s your ultimate playground for architectural massing, stylized objects, low-poly scenes,
 				product concepts, and sculptural forms.
 			</p>
 		</section>
@@ -295,7 +435,8 @@
 				<p class="eyebrow">Live OBJ workflow</p>
 				<h2>Vibe modelling for the messy stage before CAD.</h2>
 				<p>
-					Prompt, inspect, tune metadata, and keep moving while the form is still becoming itself.
+					Prompt, inspect, tune metadata, and keep moving while the form is still becoming
+					itself.
 				</p>
 			</article>
 
@@ -344,24 +485,10 @@
 	}
 
 	.runway-page {
-		--spell-ink: #080816;
-		--spell-night: #02022a;
-		--spell-blue: #0000eb;
-		--spell-blue-hover: #0000c0;
-		--spell-muted: rgba(8, 8, 22, 0.62);
-		--spell-radius-sm: 8px;
-		--spell-radius-md: 12px;
-		--spell-radius-pill: 999px;
 		min-height: 100vh;
-		background: var(--spell-night);
+		background: #02022a;
 		font-family:
-			Inter,
-			ui-sans-serif,
-			system-ui,
-			-apple-system,
-			BlinkMacSystemFont,
-			'Segoe UI',
-			sans-serif;
+			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 	}
 
 	.site-header {
@@ -404,16 +531,6 @@
 			inset 0 1px 0 rgba(255, 255, 255, 0.9);
 	}
 
-	@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-		.site-nav {
-			background: rgba(2, 2, 42, 0.82);
-		}
-
-		.site-nav.light {
-			background: rgba(255, 255, 255, 0.94);
-		}
-	}
-
 	.brand {
 		display: flex;
 		align-items: center;
@@ -454,7 +571,7 @@
 	}
 
 	.site-nav.light .nav-links a:hover {
-		color: var(--spell-blue);
+		color: #0000eb;
 	}
 
 	.menu-button {
@@ -483,7 +600,7 @@
 	}
 
 	.site-nav.light .menu-button span {
-		background: var(--spell-blue);
+		background: #0000eb;
 	}
 
 	.hero {
@@ -515,23 +632,24 @@
 	}
 
 	.hero-shade {
-		background: linear-gradient(
-			180deg,
-			var(--spell-night) 0%,
-			#050566 52%,
-			var(--spell-night) 100%
-		);
+		background: linear-gradient(180deg, #02022a 0%, #050566 52%, #02022a 100%);
 	}
 
-	.vector-field {
+	.fluid-field {
 		position: absolute;
 		inset: 0;
 		display: block;
 		width: 100%;
 		height: 100%;
 		z-index: 1;
-		opacity: 0.92;
+		opacity: 0.96;
 		pointer-events: none;
+	}
+
+	.fluid-field :global(canvas) {
+		display: block;
+		width: 100%;
+		height: 100%;
 	}
 
 	.hero-content {
@@ -602,7 +720,7 @@
 
 	.primary-button {
 		background: #ffffff;
-		color: var(--spell-blue);
+		color: #0000eb;
 	}
 
 	.secondary-button {
@@ -617,7 +735,7 @@
 
 	.video-showcase {
 		padding: clamp(22px, 4vw, 56px);
-		background: var(--spell-night);
+		background: #02022a;
 	}
 
 	.showcase-video {
@@ -646,7 +764,7 @@
 		align-items: center;
 		min-height: 84px;
 		padding: 22px clamp(18px, 3vw, 34px);
-		background: var(--spell-night);
+		background: #02022a;
 		color: rgba(255, 255, 255, 0.78);
 		font-size: 16px;
 		font-weight: 760;
@@ -655,13 +773,13 @@
 
 	.pathways a:hover {
 		color: #ffffff;
-		background: var(--spell-blue);
+		background: #0000eb;
 	}
 
 	.thesis {
 		padding: clamp(76px, 12vw, 160px) clamp(18px, 5vw, 72px);
 		background: #ffffff;
-		color: var(--spell-ink);
+		color: #080816;
 	}
 
 	.thesis p {
@@ -679,7 +797,7 @@
 		gap: 18px;
 		padding: clamp(18px, 4vw, 56px);
 		background: #f4f4f6;
-		color: var(--spell-ink);
+		color: #080816;
 	}
 
 	.large-panel,
@@ -694,7 +812,9 @@
 		flex-direction: column;
 		justify-content: flex-end;
 		padding: clamp(26px, 4vw, 46px);
-		background: linear-gradient(180deg, rgba(0, 0, 235, 0.12), rgba(255, 255, 255, 0) 45%), #ffffff;
+		background:
+			linear-gradient(180deg, rgba(0, 0, 235, 0.12), rgba(255, 255, 255, 0) 45%),
+			#ffffff;
 	}
 
 	.large-panel h2 {
@@ -710,7 +830,7 @@
 	.large-panel p:last-child {
 		max-width: 520px;
 		margin-bottom: 0;
-		color: var(--spell-muted);
+		color: rgba(8, 8, 22, 0.62);
 		font-size: 18px;
 		line-height: 1.5;
 	}
@@ -739,7 +859,7 @@
 
 	.workflow-card p {
 		margin: 0;
-		color: var(--spell-muted);
+		color: rgba(8, 8, 22, 0.62);
 		font-size: 15px;
 		line-height: 1.5;
 	}
@@ -747,7 +867,7 @@
 	.credits {
 		padding: clamp(58px, 9vw, 112px) clamp(18px, 5vw, 72px);
 		background: #ffffff;
-		color: var(--spell-ink);
+		color: #080816;
 		text-align: center;
 	}
 
@@ -759,7 +879,7 @@
 	}
 
 	.credits a {
-		color: var(--spell-blue);
+		color: #0000eb;
 		text-decoration: none;
 	}
 
@@ -769,7 +889,7 @@
 
 	.site-footer {
 		padding: 28px clamp(18px, 5vw, 72px);
-		background: var(--spell-night);
+		background: #02022a;
 		color: rgba(255, 255, 255, 0.58);
 		text-align: center;
 	}
@@ -814,12 +934,6 @@
 			background: rgba(2, 2, 42, 0.78);
 			backdrop-filter: blur(18px);
 			-webkit-backdrop-filter: blur(18px);
-		}
-
-		@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-			.nav-links {
-				background: rgba(2, 2, 42, 0.92);
-			}
 		}
 
 		.site-nav {
