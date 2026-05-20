@@ -111,6 +111,12 @@ npm run build
 npm run preview
 ```
 
+## Legal
+
+- [MIT License](LICENSE)
+- [Privacy Policy](/src/routes/privacy/+page.svelte)
+- [Terms of Use](/src/routes/terms/+page.svelte)
+
 ## Live OBJ Syntax Examples
 
 ### Procedural Generation

@@ -355,7 +355,10 @@
 	/>
 	<meta property="og:image:width" content="1200" />
 	<meta property="og:image:height" content="630" />
-	<meta property="og:image:alt" content="Spellshape - vibemodelling for the messy stage before CAD." />
+	<meta
+		property="og:image:alt"
+		content="Spellshape - vibemodelling for the messy stage before CAD."
+	/>
 	<meta name="twitter:card" content="summary_large_image" />
 	<meta name="twitter:title" content="Spellshape" />
 	<meta
@@ -450,8 +453,8 @@
 
 		<section class="thesis">
 			<p>
-				Designed by architects for architects, fashion designers, game designers, and creators.
-				It’s your ultimate playground for architectural massing, stylized objects, low-poly scenes,
+				Designed by architects for architects, fashion designers, game designers, and creators. It’s
+				your ultimate playground for architectural massing, stylized objects, low-poly scenes,
 				product concepts, and sculptural forms.
 			</p>
 		</section>
@@ -461,8 +464,7 @@
 				<p class="eyebrow">Live OBJ workflow</p>
 				<h2>Vibemodelling for the messy stage before CAD.</h2>
 				<p>
-					Prompt, inspect, tune metadata, and keep moving while the form is still becoming
-					itself.
+					Prompt, inspect, tune metadata, and keep moving while the form is still becoming itself.
 				</p>
 			</article>
 
@@ -495,7 +497,11 @@
 	</main>
 
 	<footer class="site-footer">
-		<p>&copy; 2026 Spellshape. Portable OBJ. Editable in Spellshape. AI-native by design.</p>
+		<p>
+			&copy; 2026 Spellshape. Portable OBJ. Editable in Spellshape. AI-native by design.
+			<a href="/privacy">Privacy</a>
+			<a href="/terms">Terms</a>
+		</p>
 	</footer>
 </div>
 
@@ -513,8 +519,15 @@
 	.spellshape-page {
 		min-height: 100vh;
 		background: #02022a;
+		color: #f7f7fb;
 		font-family:
-			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+			Inter,
+			ui-sans-serif,
+			system-ui,
+			-apple-system,
+			BlinkMacSystemFont,
+			'Segoe UI',
+			sans-serif;
 	}
 
 	.site-header {
@@ -844,9 +857,7 @@
 		flex-direction: column;
 		justify-content: flex-end;
 		padding: clamp(26px, 4vw, 46px);
-		background:
-			linear-gradient(180deg, rgba(0, 0, 235, 0.12), rgba(255, 255, 255, 0) 45%),
-			#ffffff;
+		background: linear-gradient(180deg, rgba(0, 0, 235, 0.12), rgba(255, 255, 255, 0) 45%), #ffffff;
 	}
 
 	.large-panel h2 {
@@ -930,6 +941,18 @@
 		margin: 0;
 		font-size: 14px;
 		line-height: 1.4;
+	}
+
+	.site-footer a {
+		color: rgba(255, 255, 255, 0.78);
+		font-weight: 700;
+		text-decoration: none;
+		margin-left: 14px;
+	}
+
+	.site-footer a:hover {
+		color: #ffffff;
+		text-decoration: underline;
 	}
 
 	@media (max-width: 900px) {

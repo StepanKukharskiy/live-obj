@@ -19,7 +19,14 @@
 			image: ['gemini-3.1-flash-image-preview']
 		},
 		together: {
-			text: ['deepseek-ai/DeepSeek-V4-Pro', 'MiniMaxAI/MiniMax-M2.7', 'moonshotai/Kimi-K2.6', 'zai-org/GLM-5.1', 'google/gemma-4-31B-it', 'openai/gpt-oss-120b'],
+			text: [
+				'deepseek-ai/DeepSeek-V4-Pro',
+				'MiniMaxAI/MiniMax-M2.7',
+				'moonshotai/Kimi-K2.6',
+				'zai-org/GLM-5.1',
+				'google/gemma-4-31B-it',
+				'openai/gpt-oss-120b'
+			],
 			image: ['black-forest-labs/FLUX.2-pro', 'Qwen/Qwen-Image-2.0']
 		}
 	};
@@ -31,7 +38,8 @@
 		},
 		google: {
 			text: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-			image: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent'
+			image:
+				'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent'
 		},
 		together: {
 			text: 'https://api.together.xyz/v1/chat/completions',
@@ -43,18 +51,41 @@
 	const DEFAULT_TEXT_URLS = Object.values(PROVIDER_DEFAULT_URLS).map((defaults) => defaults.text);
 	const DEFAULT_IMAGE_URLS = Object.values(PROVIDER_DEFAULT_URLS).map((defaults) => defaults.image);
 
-	let { settings = $bindable<ProviderSettings>({ provider: 'openai', apiKey: '', apiUrl: 'https://api.openai.com/v1/chat/completions', imageUrl: 'https://api.openai.com/v1/images/edits', textModel: 'gpt-5.5', imageModel: 'gpt-image-1.5', rememberMe: false }), busy = false }: { settings?: ProviderSettings; busy?: boolean } = $props();
+	let {
+		settings = $bindable<ProviderSettings>({
+			provider: 'openai',
+			apiKey: '',
+			apiUrl: 'https://api.openai.com/v1/chat/completions',
+			imageUrl: 'https://api.openai.com/v1/images/edits',
+			textModel: 'gpt-5.5',
+			imageModel: 'gpt-image-1.5',
+			rememberMe: false
+		}),
+		busy = false
+	}: { settings?: ProviderSettings; busy?: boolean } = $props();
 
-	let textModels = $derived(PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS]?.text || []);
-	let imageModels = $derived(PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS]?.image || []);
+	let textModels = $derived(
+		PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS]?.text || []
+	);
+	let imageModels = $derived(
+		PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS]?.image || []
+	);
 
-	let textModelChoice = $derived(textModels.includes(settings.textModel) ? settings.textModel : CUSTOM);
-	let imageModelChoice = $derived(imageModels.includes(settings.imageModel) ? settings.imageModel : CUSTOM);
+	let textModelChoice = $derived(
+		textModels.includes(settings.textModel) ? settings.textModel : CUSTOM
+	);
+	let imageModelChoice = $derived(
+		imageModels.includes(settings.imageModel) ? settings.imageModel : CUSTOM
+	);
 
 	// Auto-update apiUrl, imageUrl, and models when provider changes
 	$effect(() => {
-		if (settings.provider && PROVIDER_DEFAULT_URLS[settings.provider as keyof typeof PROVIDER_DEFAULT_URLS]) {
-			const defaults = PROVIDER_DEFAULT_URLS[settings.provider as keyof typeof PROVIDER_DEFAULT_URLS];
+		if (
+			settings.provider &&
+			PROVIDER_DEFAULT_URLS[settings.provider as keyof typeof PROVIDER_DEFAULT_URLS]
+		) {
+			const defaults =
+				PROVIDER_DEFAULT_URLS[settings.provider as keyof typeof PROVIDER_DEFAULT_URLS];
 			const models = PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS];
 			if (!settings.apiUrl || DEFAULT_TEXT_URLS.includes(settings.apiUrl)) {
 				settings.apiUrl = defaults.text;
@@ -82,11 +113,26 @@
 	function chooseImageModel(v: string) {
 		settings.imageModel = v === CUSTOM ? '' : v;
 	}
+
+	function clearProviderSettings() {
+		settings.provider = 'openai';
+		settings.apiKey = '';
+		settings.apiUrl = PROVIDER_DEFAULT_URLS.openai.text;
+		settings.imageUrl = PROVIDER_DEFAULT_URLS.openai.image;
+		settings.textModel = PROVIDER_MODELS.openai.text[0];
+		settings.imageModel = PROVIDER_MODELS.openai.image[0];
+		settings.rememberMe = false;
+	}
 </script>
 
 <div class="provider-tab">
-	<p class="provider-note">Bring your own key. Settings apply to server-side requests.</p>
-	<label>Provider
+	<p class="provider-note">
+		Bring your own key. Requests pass through Spellshape's server route and are forwarded to your
+		selected provider. See <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy</a>
+		and <a href="/terms" target="_blank" rel="noopener noreferrer">Terms</a>.
+	</p>
+	<label
+		>Provider
 		<select bind:value={settings.provider} disabled={busy}>
 			<option value="openai">OpenAI</option>
 			<option value="google">Google</option>
@@ -95,14 +141,26 @@
 	</label>
 	<label class="provider-remember">
 		<input type="checkbox" bind:checked={settings.rememberMe} disabled={busy} />
-		<span>Remember me on this device</span>
+		<span>Remember provider settings on this device</span>
 	</label>
-	<label>API Key
-		<input type="password" bind:value={settings.apiKey} autocomplete="off" placeholder="YOUR API KEY" disabled={busy} />
+	<label
+		>API Key
+		<input
+			type="password"
+			bind:value={settings.apiKey}
+			autocomplete="off"
+			placeholder="YOUR API KEY"
+			disabled={busy}
+		/>
 	</label>
 
-	<label>Text Model
-		<select value={textModelChoice} onchange={(e) => chooseTextModel((e.currentTarget as HTMLSelectElement).value)} disabled={busy}>
+	<label
+		>Text Model
+		<select
+			value={textModelChoice}
+			onchange={(e) => chooseTextModel((e.currentTarget as HTMLSelectElement).value)}
+			disabled={busy}
+		>
 			{#each textModels as model (model)}
 				<option value={model}>{model}</option>
 			{/each}
@@ -110,13 +168,24 @@
 		</select>
 	</label>
 	{#if textModelChoice === CUSTOM}
-		<label>Custom Text Model
-			<input type="text" bind:value={settings.textModel} placeholder="enter model id" disabled={busy} />
+		<label
+			>Custom Text Model
+			<input
+				type="text"
+				bind:value={settings.textModel}
+				placeholder="enter model id"
+				disabled={busy}
+			/>
 		</label>
 	{/if}
 
-	<label>Image Model
-		<select value={imageModelChoice} onchange={(e) => chooseImageModel((e.currentTarget as HTMLSelectElement).value)} disabled={busy}>
+	<label
+		>Image Model
+		<select
+			value={imageModelChoice}
+			onchange={(e) => chooseImageModel((e.currentTarget as HTMLSelectElement).value)}
+			disabled={busy}
+		>
 			{#each imageModels as model (model)}
 				<option value={model}>{model}</option>
 			{/each}
@@ -124,16 +193,39 @@
 		</select>
 	</label>
 	{#if imageModelChoice === CUSTOM}
-		<label>Custom Image Model
-			<input type="text" bind:value={settings.imageModel} placeholder="enter model id" disabled={busy} />
+		<label
+			>Custom Image Model
+			<input
+				type="text"
+				bind:value={settings.imageModel}
+				placeholder="enter model id"
+				disabled={busy}
+			/>
 		</label>
 	{/if}
+	<button type="button" class="provider-clear" onclick={clearProviderSettings} disabled={busy}>
+		Clear provider settings
+	</button>
 </div>
 
 <style>
-	.provider-tab { display: grid; gap: 10px; padding: 12px 2px; }
-	label { display: grid; gap: 6px; font-size: 12px; color: #334155; }
-	input { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+	.provider-tab {
+		display: grid;
+		gap: 10px;
+		padding: 12px 2px;
+	}
+	label {
+		display: grid;
+		gap: 6px;
+		font-size: 12px;
+		color: #334155;
+	}
+	input {
+		border: 1px solid #cbd5e1;
+		border-radius: 8px;
+		padding: 8px 10px;
+		font-size: 13px;
+	}
 	select {
 		box-sizing: border-box;
 		max-width: 140px;
@@ -154,6 +246,42 @@
 		opacity: 0.65;
 	}
 
-	.provider-note { margin: 0; font-size: 12px; color: #64748b; }
-	.provider-remember { grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
+	.provider-note {
+		margin: 0;
+		font-size: 12px;
+		color: #64748b;
+	}
+	.provider-note a {
+		color: #1d4ed8;
+		text-decoration: none;
+		font-weight: 700;
+	}
+	.provider-note a:hover {
+		text-decoration: underline;
+	}
+	.provider-remember {
+		grid-template-columns: auto 1fr;
+		align-items: center;
+		gap: 8px;
+	}
+	.provider-clear {
+		justify-self: start;
+		border: 1px solid #cbd5e1;
+		border-radius: 8px;
+		background: #ffffff;
+		color: #334155;
+		padding: 8px 10px;
+		font: inherit;
+		font-size: 12px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+	.provider-clear:hover:not(:disabled) {
+		border-color: #94a3b8;
+		background: #f8fafc;
+	}
+	.provider-clear:disabled {
+		cursor: not-allowed;
+		opacity: 0.65;
+	}
 </style>
