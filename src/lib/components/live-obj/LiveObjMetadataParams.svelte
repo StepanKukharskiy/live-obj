@@ -17,6 +17,8 @@
 		options?: string[];
 	};
 
+	const SCENE_META_OBJECT_ID = '__scene__';
+
 	let {
 		liveObjText = '',
 		onLiveObjMetadataChange
@@ -176,7 +178,10 @@
 			}
 		}
 		const kind = params.type ?? params.kind ?? 'number';
-		return controlFromTokens(kind, { ...params, key: params.key ?? params.param ?? params.name ?? key });
+		return controlFromTokens(kind, {
+			...params,
+			key: params.key ?? params.param ?? params.name ?? key
+		});
 	};
 
 	const parseObjects = (text: string): MetaObject[] => {
@@ -184,7 +189,7 @@
 		try {
 			const lines = text.split(/\r?\n/);
 			const objects: MetaObject[] = [];
-			let activeObject: string | null = null;
+			let activeObject: string | null = SCENE_META_OBJECT_ID;
 			let activeSim: string | undefined;
 			let activeParams: Record<string, string> | null = null;
 			let activeDerivedParams: Record<string, string> | null = null;
@@ -201,7 +206,9 @@
 				if (Object.keys(merged).length === 0 && activeControls.length === 0) return;
 				const sources: Record<string, string> = {};
 				for (const [key, source] of Object.entries(activeParamSources)) sources[key] = source;
-				for (const key of Object.keys(activeParams ?? {})) sources[key] = 'params';
+				for (const key of Object.keys(activeParams ?? {})) {
+					sources[key] = activeObject === SCENE_META_OBJECT_ID ? 'scene_params' : 'params';
+				}
 				objects.push({
 					id: activeObject,
 					sim: activeSim,
@@ -315,6 +322,24 @@
 	) => {
 		if (typeof text !== 'string') return text;
 		const lines = text.split(/\r?\n/);
+		if (source === 'scene_params') {
+			let updatedExistingParam = false;
+			let insertAt = 0;
+			for (let i = 0; i < lines.length; i += 1) {
+				const trimmed = lines[i].trim();
+				if (/^o\s+/.test(trimmed)) break;
+				if (/^#@(scene|live_obj_version|workflow|up|units):/.test(trimmed)) insertAt = i + 1;
+				const paramsMatch = trimmed.match(/^#@params:\s*(.+)$/);
+				if (!paramsMatch || typeof paramsMatch[1] !== 'string') continue;
+				const parsed = parseParams(paramsMatch[1]);
+				parsed[key] = value.trim();
+				lines[i] = `#@params: ${serializeParams(parsed)}`;
+				updatedExistingParam = true;
+				break;
+			}
+			if (!updatedExistingParam) lines.splice(insertAt, 0, `#@params: ${key}=${value.trim()}`);
+			return lines.join('\n');
+		}
 		let activeObject: string | null = null;
 		let targetObjectLine = -1;
 		let updatedExistingParam = false;
@@ -455,7 +480,8 @@
 				selectedMetaObject.id,
 				key,
 				value,
-				'params'
+				selectedMetaObject.paramSources[key] ??
+					(selectedMetaObject.id === SCENE_META_OBJECT_ID ? 'scene_params' : 'params')
 			);
 			onLiveObjMetadataChange?.(updated);
 		} catch (e) {
@@ -486,7 +512,7 @@
 				<span class="planner-label-inline">Object</span>
 				<select class="planner-text-input" bind:value={selectedObjectId}>
 					{#each metaObjects as obj}
-						<option value={obj.id}>{obj.id}</option>
+						<option value={obj.id}>{obj.id === SCENE_META_OBJECT_ID ? 'Scene' : obj.id}</option>
 					{/each}
 				</select>
 			</label>

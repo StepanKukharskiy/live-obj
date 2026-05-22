@@ -809,6 +809,14 @@ f 4 5 1
 		);
 	}
 
+	function looksLikeAdditiveGeometryRequest(promptText: string): boolean {
+		const lower = promptText.toLowerCase();
+		if (!/\b(add|insert|include|attach|place|put)\b/.test(lower)) return false;
+		return !/\b(color|recolor|material|shader|texture|smooth|scale|resize|move|rotate|delete|remove|replace|rebuild|rename|convert)\b/.test(
+			lower
+		);
+	}
+
 	function shouldUseIterativeGeneration(args: {
 		text: string;
 		useProcedural: boolean;
@@ -816,6 +824,7 @@ f 4 5 1
 		hasImages: boolean;
 	}): boolean {
 		if (!args.isIterativeEdit) return true;
+		if (looksLikeAdditiveGeometryRequest(args.text)) return true;
 		if (looksLikeTargetedEdit(args.text)) return false;
 		return Boolean(args.text.trim() || args.hasImages);
 	}
@@ -962,8 +971,9 @@ f 4 5 1
 		initialImageUrls: string[];
 		model: string;
 		useProcedural: boolean;
+		currentLiveObj?: string;
 	}): Promise<IterativePlanSuccessPayload> {
-		const { text, initialImageUrls, model, useProcedural } = args;
+		const { text, initialImageUrls, model, useProcedural, currentLiveObj = '' } = args;
 		const res = await fetch('/api/live-obj/plan/stream', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -971,7 +981,7 @@ f 4 5 1
 				userMessage: text,
 				...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
 				...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
-				currentLiveObj: '',
+				currentLiveObj,
 				model,
 				useProcedural,
 				apiKey: providerSettings.apiKey?.trim() || undefined,
@@ -1067,23 +1077,34 @@ f 4 5 1
 		initialImageUrls: string[];
 		model: string;
 		useProcedural: boolean;
+		baseLiveObj?: string;
 	}) {
-		const { text, initialImageUrls, model, useProcedural } = args;
+		const { text, initialImageUrls, model, useProcedural, baseLiveObj = '' } = args;
 		let accumulatedUsage: TokenUsageSummary | undefined;
-		let workingLiveObj = emptyIterativeLiveObj(useProcedural);
+		const appendToCurrentScene = Boolean(baseLiveObj.trim());
+		let workingLiveObj = appendToCurrentScene
+			? baseLiveObj.trim()
+			: emptyIterativeLiveObj(useProcedural);
 		let combinedRaw = '';
 
 		iterativeGenerationActive = true;
 		try {
 			const planStartedAt = performance.now();
-			statusLine = 'Planning scene parts.';
-			appendProgressMessage('Planning the scene as separate buildable parts...');
-			showThinkingMessage('Thinking through scene parts...');
+			statusLine = appendToCurrentScene ? 'Planning additions.' : 'Planning scene parts.';
+			appendProgressMessage(
+				appendToCurrentScene
+					? 'Planning additions as separate buildable parts...'
+					: 'Planning the scene as separate buildable parts...'
+			);
+			showThinkingMessage(
+				appendToCurrentScene ? 'Thinking through additions...' : 'Thinking through scene parts...'
+			);
 			const planPayload = await requestIterativePlanWithStreaming({
 				text,
 				initialImageUrls,
 				model,
-				useProcedural
+				useProcedural,
+				currentLiveObj: appendToCurrentScene ? workingLiveObj : ''
 			});
 			clearThinkingMessage();
 
@@ -1185,7 +1206,9 @@ f 4 5 1
 				...msgs,
 				{
 					role: 'assistant',
-					content: `Built the scene in ${partCount} part${partCount === 1 ? '' : 's'}: ${summarizeObjectNames(names)}.`,
+					content: appendToCurrentScene
+						? `Added ${partCount} part${partCount === 1 ? '' : 's'} to the scene: ${summarizeObjectNames(names)}.`
+						: `Built the scene in ${partCount} part${partCount === 1 ? '' : 's'}: ${summarizeObjectNames(names)}.`,
 					historyContent: workingLiveObj,
 					...(accumulatedUsage ? { tokenUsage: accumulatedUsage } : {})
 				}
@@ -1363,7 +1386,13 @@ f 4 5 1
 					hasImages: initialImageUrls.length > 0
 				})
 			) {
-				await runIterativeSceneGeneration({ text, initialImageUrls, model, useProcedural });
+				await runIterativeSceneGeneration({
+					text,
+					initialImageUrls,
+					model,
+					useProcedural,
+					baseLiveObj: isIterativeEdit ? currentLiveObj : ''
+				});
 			} else {
 				appendProgressMessage(
 					isIterativeEdit

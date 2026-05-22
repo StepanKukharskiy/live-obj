@@ -15,6 +15,21 @@ const SUPPORTED_RAW_POST_OPS = new Set([
 	'tag'
 ]);
 
+const SUPPORTED_RAW_POST_ATTRIBUTES: Record<string, Set<string>> = {
+	transform: new Set(['position', 'rotation', 'scale', 'pivot']),
+	symmetrize: new Set(['axis', 'side', 'tolerance']),
+	mirror: new Set(['axis']),
+	array: new Set(['count', 'offset', 'centered', 'center', 'scale', 'position', 'pivot']),
+	deform: new Set(['position', 'expr', 'xyz']),
+	subdivide: new Set(['level']),
+	smooth: new Set(['iterations', 'strength']),
+	simplify: new Set(['ratio']),
+	snap_to_ground: new Set(['axis']),
+	center_origin: new Set(['axes']),
+	material: new Set(['name']),
+	tag: new Set(['value'])
+};
+
 const RAW_POST_SEMANTIC_META_KEYS = new Set([
 	'bbox',
 	'lock',
@@ -23,6 +38,15 @@ const RAW_POST_SEMANTIC_META_KEYS = new Set([
 	'constraint',
 	'variant'
 ]);
+
+type PostSyntaxIssue = {
+	message: string;
+};
+
+type PostOpScan = {
+	cmd: string;
+	body: string;
+};
 
 type RawPostObjectSummary = {
 	name: string;
@@ -38,8 +62,12 @@ export type RawPostValidationResult = {
 	objectNames: string[];
 };
 
-function postOpsFromMetaLines(metaLines: string[]): string[] {
-	const ops: string[] = [];
+function postOpsFromMetaLines(metaLines: string[]): {
+	ops: PostOpScan[];
+	issues: PostSyntaxIssue[];
+} {
+	const ops: PostOpScan[] = [];
+	const issues: PostSyntaxIssue[] = [];
 	let block: 'post' | 'ops' | 'other' = 'other';
 	for (const rawLine of metaLines) {
 		const line = rawLine.trim();
@@ -47,6 +75,13 @@ function postOpsFromMetaLines(metaLines: string[]): string[] {
 		const body = line.slice(2).trim();
 		if (body === 'post:') {
 			block = 'post';
+			continue;
+		}
+		if (/^post:\s+\S/i.test(body)) {
+			issues.push({
+				message: 'malformed #@post block syntax; use #@post: followed by #@ - op lines'
+			});
+			block = 'other';
 			continue;
 		}
 		if (body === 'ops:') {
@@ -58,18 +93,21 @@ function postOpsFromMetaLines(metaLines: string[]): string[] {
 			continue;
 		}
 		if (body.startsWith('post ')) {
-			ops.push(body.slice('post '.length).trim().split(/\s+/)[0] ?? '');
+			const opBody = body.slice('post '.length).trim();
+			ops.push({ cmd: (opBody.split(/\s+/)[0] ?? '').toLowerCase(), body: opBody });
 			block = 'other';
 			continue;
 		}
 		if (body.startsWith('-') && block === 'post') {
-			ops.push(body.slice(1).trim().split(/\s+/)[0] ?? '');
+			const opBody = body.slice(1).trim();
+			ops.push({ cmd: (opBody.split(/\s+/)[0] ?? '').toLowerCase(), body: opBody });
 		}
 		if (body.startsWith('-') && block === 'ops') {
-			ops.push(`#@ops:${body.slice(1).trim().split(/\s+/)[0] ?? ''}`);
+			const opBody = body.slice(1).trim();
+			ops.push({ cmd: `#@ops:${(opBody.split(/\s+/)[0] ?? '').toLowerCase()}`, body: opBody });
 		}
 	}
-	return ops.filter(Boolean);
+	return { ops: ops.filter((op) => op.cmd), issues };
 }
 
 function metaBody(line: string): string | undefined {
@@ -89,6 +127,14 @@ function hasVec3Attribute(body: string, key: string): boolean {
 
 function hasIdAttribute(body: string): boolean {
 	return /\bid\s*=\s*("[^"]+"|'[^']+'|[A-Za-z_][\w-]*)/i.test(body);
+}
+
+function hasAttribute(body: string, key: string): boolean {
+	return new RegExp(`\\b${key}\\s*=`, 'i').test(body);
+}
+
+function attributeNames(body: string): string[] {
+	return [...body.matchAll(/\b([A-Za-z_][\w-]*)\s*=/g)].map((match) => match[1].toLowerCase());
 }
 
 function faceRefs(line: string, vertexCount: number): number[] {
@@ -183,13 +229,36 @@ export function validateRawPostSource(sourceText: string): RawPostValidationResu
 				errors.push(`Object '${object.name}' has malformed #@anchor; expected id=name at=[x,y,z]`);
 			}
 		}
-		for (const op of postOpsFromMetaLines(object.metaLines)) {
-			if (op.startsWith('#@ops:')) {
+		const postScan = postOpsFromMetaLines(object.metaLines);
+		for (const issue of postScan.issues) {
+			errors.push(`Object '${object.name}' has ${issue.message}`);
+		}
+		for (const op of postScan.ops) {
+			if (op.cmd.startsWith('#@ops:')) {
 				errors.push(`Object '${object.name}' uses #@ops in raw-post mode; use #@post instead`);
 				continue;
 			}
-			if (!SUPPORTED_RAW_POST_OPS.has(op)) {
-				errors.push(`Object '${object.name}' has unsupported #@post op '${op}'`);
+			if (!SUPPORTED_RAW_POST_OPS.has(op.cmd)) {
+				errors.push(`Object '${object.name}' has unsupported #@post op '${op.cmd}'`);
+				continue;
+			}
+			const supportedAttributes = SUPPORTED_RAW_POST_ATTRIBUTES[op.cmd] ?? new Set<string>();
+			for (const attr of attributeNames(op.body)) {
+				if (!supportedAttributes.has(attr)) {
+					errors.push(
+						`Object '${object.name}' has unsupported #@post ${op.cmd} attribute '${attr}'`
+					);
+				}
+			}
+			if (
+				op.cmd === 'deform' &&
+				!hasAttribute(op.body, 'position') &&
+				!hasAttribute(op.body, 'expr') &&
+				!hasAttribute(op.body, 'xyz')
+			) {
+				errors.push(
+					`Object '${object.name}' has malformed #@post deform; expected position=[x,y,z]`
+				);
 			}
 		}
 	}

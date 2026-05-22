@@ -83,6 +83,20 @@ EXPR_FUNCTIONS = {
 }
 EXPR_CONSTANTS = {"pi": math.pi, "tau": math.tau}
 TEMPLATE_PLACEHOLDER_RE = re.compile(r"\$\{[^}]+\}|(?<!\[)\{[A-Za-z_][A-Za-z0-9_]*\}")
+SUPPORTED_POST_ATTRIBUTES = {
+    "transform": {"position", "rotation", "scale", "pivot"},
+    "symmetrize": {"axis", "side", "tolerance"},
+    "mirror": {"axis"},
+    "array": {"count", "offset", "centered", "center", "scale", "position", "pivot"},
+    "deform": {"position", "expr", "xyz"},
+    "subdivide": {"level"},
+    "smooth": {"iterations", "strength"},
+    "simplify": {"ratio"},
+    "snap_to_ground": {"axis"},
+    "center_origin": {"axes"},
+    "material": {"name"},
+    "tag": {"value"},
+}
 
 
 def warn(message: str) -> None:
@@ -253,6 +267,10 @@ def parse_post_ops(meta_lines: List[str]) -> List[Dict[str, Any]]:
         body = line[2:].strip()
         if body == "post:":
             block = "post"
+            continue
+        if body.lower().startswith("post:"):
+            warn("malformed #@post block syntax; use #@post: followed by #@ - op lines")
+            block = None
             continue
         if body.startswith("post "):
             parsed = parse_tokens(body[len("post ") :].strip())
@@ -712,6 +730,11 @@ def op_center_origin(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
 
 def validate_post_op(obj_name: str, op: Dict[str, Any]) -> None:
     cmd = str(op.get("cmd", "")).strip().lower()
+    supported_attrs = SUPPORTED_POST_ATTRIBUTES.get(cmd)
+    if supported_attrs is not None:
+        for key in op.keys():
+            if key != "cmd" and key not in supported_attrs:
+                warn(f"{obj_name}: unsupported #@post {cmd} attribute '{key}'")
     for key, value in op.items():
         if key == "cmd":
             continue
@@ -725,6 +748,8 @@ def validate_post_op(obj_name: str, op: Dict[str, Any]) -> None:
         warn(f"{obj_name}: tag uses name=; use tag value=...")
     if cmd == "snap_to_ground" and ("surface" in op or "anchor" in op):
         warn(f"{obj_name}: snap_to_ground only supports axis=x|y|z")
+    if cmd == "deform" and not any(k in op for k in ("position", "expr", "xyz")):
+        warn(f"{obj_name}: deform requires position=[x,y,z]")
 
 
 def apply_post_ops(obj: RawObject) -> None:

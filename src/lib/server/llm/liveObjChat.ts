@@ -140,6 +140,7 @@ Part rules:
 - Fit the part to the existing scene summary and dependencies.
 - Use y as the vertical/up axis unless the current scene summary says otherwise.
 - Keep geometry compact and clean: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell/roof. Use simple topology for the first pass; use supported smoothing/refinement metadata when a softer surface is intended.
+- Match topology to visible intent: if the requested visual property cannot be produced by supported executable metadata, represent it with real geometry rather than only names, tags, semantic text, materials, or non-executable notes.
 - Prefer quads and simple polygons. Avoid dense grids, seam networks, individual fasteners, tiny bolts, repeated micro-panels, or context clutter in the first pass.
 - Prefer one named object per requested part. Use multiple named objects only when the part naturally has a few major sub-parts.
 - Add #@post comments only as generic refinement intent; do not invent custom executor ops.`;
@@ -165,6 +166,7 @@ Raw-first part rules:
 - Fit the part to the existing scene summary and dependencies.
 - Use y as the vertical/up axis unless the current scene summary says otherwise.
 - Keep geometry compact and clean: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell. Use simple topology for the first pass; use #@post smooth/subdivide when a softer surface is intended.
+- Match topology to visible intent: if the requested visual property cannot be produced by supported executable #@post syntax, bake it into the raw v/f mesh with enough vertices/faces for the effect to be visible. Do not satisfy visible geometry requests only with object names, #@semantic, #@tag, material names, or unsupported #@post attributes.
 - Prefer quads and simple polygons. Avoid dense grids, seam networks, individual fasteners, tiny bolts, repeated micro-panels, or context clutter in the first pass.
 - Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
@@ -337,7 +339,9 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 					'Current scene mode: raw OBJ / raw-post output.',
 					'Important: existing v/f mesh blocks are source base geometry, not disposable cache. Preserve existing mesh object blocks unless the user asks to replace them.',
 					'For cleanup, symmetry, repetition, material, or tag edits on raw OBJ scenes, prefer adding or editing #@post blocks. Do not add #@ops and do not convert the whole scene to procedural metadata.',
-					'Supported #@post ops include transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.'
+					'Supported #@post ops include transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.',
+					'When adding tunable #@post values, expose them with #@params and #@controls, and make the #@post expressions reference those params.',
+					'Use #@post only when the requested visible change is fully expressible with supported executable #@post syntax. Otherwise update the affected raw mesh block or add real geometry; object names, #@semantic, #@tag, material names, and unsupported #@post attributes do not count as implementing visible geometry.'
 				].join('\n')
 			: [
 					'Current scene mode: Live OBJ / tools-on output.',
@@ -422,6 +426,9 @@ export async function requestLiveObjPartPlanFromLlm(
 		options?.currentLiveObjSummary
 			? `Current scene summary:\n${options.currentLiveObjSummary}`
 			: 'Current scene summary: (empty scene)',
+		options?.currentLiveObjSummary
+			? 'If the user request is additive, plan only the new parts to append to the current scene. Do not re-plan existing objects unless the user explicitly asks to replace or rebuild them.'
+			: '',
 		'',
 		'Create the iterative part plan now.'
 	].join('\n');

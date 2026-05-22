@@ -63,6 +63,8 @@ Use #@post for:
 - repeated raw mesh modules with array or mirror
 - material and tag metadata
 
+Do not use #@post, object names, tags, semantic text, material names, or unsupported attributes as a substitute for visible geometry. If a requested visual property cannot be produced by the supported executable #@post syntax above, bake it into the raw v/f mesh by adding or replacing real geometry with enough vertices/faces for the effect to be visible.
+
 Use semantic edit metadata for post-parametric control intent:
 - #@bbox records intended extents for planning, placement, and validation. It does not transform geometry.
 - #@lock tells future targeted edits what to preserve. Use concrete values like footprint, position, silhouette, material, proportions, or openings.
