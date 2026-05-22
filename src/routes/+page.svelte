@@ -1,5 +1,4 @@
 <script lang="ts">
-	import gehryVideo from '$lib/assets/Gehry.mp4';
 	import { onMount } from 'svelte';
 	import type {
 		Camera,
@@ -15,6 +14,7 @@
 	let navLight = $state(false);
 	let fluidHost: HTMLDivElement | null = $state(null);
 	let triggerFluid: ((strength?: number) => void) | null = null;
+	let activeShowcaseIndex = $state(0);
 
 	const pointer = {
 		x: 0.5,
@@ -330,6 +330,38 @@
 			body: 'Move from live exploration into portable OBJ when it is ready to leave Spellshape.'
 		}
 	];
+
+	const showcaseVideos = [
+		{
+			src: '/videos/ld_1.MOV',
+			category: 'Level design',
+			label: 'Spellshape live design workflow preview',
+			source: 'Made with web app',
+			prompt: 'Blade Runner-style city plaza'
+		},
+		{
+			src: '/videos/gh_1.MOV',
+			category: 'Architecture',
+			label: 'Spellshape Grasshopper workflow preview',
+			source: 'Made with Grasshopper plugin',
+			prompt: 'A pavilion in a park to decrease anxiety as a single continuous surface'
+		}
+	];
+
+	function selectShowcase(index: number) {
+		activeShowcaseIndex = index;
+	}
+
+	function handleShowcaseKeydown(event: KeyboardEvent, index: number) {
+		if (event.key !== 'Enter' && event.key !== ' ') return;
+		event.preventDefault();
+		selectShowcaseFromCard(index);
+	}
+
+	function selectShowcaseFromCard(index: number) {
+		const nextIndex = index === activeShowcaseIndex ? (index + 1) % showcaseVideos.length : index;
+		selectShowcase(nextIndex);
+	}
 </script>
 
 <svelte:head>
@@ -433,16 +465,56 @@
 			</div>
 		</section>
 
-		<section class="video-showcase" aria-label="Spellshape video preview">
-			<video
-				class="showcase-video"
-				src={gehryVideo}
-				autoplay
-				muted
-				loop
-				playsinline
-				aria-label="Spellshape generating an expressive 3D pavilion"
-			></video>
+		<section class="video-showcase" aria-label="Spellshape video previews">
+			<div class="showcase-shell">
+				<div class="showcase-viewport" aria-label="Example gallery">
+					<div class="showcase-track" style={`--active-showcase-index: ${activeShowcaseIndex}`}>
+						{#each showcaseVideos as video, index}
+							<article
+								id={`showcase-card-${index}`}
+								class="showcase-card"
+								role="button"
+								tabindex="0"
+								aria-label={`Show ${video.category} example`}
+								onpointerdown={(event) => {
+									event.preventDefault();
+									selectShowcaseFromCard(index);
+								}}
+								onclick={(event) => event.preventDefault()}
+								onkeydown={(event) => handleShowcaseKeydown(event, index)}
+							>
+								<video
+									class="showcase-video"
+									src={video.src}
+									autoplay
+									muted
+									loop
+									playsinline
+									aria-label={video.label}
+								></video>
+
+								<div class="showcase-copy">
+									<p class="showcase-category">{video.category}</p>
+									<p class="showcase-prompt">"{video.prompt}"</p>
+									<p class="showcase-source">{video.source}</p>
+								</div>
+							</article>
+						{/each}
+					</div>
+				</div>
+
+				<div class="showcase-dots" aria-label="Choose example">
+					{#each showcaseVideos as video, index}
+						<button
+							class:active={activeShowcaseIndex === index}
+							type="button"
+							aria-label={`Show ${video.category} example`}
+							aria-current={activeShowcaseIndex === index ? 'true' : undefined}
+							onclick={() => selectShowcase(index)}
+						></button>
+					{/each}
+				</div>
+			</div>
 		</section>
 
 		<section class="pathways" aria-label="Use cases">
@@ -783,16 +855,115 @@
 		background: #02022a;
 	}
 
+	.showcase-shell {
+		--showcase-card-width: min(920px, 74vw);
+		--showcase-gap: clamp(16px, 2vw, 26px);
+		--showcase-gutter: max(0px, calc((100% - 920px) / 2));
+		display: grid;
+		gap: clamp(14px, 2vw, 24px);
+		width: min(1280px, 100%);
+		margin: 0 auto;
+		overflow: hidden;
+	}
+
+	.showcase-viewport {
+		overflow: hidden;
+	}
+
+	.showcase-track {
+		display: flex;
+		gap: var(--showcase-gap);
+		padding: 0 var(--showcase-gutter) 8px;
+		transform: translateX(
+			calc(var(--active-showcase-index) * -1 * (var(--showcase-card-width) + var(--showcase-gap)))
+		);
+		transition: transform 0.82s cubic-bezier(0.22, 1, 0.36, 1);
+		will-change: transform;
+	}
+
+	.showcase-card {
+		flex: 0 0 var(--showcase-card-width);
+		border-radius: 12px;
+		cursor: pointer;
+		outline: none;
+	}
+
+	.showcase-card:focus-visible {
+		box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.32);
+	}
+
 	.showcase-video {
 		display: block;
-		width: min(1280px, 100%);
+		width: 100%;
 		height: auto;
-		max-height: min(78vh, 760px);
+		max-height: min(68vh, 620px);
 		aspect-ratio: 16 / 9;
-		margin: 0 auto;
 		border-radius: 12px;
 		object-fit: cover;
+		pointer-events: none;
 		box-shadow: 0 30px 90px rgba(0, 0, 0, 0.28);
+	}
+
+	.showcase-copy {
+		margin: 0 auto;
+		padding-top: 16px;
+		text-align: center;
+	}
+
+	.showcase-category,
+	.showcase-source,
+	.showcase-prompt {
+		margin: 0;
+	}
+
+	.showcase-category {
+		margin-bottom: 10px;
+		color: #8ea0ff;
+		font-size: 12px;
+		font-weight: 860;
+		text-transform: uppercase;
+	}
+
+	.showcase-source {
+		margin-top: 10px;
+		color: rgba(255, 255, 255, 0.56);
+		font-size: 13px;
+		font-weight: 800;
+		text-transform: uppercase;
+	}
+
+	.showcase-prompt {
+		color: #ffffff;
+		font-size: clamp(20px, 2.4vw, 36px);
+		font-weight: 760;
+		line-height: 1.08;
+		text-wrap: balance;
+	}
+
+	.showcase-dots {
+		display: flex;
+		justify-content: center;
+		gap: 10px;
+	}
+
+	.showcase-dots button {
+		width: 10px;
+		height: 10px;
+		padding: 0;
+		border: 0;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.28);
+		cursor: pointer;
+		transition:
+			background 0.2s ease,
+			transform 0.2s ease,
+			width 0.2s ease;
+	}
+
+	.showcase-dots button:hover,
+	.showcase-dots button.active {
+		width: 28px;
+		background: #ffffff;
 	}
 
 	.pathways {
@@ -1039,6 +1210,11 @@
 
 		.video-showcase {
 			padding: 18px;
+		}
+
+		.showcase-shell {
+			--showcase-card-width: 78vw;
+			--showcase-gutter: 0px;
 		}
 
 		.showcase-video {
