@@ -472,6 +472,7 @@
 						{#each showcaseVideos as video, index}
 							<article
 								id={`showcase-card-${index}`}
+								class:active={activeShowcaseIndex === index}
 								class="showcase-card"
 								role="button"
 								tabindex="0"
@@ -490,7 +491,14 @@
 									muted
 									loop
 									playsinline
+									controls={activeShowcaseIndex === index}
 									aria-label={video.label}
+									onpointerdown={(event) => {
+										if (activeShowcaseIndex === index) event.stopPropagation();
+									}}
+									onclick={(event) => {
+										if (activeShowcaseIndex === index) event.stopPropagation();
+									}}
 								></video>
 
 								<div class="showcase-copy">
@@ -902,6 +910,10 @@
 		object-fit: cover;
 		pointer-events: none;
 		box-shadow: 0 30px 90px rgba(0, 0, 0, 0.28);
+	}
+
+	.showcase-card.active .showcase-video {
+		pointer-events: auto;
 	}
 
 	.showcase-copy {
