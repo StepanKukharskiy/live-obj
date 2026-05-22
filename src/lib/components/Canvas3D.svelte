@@ -161,6 +161,137 @@
 		}
 	}
 
+	type DepthStandardMaterial = THREE.MeshStandardMaterial & {
+		userData: {
+			depthShaderUniforms?: {
+				uDepthMix: { value: number };
+				uShapeMix: { value: number };
+				uDepthNear: { value: number };
+				uDepthFar: { value: number };
+			};
+		};
+	};
+
+	const depthNormalShaderCache = new Map<string, DepthStandardMaterial>();
+
+	function clamp01(value: unknown, fallback: number): number {
+		const n = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+		return Math.max(0, Math.min(1, n));
+	}
+
+	function getDepthNormalShaderMaterialFor(
+		src: THREE.Material,
+		depthNear: number,
+		depthFar: number
+	): DepthStandardMaterial {
+		const key = src.uuid;
+		const cached = depthNormalShaderCache.get(key);
+		const anySrc = src as any;
+		const color = anySrc.color ? anySrc.color.clone() : new THREE.Color(objectColor || '#e6e4dd');
+		const roughness = clamp01(anySrc.roughness, 0.82);
+		const metalness = clamp01(anySrc.metalness, 0);
+		const opacity = anySrc.opacity ?? 1;
+		if (cached) {
+			cached.color.copy(color);
+			cached.roughness = roughness;
+			cached.metalness = metalness;
+			cached.opacity = opacity;
+			cached.transparent = Boolean(anySrc.transparent) || opacity < 1;
+			cached.side = anySrc.side ?? THREE.FrontSide;
+			cached.flatShading = Boolean(anySrc.flatShading);
+			cached.vertexColors = Boolean(anySrc.vertexColors);
+			cached.map = anySrc.map ?? null;
+			cached.alphaMap = anySrc.alphaMap ?? null;
+			cached.userData.depthShaderUniforms!.uDepthNear.value = depthNear;
+			cached.userData.depthShaderUniforms!.uDepthFar.value = depthFar;
+			cached.wireframe = Boolean(anySrc.wireframe);
+			return cached;
+		}
+		const uniforms = {
+			uDepthMix: { value: 0.34 },
+			uShapeMix: { value: 0.38 },
+			uDepthNear: { value: depthNear },
+			uDepthFar: { value: depthFar }
+		};
+		const shader = new THREE.MeshStandardMaterial({
+			color,
+			roughness,
+			metalness,
+			side: anySrc.side ?? THREE.FrontSide,
+			flatShading: Boolean(anySrc.flatShading),
+			vertexColors: Boolean(anySrc.vertexColors),
+			map: anySrc.map ?? null,
+			alphaMap: anySrc.alphaMap ?? null,
+			transparent: Boolean(anySrc.transparent) || opacity < 1,
+			opacity,
+			wireframe: Boolean(anySrc.wireframe)
+		}) as DepthStandardMaterial;
+		shader.userData.depthShaderUniforms = uniforms;
+		shader.onBeforeCompile = (compiledShader) => {
+			compiledShader.uniforms.uDepthMix = uniforms.uDepthMix;
+			compiledShader.uniforms.uShapeMix = uniforms.uShapeMix;
+			compiledShader.uniforms.uDepthNear = uniforms.uDepthNear;
+			compiledShader.uniforms.uDepthFar = uniforms.uDepthFar;
+			compiledShader.fragmentShader = `
+				uniform float uDepthMix;
+				uniform float uShapeMix;
+				uniform float uDepthNear;
+				uniform float uDepthFar;
+				${compiledShader.fragmentShader}
+			`.replace(
+					'#include <color_fragment>',
+					`
+				#include <color_fragment>
+				float spellshapeDepth = smoothstep(uDepthNear, uDepthFar, -vViewPosition.z);
+				vec3 spellshapeNormal = normalize(vNormal);
+				vec3 spellshapeViewDir = normalize(-vViewPosition);
+				float spellshapeKey = dot(spellshapeNormal, normalize(vec3(-0.45, 0.72, 0.45))) * 0.5 + 0.5;
+				float spellshapeRimBase = 1.0 - max(dot(spellshapeNormal, spellshapeViewDir), 0.0);
+				float spellshapeRim = spellshapeRimBase * spellshapeRimBase;
+				float spellshapeDepthShade = mix(1.06, 0.80, spellshapeDepth);
+				float spellshapeShapeShade = 0.78 + spellshapeKey * 0.34 + spellshapeRim * 0.08;
+				float spellshapeShade = mix(1.0, spellshapeShapeShade, uShapeMix);
+				spellshapeShade *= mix(1.0, spellshapeDepthShade, uDepthMix);
+				diffuseColor.rgb *= clamp(spellshapeShade, 0.72, 1.18);
+				`
+				);
+		};
+		shader.customProgramCacheKey = () => 'spellshape-depth-standard-v2';
+		depthNormalShaderCache.set(key, shader);
+		return shader;
+	}
+
+	function withDepthNormalShaderMaterials<T>(renderFn: () => T): T {
+		if (!scene || !camera) return renderFn();
+		const swapped: Array<{ mesh: any; original: any }> = [];
+		const bounds = mountedRenderObject ? new THREE.Box3().setFromObject(mountedRenderObject) : null;
+		const size = bounds && !bounds.isEmpty() ? bounds.getSize(new THREE.Vector3()) : new THREE.Vector3(1, 1, 1);
+		const span = Math.max(size.x, size.y, size.z, 1);
+		const depthNear = Math.max(0.01, camera.near ?? 0.1);
+		const depthFar = Math.max(depthNear + 0.01, Math.min(camera.far ?? 2000, depthNear + span * 3.5));
+		scene.traverse((child: any) => {
+			if (isShadowGroundPlane(child)) return;
+			if (!child?.isMesh || !child.material || child.visible === false) return;
+			const original = child.material;
+			if (Array.isArray(original)) {
+				swapped.push({ mesh: child, original });
+				child.material = original.map((m: THREE.Material) =>
+					getDepthNormalShaderMaterialFor(m, depthNear, depthFar)
+				);
+			} else {
+				swapped.push({ mesh: child, original });
+				child.material = getDepthNormalShaderMaterialFor(original, depthNear, depthFar);
+			}
+		});
+		try {
+			return renderFn();
+		} finally {
+			for (const { mesh, original } of swapped) {
+				mesh.material = original;
+			}
+		}
+	}
+
 	type ScreenshotOptions = {
 		maxWidth?: number;
 		format?: 'image/png' | 'image/jpeg';
@@ -530,7 +661,9 @@
 	function renderFrame() {
 		if (!renderer || !scene || !camera) return;
 		if (renderMode === 'standard') {
-			renderer.render(scene, camera);
+			withDepthNormalShaderMaterials(() => {
+				renderer.render(scene, camera);
+			});
 			return;
 		}
 		if (renderMode === 'overlay') {
@@ -714,6 +847,8 @@
 		toonMaterialCache.clear();
 		toonGradientCache.forEach((t) => t.dispose());
 		toonGradientCache.clear();
+		depthNormalShaderCache.forEach((m) => m.dispose());
+		depthNormalShaderCache.clear();
 		if (renderer) {
 			renderer.dispose();
 		}
