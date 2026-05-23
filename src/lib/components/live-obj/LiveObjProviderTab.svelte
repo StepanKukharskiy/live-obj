@@ -15,7 +15,12 @@
 			image: ['gpt-image-2', 'gpt-image-1.5']
 		},
 		google: {
-			text: ['gemini-3.1-pro-preview'],
+			text: [
+				'gemini-3.5-flash',
+				'gemini-3-flash-preview',
+				'gemini-3.1-pro-preview',
+				'gemini-2.5-flash'
+			],
 			image: ['gemini-3.1-flash-image-preview']
 		},
 		together: {

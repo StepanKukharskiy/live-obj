@@ -320,7 +320,7 @@
 		const size = bounds.getSize(new THREE.Vector3());
 		const sphere = bounds.getBoundingSphere(new THREE.Sphere());
 		const radius = Math.max(sphere.radius, Math.max(size.x, size.y, size.z, 1) * 0.5);
-		const viewDirection = new THREE.Vector3(1, 0.65, 1).normalize();
+		const viewDirection = new THREE.Vector3(-1, 0.65, -1).normalize();
 
 		if (camera.isPerspectiveCamera) {
 			const fovRad = THREE.MathUtils.degToRad(camera.fov || cameraFov || 50);
@@ -723,7 +723,7 @@
 			2000
 		);
 		ortho.userData.frustumHeight = ORTHOGRAPHIC_FRUSTUM_HEIGHT;
-		ortho.position.set(5, 5, 5);
+		ortho.position.set(-5, 5, -5);
 		ortho.lookAt(0, 0, 0);
 		return ortho;
 	}

@@ -554,19 +554,55 @@ export const POST: RequestHandler = async ({ request }) => {
 					reqApiUrl
 				});
 				recordUsages(correctionPatch.usages);
-				const correctionLiveObj = useProcedural
+				let correctionLiveObj = useProcedural
 					? correctionPatch.liveObj
 					: normalizeRawPostHeader(correctionPatch.liveObj);
-				const retryResult = useProcedural
-					? await expandLiveObjWithExecutor(correctionLiveObj)
-					: await expandRawObjWithPostExecutor(correctionLiveObj);
+				let correctionRawPatch = correctionPatch.rawPatch;
+				let correctionSummary = correctionPatch.summary ?? surgicalEditSummary;
+				let correctionAppliedEdits = correctionPatch.appliedEdits;
+				let retryResult: Awaited<ReturnType<typeof validateAndExpandCleanLiveObj>>;
+				try {
+					retryResult = await validateAndExpandCleanLiveObj(correctionLiveObj, useProcedural);
+				} catch (correctionValidationError) {
+					const correctionRepairPatch = await requestAndApplySurgicalPatch({
+						userMessage: buildSurgicalCorrectionPrompt(
+							[
+								correctionValidationError instanceof Error
+									? correctionValidationError.message
+									: String(correctionValidationError)
+							],
+							useProcedural
+						),
+						baseLiveObj: correctionLiveObj,
+						history,
+						model,
+						currentSceneMode: body.currentSceneMode === 'raw_obj' ? 'raw_obj' : 'live_obj',
+						targetObjectId: body.targetObjectId,
+						reqApiKey,
+						reqApiUrl
+					});
+					recordUsages(correctionRepairPatch.usages);
+					correctionLiveObj = useProcedural
+						? correctionRepairPatch.liveObj
+						: normalizeRawPostHeader(correctionRepairPatch.liveObj);
+					correctionRawPatch = [
+						correctionRawPatch,
+						'# --- validation repair patch ---',
+						correctionRepairPatch.rawPatch
+					]
+						.filter((chunk) => chunk.trim())
+						.join('\n\n');
+					correctionSummary = correctionRepairPatch.summary ?? correctionSummary;
+					correctionAppliedEdits += correctionRepairPatch.appliedEdits;
+					retryResult = await validateAndExpandCleanLiveObj(correctionLiveObj, useProcedural);
+				}
 				const assistantMessage = await requestAssistantChatMessage({
 					userMessage,
 					previousLiveObj: currentLiveObj,
 					nextLiveObj: correctionLiveObj,
 					editMode,
-					surgicalEditSummary: correctionPatch.summary ?? surgicalEditSummary,
-					rawLlm: correctionPatch.rawPatch,
+					surgicalEditSummary: correctionSummary,
+					rawLlm: correctionRawPatch,
 					model,
 					reqApiKey,
 					reqApiUrl
@@ -574,12 +610,12 @@ export const POST: RequestHandler = async ({ request }) => {
 				recordUsage(assistantMessage?.usage);
 				return json({
 					liveObj: correctionLiveObj,
-					rawLlm: correctionPatch.rawPatch,
+					rawLlm: correctionRawPatch,
 					executedObj: retryResult.executedObj,
 					...(summarizeTokenUsage(llmUsages) ? { llmUsage: summarizeTokenUsage(llmUsages) } : {}),
 					editMode,
-					surgicalEditSummary: correctionPatch.summary ?? surgicalEditSummary,
-					surgicalEditCount: (surgicalEditCount ?? 0) + correctionPatch.appliedEdits,
+					surgicalEditSummary: correctionSummary,
+					surgicalEditCount: (surgicalEditCount ?? 0) + correctionAppliedEdits,
 					...(assistantMessage?.content ? { assistantMessage: assistantMessage.content } : {}),
 					executorWarning: `Auto-corrected with a surgical patch after first pass:\n- ${issues.join('\n- ')}`,
 					executorWarnings: retryResult.warnings
@@ -602,15 +638,45 @@ export const POST: RequestHandler = async ({ request }) => {
 						)
 				);
 				recordUsage(correctedResult.usage);
-				const retryLiveObj = useProcedural
+				let retryLiveObj = useProcedural
 					? stripCodeFences(correctedResult.content)
 					: normalizeRawPostHeader(stripCodeFences(correctedResult.content), {
 							sourcePrompt: userMessage
 						});
 				try {
-					const retryResult = useProcedural
-						? await expandLiveObjWithExecutor(retryLiveObj)
-						: await expandRawObjWithPostExecutor(retryLiveObj);
+					let retryResult: Awaited<ReturnType<typeof validateAndExpandCleanLiveObj>>;
+					try {
+						retryResult = await validateAndExpandCleanLiveObj(retryLiveObj, useProcedural);
+					} catch (correctionValidationError) {
+						const secondCorrectionResult = await withLlmRequestOverrides(
+							reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
+							() =>
+								requestLiveObjFromLlm(
+									buildCorrectionPrompt(
+										[
+											correctionValidationError instanceof Error
+												? correctionValidationError.message
+												: String(correctionValidationError)
+										],
+										useProcedural
+									),
+									[
+										...history,
+										{ role: 'assistant', content: correctedLiveObj },
+										{ role: 'assistant', content: retryLiveObj }
+									],
+									model,
+									{ useProcedural }
+								)
+						);
+						recordUsage(secondCorrectionResult.usage);
+						retryLiveObj = useProcedural
+							? stripCodeFences(secondCorrectionResult.content)
+							: normalizeRawPostHeader(stripCodeFences(secondCorrectionResult.content), {
+									sourcePrompt: userMessage
+								});
+						retryResult = await validateAndExpandCleanLiveObj(retryLiveObj, useProcedural);
+					}
 					const assistantMessage = await requestAssistantChatMessage({
 						userMessage,
 						previousLiveObj: currentLiveObj,
@@ -857,6 +923,32 @@ function collectSceneIssues(args: {
 	if (args.executorError)
 		issues.push(`executor error: ${args.executorError.split('\n').slice(0, 8).join(' | ')}`);
 	return issues;
+}
+
+async function validateAndExpandCleanLiveObj(
+	liveObj: string,
+	useProcedural: boolean
+): Promise<{
+	executedObj: string;
+	warnings: string[];
+}> {
+	const rawPostWarnings: string[] = [];
+	if (!useProcedural) {
+		const rawPostValidation = validateRawPostSource(liveObj);
+		if (!rawPostValidation.valid) {
+			throw new Error(rawPostValidationIssues(rawPostValidation).join('; '));
+		}
+		rawPostWarnings.push(
+			...rawPostValidation.warnings.map((message) => `raw-post validation warning: ${message}`)
+		);
+	}
+	const result = useProcedural
+		? await expandLiveObjWithExecutor(liveObj)
+		: await expandRawObjWithPostExecutor(liveObj);
+	return {
+		executedObj: result.executedObj,
+		warnings: [...rawPostWarnings, ...result.warnings]
+	};
 }
 
 function correctionOpInstruction(useProcedural: boolean): string {

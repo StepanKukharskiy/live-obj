@@ -916,9 +916,9 @@ f 20 24 21 17`
 		height: 36px;
 		padding: 0 14px;
 		border-radius: 999px;
-		border: 1px solid rgba(185, 28, 28, 0.22);
-		background: #fef2f2;
-		color: #991b1b;
+		border: 1px solid rgba(0, 0, 235, 0.22);
+		background: rgba(0, 0, 235, 0.06);
+		color: #0000eb;
 		font-family: inherit;
 		font-size: 13px;
 		font-weight: 700;
@@ -926,7 +926,7 @@ f 20 24 21 17`
 	}
 
 	.stop-button:hover {
-		background: #fee2e2;
-		border-color: rgba(185, 28, 28, 0.34);
+		background: rgba(0, 0, 235, 0.1);
+		border-color: rgba(0, 0, 235, 0.34);
 	}
 </style>

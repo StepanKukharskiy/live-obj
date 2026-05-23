@@ -8,7 +8,7 @@ export function createScene() {
 
 export function createCamera(width, height) {
 	const cam = new THREE.PerspectiveCamera(50, width / Math.max(height, 1), 0.1, 2000);
-	cam.position.set(5, 5, 5);
+	cam.position.set(-5, 5, -5);
 	cam.lookAt(0, 0, 0);
 	return cam;
 }
@@ -26,7 +26,7 @@ export function createRenderer(canvas) {
 export function setupLighting(scene) {
 	const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 	const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
-	directionalLight.position.set(5, 10, 7);
+	directionalLight.position.set(-5, 10, -7);
 	directionalLight.castShadow = true;
 	directionalLight.shadow.mapSize.width = 2048;
 	directionalLight.shadow.mapSize.height = 2048;
