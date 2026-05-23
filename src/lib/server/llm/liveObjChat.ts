@@ -304,11 +304,12 @@ export async function requestLiveObjFromLlm(
 		...history,
 		{ role: 'user', content: userMessageContent(userMessage, imageDataUrls) }
 	];
+	const maxTokens = 32000;
 	const { content, usage } = await requestChatCompletion({
 		messages,
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-llm',
-		maxTokens: imageDataUrls.length > 0 ? 30000 : 24000,
+		maxTokens,
 		timeoutMs: imageDataUrls.length > 0 ? 240000 : undefined
 	});
 	return { content, usage };
@@ -483,7 +484,7 @@ export async function requestLiveObjPartFromLlm(
 		],
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-iterative-part',
-		maxTokens: imageDataUrls.length > 0 ? 20000 : 16000,
+		maxTokens: 32000,
 		timeoutMs: imageDataUrls.length > 0 ? 240000 : 180000
 	});
 	return { content, usage };
@@ -528,7 +529,7 @@ export async function streamLiveObjPartFromLlm(
 		],
 		model: model || DEFAULT_LIVE_OBJ_MODEL,
 		label: 'live-obj-iterative-part-stream',
-		maxTokens: imageDataUrls.length > 0 ? 20000 : 16000,
+		maxTokens: 32000,
 		timeoutMs: imageDataUrls.length > 0 ? 240000 : 180000,
 		onDelta
 	});

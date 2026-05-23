@@ -59,6 +59,7 @@ type CompletionPayload = {
 	}>;
 	output?: Array<{ content?: Array<{ text?: string | null }> }>;
 	output_text?: string | null;
+	candidates?: Array<{ content?: { parts?: Array<{ text?: string | null }> } }>;
 };
 
 const REQUEST_TIMEOUT_MS = 120000;
@@ -633,6 +634,7 @@ export function extractCompletionContent(data: unknown): string {
 		payload?.choices?.[0]?.text?.trim() ||
 		extractTextFromContentValue(payload?.output?.[0]?.content) ||
 		payload?.output_text?.trim() ||
+		extractTextFromContentValue(payload?.candidates?.[0]?.content?.parts) ||
 		''
 	);
 }
@@ -660,13 +662,24 @@ function extractTokenUsage(
 ): TokenUsage | undefined {
 	const payload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
 	const usage = objectFromRecord(payload, 'usage');
-	if (Object.keys(usage).length === 0) return undefined;
+	const usageMetadata = objectFromRecord(payload, 'usageMetadata');
+	if (Object.keys(usage).length === 0 && Object.keys(usageMetadata).length === 0) return undefined;
 	const promptDetails = objectFromRecord(usage, 'prompt_tokens_details');
 	const completionDetails = objectFromRecord(usage, 'completion_tokens_details');
 	const outputDetails = objectFromRecord(usage, 'output_tokens_details');
-	const promptTokens = numberFromRecord(usage, ['prompt_tokens', 'input_tokens']);
-	const completionTokens = numberFromRecord(usage, ['completion_tokens', 'output_tokens']);
-	const totalTokens = numberFromRecord(usage, ['total_tokens']);
+	const promptTokens =
+		numberFromRecord(usage, ['prompt_tokens', 'input_tokens']) ??
+		numberFromRecord(usageMetadata, ['promptTokenCount']);
+	const completionTokens =
+		numberFromRecord(usage, ['completion_tokens', 'output_tokens']) ??
+		numberFromRecord(usageMetadata, ['candidatesTokenCount']);
+	const totalTokens =
+		numberFromRecord(usage, ['total_tokens']) ??
+		numberFromRecord(usageMetadata, ['totalTokenCount']);
+	const reasoningTokens =
+		numberFromRecord(completionDetails, ['reasoning_tokens']) ??
+		numberFromRecord(outputDetails, ['reasoning_tokens']) ??
+		numberFromRecord(usageMetadata, ['thoughtsTokenCount']);
 	return {
 		model,
 		label,
@@ -674,14 +687,7 @@ function extractTokenUsage(
 		...(promptTokens != null ? { promptTokens } : {}),
 		...(completionTokens != null ? { completionTokens } : {}),
 		...(totalTokens != null ? { totalTokens } : {}),
-		...((numberFromRecord(completionDetails, ['reasoning_tokens']) ??
-		numberFromRecord(outputDetails, ['reasoning_tokens']))
-			? {
-					reasoningTokens:
-						numberFromRecord(completionDetails, ['reasoning_tokens']) ??
-						numberFromRecord(outputDetails, ['reasoning_tokens'])
-				}
-			: {}),
+		...(reasoningTokens != null ? { reasoningTokens } : {}),
 		...(numberFromRecord(promptDetails, ['cached_tokens'])
 			? { cachedTokens: numberFromRecord(promptDetails, ['cached_tokens']) }
 			: {})
