@@ -19,6 +19,7 @@ import {
 	type IterativePartSpec,
 	type IterativeScenePlan
 } from '$lib/server/liveObj/iterative';
+import { validateRawPostSource } from '$lib/liveObj/rawPostValidation';
 
 type Body = {
 	userMessage?: string;
@@ -71,6 +72,23 @@ function summarizeTokenUsage(usages: TokenUsage[]): TokenUsage | undefined {
 function addUsageStep(usages: TokenUsage[], usage: TokenUsage | undefined) {
 	if (!usage) return;
 	usages.push(usage);
+}
+
+function applyRawPostPartValidation(
+	validation: ReturnType<typeof validateLiveObj>,
+	rawPart: string,
+	useProcedural: boolean
+): ReturnType<typeof validateLiveObj> {
+	if (useProcedural) return validation;
+	const rawPostValidation = validateRawPostSource(rawPart);
+	validation.errors.push(
+		...rawPostValidation.errors.map((message) => `raw-post validation error: ${message}`)
+	);
+	validation.warnings.push(
+		...rawPostValidation.warnings.map((message) => `raw-post validation warning: ${message}`)
+	);
+	validation.valid = validation.errors.length === 0;
+	return validation;
 }
 
 function countObjVertices(objText: string): number {
@@ -263,7 +281,11 @@ export const POST: RequestHandler = async ({ request }) => {
 						rawPart = stripCodeFences(repairResult.content);
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
 					}
-					let validation = validateLiveObj(appended.liveObj, currentLiveObj);
+					let validation = applyRawPostPartValidation(
+						validateLiveObj(appended.liveObj, currentLiveObj),
+						rawPart,
+						useProcedural
+					);
 					if (!validation.valid) {
 						emit({
 							type: 'status',
@@ -287,7 +309,11 @@ export const POST: RequestHandler = async ({ request }) => {
 						rawAttempts.push(repairResult.content);
 						rawPart = stripCodeFences(repairResult.content);
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
-						validation = validateLiveObj(appended.liveObj, currentLiveObj);
+						validation = applyRawPostPartValidation(
+							validateLiveObj(appended.liveObj, currentLiveObj),
+							rawPart,
+							useProcedural
+						);
 					}
 					if (!validation.valid) {
 						throw new Error(validation.errors.join('; ') || 'Streamed part failed validation');

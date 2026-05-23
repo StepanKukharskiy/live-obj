@@ -86,6 +86,7 @@
 			rememberMe: false
 		}),
 		onSend,
+		onStopGeneration,
 		onCaptureSceneScreenshot,
 		onLaunchObjExample,
 		onOpenLiveObj,
@@ -140,6 +141,7 @@
 			rememberMe: boolean;
 		};
 		onSend?: (payload: SendPayload) => void;
+		onStopGeneration?: () => void;
 		onCaptureSceneScreenshot?: () => string;
 		onLaunchObjExample?: (liveObj: string) => void;
 		onOpenLiveObj?: (sourceText: string) => void | Promise<void>;
@@ -219,6 +221,7 @@
 					{busy}
 					{statusLine}
 					{onSend}
+					onStop={onStopGeneration}
 					{onLaunchObjExample}
 					bind:input={chatInput}
 					bind:targetObjectId={selectedTargetObjectId}

@@ -239,22 +239,21 @@
 				uniform float uDepthFar;
 				${compiledShader.fragmentShader}
 			`.replace(
-					'#include <color_fragment>',
-					`
+				'#include <color_fragment>',
+				`
 				#include <color_fragment>
 				float spellshapeDepth = smoothstep(uDepthNear, uDepthFar, -vViewPosition.z);
 				vec3 spellshapeNormal = normalize(vNormal);
 				vec3 spellshapeViewDir = normalize(-vViewPosition);
-				float spellshapeKey = dot(spellshapeNormal, normalize(vec3(-0.45, 0.72, 0.45))) * 0.5 + 0.5;
 				float spellshapeRimBase = 1.0 - max(dot(spellshapeNormal, spellshapeViewDir), 0.0);
-				float spellshapeRim = spellshapeRimBase * spellshapeRimBase;
+				float spellshapeFresnel = spellshapeRimBase * spellshapeRimBase;
 				float spellshapeDepthShade = mix(1.06, 0.80, spellshapeDepth);
-				float spellshapeShapeShade = 0.78 + spellshapeKey * 0.34 + spellshapeRim * 0.08;
+				float spellshapeShapeShade = 0.94 + spellshapeFresnel * 0.34;
 				float spellshapeShade = mix(1.0, spellshapeShapeShade, uShapeMix);
 				spellshapeShade *= mix(1.0, spellshapeDepthShade, uDepthMix);
-				diffuseColor.rgb *= clamp(spellshapeShade, 0.72, 1.18);
+				diffuseColor.rgb *= clamp(spellshapeShade, 0.82, 1.2);
 				`
-				);
+			);
 		};
 		shader.customProgramCacheKey = () => 'spellshape-depth-standard-v2';
 		depthNormalShaderCache.set(key, shader);
@@ -265,10 +264,16 @@
 		if (!scene || !camera) return renderFn();
 		const swapped: Array<{ mesh: any; original: any }> = [];
 		const bounds = mountedRenderObject ? new THREE.Box3().setFromObject(mountedRenderObject) : null;
-		const size = bounds && !bounds.isEmpty() ? bounds.getSize(new THREE.Vector3()) : new THREE.Vector3(1, 1, 1);
+		const size =
+			bounds && !bounds.isEmpty()
+				? bounds.getSize(new THREE.Vector3())
+				: new THREE.Vector3(1, 1, 1);
 		const span = Math.max(size.x, size.y, size.z, 1);
 		const depthNear = Math.max(0.01, camera.near ?? 0.1);
-		const depthFar = Math.max(depthNear + 0.01, Math.min(camera.far ?? 2000, depthNear + span * 3.5));
+		const depthFar = Math.max(
+			depthNear + 0.01,
+			Math.min(camera.far ?? 2000, depthNear + span * 3.5)
+		);
 		scene.traverse((child: any) => {
 			if (isShadowGroundPlane(child)) return;
 			if (!child?.isMesh || !child.material || child.visible === false) return;

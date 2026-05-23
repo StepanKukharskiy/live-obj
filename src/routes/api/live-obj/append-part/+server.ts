@@ -15,6 +15,7 @@ import {
 	type IterativePartSpec,
 	type IterativeScenePlan
 } from '$lib/server/liveObj/iterative';
+import { validateRawPostSource } from '$lib/liveObj/rawPostValidation';
 
 type Body = {
 	userMessage?: string;
@@ -62,6 +63,23 @@ function summarizeTokenUsage(usages: TokenUsage[]): TokenUsage | undefined {
 		...(sum('reasoningTokens') != null ? { reasoningTokens: sum('reasoningTokens') } : {}),
 		...(sum('cachedTokens') != null ? { cachedTokens: sum('cachedTokens') } : {})
 	};
+}
+
+function applyRawPostPartValidation(
+	validation: ReturnType<typeof validateLiveObj>,
+	rawPart: string,
+	useProcedural: boolean
+): ReturnType<typeof validateLiveObj> {
+	if (useProcedural) return validation;
+	const rawPostValidation = validateRawPostSource(rawPart);
+	validation.errors.push(
+		...rawPostValidation.errors.map((message) => `raw-post validation error: ${message}`)
+	);
+	validation.warnings.push(
+		...rawPostValidation.warnings.map((message) => `raw-post validation warning: ${message}`)
+	);
+	validation.valid = validation.errors.length === 0;
+	return validation;
 }
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -131,7 +149,11 @@ export const POST: RequestHandler = async ({ request }) => {
 			appended = appendGeneratedPart(currentLiveObj, rawPart);
 		}
 
-		let validation = validateLiveObj(appended.liveObj, currentLiveObj);
+		let validation = applyRawPostPartValidation(
+			validateLiveObj(appended.liveObj, currentLiveObj),
+			rawPart,
+			useProcedural
+		);
 		if (!validation.valid) {
 			rawPart = await requestPart(
 				[
@@ -146,7 +168,11 @@ export const POST: RequestHandler = async ({ request }) => {
 				].join('\n')
 			);
 			appended = appendGeneratedPart(currentLiveObj, rawPart);
-			validation = validateLiveObj(appended.liveObj, currentLiveObj);
+			validation = applyRawPostPartValidation(
+				validateLiveObj(appended.liveObj, currentLiveObj),
+				rawPart,
+				useProcedural
+			);
 		}
 		if (!validation.valid) {
 			return json(

@@ -117,6 +117,7 @@
 	let busy = $state(false);
 	let statusLine = $state<string | null>(null);
 	let iterativeGenerationActive = $state(false);
+	let activeGenerationAbortController = $state<AbortController | null>(null);
 
 	let sourceTab = $state<SourceTab>('executed');
 	let liveObjText = $state(`#@scene
@@ -564,6 +565,49 @@ f 4 5 1
 		return objText.split('\n').filter((line) => /^\s*f\s+/.test(line)).length;
 	}
 
+	function countObjVertexLines(objText: string): number {
+		return objText.split('\n').filter((line) => /^\s*v\s+/.test(line)).length;
+	}
+
+	function objElementRefs(line: string): number[] {
+		if (!/^\s*[fl]\s+/.test(line)) return [];
+		return line
+			.trim()
+			.split(/\s+/)
+			.slice(1)
+			.map((token) => Number(token.split('/')[0]))
+			.filter((n) => Number.isInteger(n) && n > 0);
+	}
+
+	function remapPreviewPartLines(partLines: string[], vertexOffset: number): string[] | null {
+		const localVertexCount = partLines.filter((line) => /^\s*v\s+/.test(line)).length;
+		const refs = partLines.flatMap(objElementRefs);
+		if (refs.length === 0) return partLines;
+		const maxRef = Math.max(...refs);
+		const minRef = Math.min(...refs);
+		const localIndexOffset =
+			maxRef > localVertexCount &&
+			minRef > 1 &&
+			refs.every((ref) => ref - (minRef - 1) >= 1 && ref - (minRef - 1) <= localVertexCount)
+				? minRef - 1
+				: 0;
+		if (maxRef - localIndexOffset > localVertexCount) return null;
+		return partLines.map((line) => {
+			if (!/^\s*[fl]\s+/.test(line)) return line;
+			const [head, ...tokens] = line.trim().split(/\s+/);
+			return [
+				head,
+				...tokens.map((token) => {
+					const pieces = token.split('/');
+					const n = Number(pieces[0]);
+					if (!Number.isInteger(n) || n <= 0) return token;
+					pieces[0] = String(n - localIndexOffset + vertexOffset);
+					return pieces.join('/');
+				})
+			].join(' ');
+		});
+	}
+
 	function tryApplyObjString(objText: string, sourceTextForMetadata: string = objText): boolean {
 		try {
 			applyObjString(objText, sourceTextForMetadata);
@@ -795,6 +839,25 @@ f 4 5 1
 		return new Promise<void>((resolve) => setTimeout(resolve, ms));
 	}
 
+	function isAbortError(errorValue: unknown): boolean {
+		return (
+			(errorValue instanceof DOMException && errorValue.name === 'AbortError') ||
+			(errorValue instanceof Error && errorValue.name === 'AbortError')
+		);
+	}
+
+	function throwIfAborted(signal?: AbortSignal) {
+		if (!signal?.aborted) return;
+		throw new DOMException('Generation stopped.', 'AbortError');
+	}
+
+	function stopGeneration() {
+		if (!activeGenerationAbortController) return;
+		activeGenerationAbortController.abort();
+		statusLine = 'Stopping generation.';
+		clearThinkingMessage();
+	}
+
 	function formatDuration(ms: number): string {
 		const seconds = Math.max(0, Math.round(ms / 1000));
 		if (seconds < 60) return `${seconds}s`;
@@ -877,12 +940,15 @@ f 4 5 1
 		part: IterativePartSpec;
 		model: string;
 		label: string;
+		signal?: AbortSignal;
 	}) {
-		const { text, initialImageUrls, workingLiveObj, plan, part, model, label } = args;
+		const { text, initialImageUrls, workingLiveObj, plan, part, model, label, signal } = args;
+		throwIfAborted(signal);
 		showThinkingMessage(`Thinking about ${label}...`);
 		const res = await fetch('/api/live-obj/append-part/stream', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
+			signal,
 			body: JSON.stringify({
 				userMessage: text,
 				...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
@@ -910,11 +976,14 @@ f 4 5 1
 		let lastPreviewAt = 0;
 		let faceLinesSincePreview = 0;
 		const baseFaceCount = countObjFaceLines(workingLiveObj);
+		const baseVertexCount = countObjVertexLines(workingLiveObj);
 		const flushPreview = (force = false) => {
 			if (previewLines.length === 0) return;
 			const now = performance.now();
 			if (!force && faceLinesSincePreview < 4 && now - lastPreviewAt < 220) return;
-			const previewObj = `${workingLiveObj.trimEnd()}\n${previewLines.join('\n')}\n`;
+			const remappedPreviewLines = remapPreviewPartLines(previewLines, baseVertexCount);
+			if (!remappedPreviewLines) return;
+			const previewObj = `${workingLiveObj.trimEnd()}\n${remappedPreviewLines.join('\n')}\n`;
 			if (countObjFaceLines(previewObj) <= baseFaceCount) return;
 			if (!tryApplyObjString(previewObj, previewObj)) return;
 			lastPreviewAt = now;
@@ -922,6 +991,7 @@ f 4 5 1
 		};
 
 		for (;;) {
+			throwIfAborted(signal);
 			const { done, value } = await reader.read();
 			if (done) break;
 			buffer += decoder.decode(value, { stream: true });
@@ -972,11 +1042,14 @@ f 4 5 1
 		model: string;
 		useProcedural: boolean;
 		currentLiveObj?: string;
+		signal?: AbortSignal;
 	}): Promise<IterativePlanSuccessPayload> {
-		const { text, initialImageUrls, model, useProcedural, currentLiveObj = '' } = args;
+		const { text, initialImageUrls, model, useProcedural, currentLiveObj = '', signal } = args;
+		throwIfAborted(signal);
 		const res = await fetch('/api/live-obj/plan/stream', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
+			signal,
 			body: JSON.stringify({
 				userMessage: text,
 				...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
@@ -1000,6 +1073,7 @@ f 4 5 1
 		let finalPayload: IterativePlanPayload | null = null;
 
 		for (;;) {
+			throwIfAborted(signal);
 			const { done, value } = await reader.read();
 			if (done) break;
 			buffer += decoder.decode(value, { stream: true });
@@ -1040,14 +1114,26 @@ f 4 5 1
 		model: string;
 		useProcedural: boolean;
 		partNumber: number;
+		signal?: AbortSignal;
 	}) {
-		const { text, initialImageUrls, workingLiveObj, plan, part, model, useProcedural, partNumber } =
-			args;
+		const {
+			text,
+			initialImageUrls,
+			workingLiveObj,
+			plan,
+			part,
+			model,
+			useProcedural,
+			partNumber,
+			signal
+		} = args;
+		throwIfAborted(signal);
 		const label = partLabel(part, partNumber - 1);
 		showThinkingMessage(`Thinking about ${label}...`);
 		const appendRes = await fetch('/api/live-obj/append-part', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
+			signal,
 			body: JSON.stringify({
 				userMessage: text,
 				...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
@@ -1078,8 +1164,10 @@ f 4 5 1
 		model: string;
 		useProcedural: boolean;
 		baseLiveObj?: string;
+		signal?: AbortSignal;
 	}) {
-		const { text, initialImageUrls, model, useProcedural, baseLiveObj = '' } = args;
+		const { text, initialImageUrls, model, useProcedural, baseLiveObj = '', signal } = args;
+		throwIfAborted(signal);
 		let accumulatedUsage: TokenUsageSummary | undefined;
 		const appendToCurrentScene = Boolean(baseLiveObj.trim());
 		let workingLiveObj = appendToCurrentScene
@@ -1104,7 +1192,8 @@ f 4 5 1
 				initialImageUrls,
 				model,
 				useProcedural,
-				currentLiveObj: appendToCurrentScene ? workingLiveObj : ''
+				currentLiveObj: appendToCurrentScene ? workingLiveObj : '',
+				signal
 			});
 			clearThinkingMessage();
 
@@ -1122,6 +1211,7 @@ f 4 5 1
 			appendProgressMessage(planPartsMessage(plan));
 
 			for (const [index, part] of plan.parts.entries()) {
+				throwIfAborted(signal);
 				const label = partLabel(part, index);
 				const partStartedAt = performance.now();
 				statusLine = `Building part ${index + 1}/${partCount}: ${label}.`;
@@ -1135,7 +1225,8 @@ f 4 5 1
 							part,
 							model,
 							useProcedural,
-							partNumber: index + 1
+							partNumber: index + 1,
+							signal
 						})
 					: await appendPartWithStreamingPreview({
 							text,
@@ -1144,8 +1235,10 @@ f 4 5 1
 							plan,
 							part,
 							model,
-							label
+							label,
+							signal
 						}).catch(async (streamError) => {
+							if (isAbortError(streamError)) throw streamError;
 							tryApplyObjString(executedObjText || workingLiveObj, workingLiveObj);
 							appendProgressMessage(
 								`Streaming preview for ${label} failed; retrying with stable append.`,
@@ -1159,7 +1252,8 @@ f 4 5 1
 								part,
 								model,
 								useProcedural,
-								partNumber: index + 1
+								partNumber: index + 1,
+								signal
 							});
 						});
 				if (!appendPayload.liveObj) throw new Error(`Part ${index + 1} failed`);
@@ -1197,6 +1291,7 @@ f 4 5 1
 					`Added ${label}.`,
 					`time ${formatDuration(performance.now() - partStartedAt)}`
 				);
+				throwIfAborted(signal);
 				await shortDelay(650);
 			}
 
@@ -1227,6 +1322,7 @@ f 4 5 1
 		imageDataUrls?: string[];
 		priorMsgs: ChatMsg[];
 		includeHistoryImages?: boolean;
+		signal?: AbortSignal;
 	}) {
 		const {
 			text,
@@ -1235,8 +1331,10 @@ f 4 5 1
 			imageDataUrl,
 			imageDataUrls = [],
 			priorMsgs,
-			includeHistoryImages = true
+			includeHistoryImages = true,
+			signal
 		} = args;
+		throwIfAborted(signal);
 		const requestImageUrls = [
 			...new Set(
 				[...imageDataUrls, ...(imageDataUrl ? [imageDataUrl] : [])]
@@ -1267,6 +1365,7 @@ f 4 5 1
 		const res = await fetch('/api/live-obj', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
+			signal,
 			body: JSON.stringify({
 				userMessage: text,
 				...(requestImageUrls.length === 1 ? { imageUrl: requestImageUrls[0] } : {}),
@@ -1285,6 +1384,7 @@ f 4 5 1
 			})
 		});
 		const payload = (await res.json().catch(() => ({}))) as LiveObjApiPayload;
+		throwIfAborted(signal);
 		if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
 		clearThinkingMessage();
 
@@ -1353,6 +1453,9 @@ f 4 5 1
 
 		statusLine = null;
 		busy = true;
+		const generationAbortController = new AbortController();
+		activeGenerationAbortController = generationAbortController;
+		const { signal } = generationAbortController;
 
 		const priorMsgs = [...msgs];
 		const userLine: ChatMsg = {
@@ -1391,7 +1494,8 @@ f 4 5 1
 					initialImageUrls,
 					model,
 					useProcedural,
-					baseLiveObj: isIterativeEdit ? currentLiveObj : ''
+					baseLiveObj: isIterativeEdit ? currentLiveObj : '',
+					signal
 				});
 			} else {
 				appendProgressMessage(
@@ -1406,6 +1510,7 @@ f 4 5 1
 				const res = await fetch('/api/live-obj', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
+					signal,
 					body: JSON.stringify({
 						userMessage: text,
 						...(initialImageUrls.length === 1 ? { imageUrl: initialImageUrls[0] } : {}),
@@ -1424,6 +1529,7 @@ f 4 5 1
 					})
 				});
 				const payload = (await res.json().catch(() => ({}))) as LiveObjApiPayload;
+				throwIfAborted(signal);
 				if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
 				clearThinkingMessage();
 
@@ -1475,6 +1581,7 @@ f 4 5 1
 			}
 
 			for (let pass = 1; pass <= feedbackPasses; pass += 1) {
+				throwIfAborted(signal);
 				const feedbackStartedAt = performance.now();
 				statusLine = `Feedback loop ${pass}/${feedbackPasses}: capturing rendered scene.`;
 				await waitForSceneCaptureFrame();
@@ -1498,7 +1605,8 @@ f 4 5 1
 					targetObjectId,
 					imageDataUrls: [...initialImageUrls, screenshot],
 					priorMsgs: priorBeforeFeedback,
-					includeHistoryImages: false
+					includeHistoryImages: false,
+					signal
 				});
 				appendProgressMessage(
 					`Feedback loop ${pass}/${feedbackPasses} finished.`,
@@ -1510,12 +1618,23 @@ f 4 5 1
 			}
 		} catch (e) {
 			clearThinkingMessage();
+			if (isAbortError(e)) {
+				statusLine = 'Generation stopped.';
+				if (liveObjText.trim() || executedObjText.trim()) {
+					tryApplyObjString(executedObjText || liveObjText, liveObjText || executedObjText);
+				}
+				msgs = [...msgs, { role: 'assistant', content: 'Generation stopped.' }];
+				return;
+			}
 			const m = e instanceof Error ? e.message : String(e);
 			statusLine = m;
 			msgs = [...msgs, { role: 'assistant', content: `Error: ${m}` }];
 		} finally {
 			clearThinkingMessage();
 			busy = false;
+			if (activeGenerationAbortController === generationAbortController) {
+				activeGenerationAbortController = null;
+			}
 		}
 	}
 
@@ -1646,6 +1765,7 @@ f 4 5 1
 		onOpenLiveObj={(text) => void openLiveObj(text)}
 		bind:providerSettings
 		onSend={(p) => void sendPrompt(p)}
+		onStopGeneration={stopGeneration}
 		onCaptureSceneScreenshot={captureSceneScreenshot}
 		onLaunchObjExample={launchObjExample}
 		bind:kernelDefault

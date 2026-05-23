@@ -214,6 +214,7 @@ f 20 24 21 17`
 		busy = false,
 		statusLine = null,
 		onSend,
+		onStop,
 		onLaunchObjExample,
 		input = $bindable(''),
 		targetObjectId = $bindable(''),
@@ -226,6 +227,7 @@ f 20 24 21 17`
 		busy?: boolean;
 		statusLine?: string | null;
 		onSend?: (payload: SendPayload) => void;
+		onStop?: () => void;
 		onLaunchObjExample?: (liveObj: string) => void;
 		input?: string;
 		targetObjectId?: string;
@@ -531,9 +533,11 @@ f 20 24 21 17`
 					Attach
 				</label>
 			</div>
-			<button type="button" class="send-button" disabled={!canSend} onclick={submit}>
-				{busy ? '…' : 'Send'}
-			</button>
+			{#if busy}
+				<button type="button" class="stop-button" onclick={() => onStop?.()}>Stop</button>
+			{:else}
+				<button type="button" class="send-button" disabled={!canSend} onclick={submit}>Send</button>
+			{/if}
 		</div>
 	</div>
 </div>
@@ -672,6 +676,11 @@ f 20 24 21 17`
 	}
 
 	.planner-chat-input-toolbar > .send-button {
+		flex: 0 0 auto;
+		margin-left: auto;
+	}
+
+	.planner-chat-input-toolbar > .stop-button {
 		flex: 0 0 auto;
 		margin-left: auto;
 	}
@@ -896,5 +905,28 @@ f 20 24 21 17`
 		font-weight: 600;
 		color: #0000eb;
 		line-height: 1.4;
+	}
+
+	.stop-button {
+		box-sizing: border-box;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 72px;
+		height: 36px;
+		padding: 0 14px;
+		border-radius: 999px;
+		border: 1px solid rgba(185, 28, 28, 0.22);
+		background: #fef2f2;
+		color: #991b1b;
+		font-family: inherit;
+		font-size: 13px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.stop-button:hover {
+		background: #fee2e2;
+		border-color: rgba(185, 28, 28, 0.34);
 	}
 </style>
