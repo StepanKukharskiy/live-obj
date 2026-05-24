@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { appendGeneratedPart, parseJsonObject, validateLiveObj } from './iterative';
+import { validateRawPostSource } from '$lib/liveObj/rawPostValidation';
+import {
+	appendGeneratedPart,
+	normalizeGeneratedPartMetadata,
+	parseJsonObject,
+	validateLiveObj
+} from './iterative';
 
 describe('iterative Live OBJ helpers', () => {
 	it('remaps local part face indices when appending', () => {
@@ -53,6 +59,47 @@ describe('iterative Live OBJ helpers', () => {
 
 		expect(appended.normalizedPart).toContain('f 1 2 3');
 		expect(validateLiveObj(appended.liveObj).valid).toBe(true);
+	});
+
+	it('normalizes redundant raw-post material target attributes', () => {
+		const part = [
+			'#@material_preset: glow color=#88ccff roughness=0.25 metalness=0',
+			'o fading_memory_core_glow',
+			'#@source: llm_mesh',
+			'#@semantic: soft internal glow',
+			'#@post:',
+			'#@ - material name=glow object=fading_memory_core_glow',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 0 1 0',
+			'f 1 2 3'
+		].join('\n');
+
+		const normalized = normalizeGeneratedPartMetadata(part);
+		const appended = appendGeneratedPart('', part);
+
+		expect(normalized).toContain('#@ - material name=glow');
+		expect(normalized).not.toContain('object=fading_memory_core_glow');
+		expect(validateRawPostSource(normalized).valid).toBe(true);
+		expect(appended.normalizedPart).not.toContain('object=fading_memory_core_glow');
+	});
+
+	it('normalizes inline raw-post material id syntax to block syntax', () => {
+		const part = [
+			'o core',
+			'#@source: llm_mesh',
+			'#@semantic: glowing core',
+			'#@post material id=glow target=core',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 0 1 0',
+			'f 1 2 3'
+		].join('\n');
+
+		const normalized = normalizeGeneratedPartMetadata(part);
+
+		expect(normalized).toContain('#@post:\n#@ - material name=glow');
+		expect(validateRawPostSource(normalized).valid).toBe(true);
 	});
 
 	it('remaps local line indices when appending', () => {

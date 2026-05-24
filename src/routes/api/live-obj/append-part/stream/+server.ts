@@ -14,6 +14,7 @@ import {
 } from '$lib/server/liveObj/pipeline';
 import {
 	appendGeneratedPart,
+	normalizeGeneratedPartMetadata,
 	summarizeLiveObjForPlanning,
 	validateLiveObj,
 	type IterativePartSpec,
@@ -110,6 +111,7 @@ function validationRepairPrompt(
 		'Use a unique object name, include vertices, and ensure all visible raw mesh objects include faces.',
 		'Every raw mesh object/group with vertices must include faces. Vertices without f lines are invisible and are not acceptable.',
 		'If you model a body shell, connect section rings with side faces and cap the ends.',
+		'For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness=, or metalness= on the material op.',
 		'Previous invalid output:',
 		rawPart
 	].join('\n');
@@ -249,7 +251,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						});
 					}
 
-					let rawPart = stripCodeFences(llmResult.content);
+					let rawPart = normalizeGeneratedPartMetadata(stripCodeFences(llmResult.content));
 					let appended: ReturnType<typeof appendGeneratedPart>;
 					try {
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
@@ -278,7 +280,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						);
 						addUsageStep(usages, repairResult.usage);
 						rawAttempts.push(repairResult.content);
-						rawPart = stripCodeFences(repairResult.content);
+						rawPart = normalizeGeneratedPartMetadata(stripCodeFences(repairResult.content));
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
 					}
 					let validation = applyRawPostPartValidation(
@@ -307,8 +309,37 @@ export const POST: RequestHandler = async ({ request }) => {
 						);
 						addUsageStep(usages, repairResult.usage);
 						rawAttempts.push(repairResult.content);
-						rawPart = stripCodeFences(repairResult.content);
-						appended = appendGeneratedPart(currentLiveObj, rawPart);
+						rawPart = normalizeGeneratedPartMetadata(stripCodeFences(repairResult.content));
+						try {
+							appended = appendGeneratedPart(currentLiveObj, rawPart);
+						} catch (appendError) {
+							emit({
+								type: 'status',
+								message: `Repairing ${part.id}.`
+							});
+							const appendRepairResult = await withLlmRequestOverrides(
+								reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
+								() =>
+									requestLiveObjPartFromLlm(
+										{
+											userMessage: appendRepairPrompt(
+												userMessage,
+												rawPart,
+												appendError instanceof Error ? appendError.message : String(appendError)
+											),
+											part,
+											plan: body.plan,
+											currentLiveObjSummary
+										},
+										model,
+										{ imageDataUrls: imageUrls, useProcedural }
+									)
+							);
+							addUsageStep(usages, appendRepairResult.usage);
+							rawAttempts.push(appendRepairResult.content);
+							rawPart = normalizeGeneratedPartMetadata(stripCodeFences(appendRepairResult.content));
+							appended = appendGeneratedPart(currentLiveObj, rawPart);
+						}
 						validation = applyRawPostPartValidation(
 							validateLiveObj(appended.liveObj, currentLiveObj),
 							rawPart,

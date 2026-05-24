@@ -10,6 +10,7 @@ import {
 } from '$lib/server/liveObj/pipeline';
 import {
 	appendGeneratedPart,
+	normalizeGeneratedPartMetadata,
 	summarizeLiveObjForPlanning,
 	validateLiveObj,
 	type IterativePartSpec,
@@ -127,7 +128,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			);
 			if (llmResult.usage) usages.push(llmResult.usage);
 			rawAttempts.push(llmResult.content);
-			return stripCodeFences(llmResult.content);
+			return normalizeGeneratedPartMetadata(stripCodeFences(llmResult.content));
 		};
 
 		let rawPart = await requestPart();
@@ -163,11 +164,28 @@ export const POST: RequestHandler = async ({ request }) => {
 					'Use a unique object name, include vertices, and ensure all faces reference existing local vertices.',
 					'Every raw mesh object/group with vertices must include faces. Do not emit vertices-only logs, rings, supports, lattices, or usemtl-only groups.',
 					'If you model logs or beams as rings/sections, connect each adjacent section with side faces and cap the ends.',
+					'For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness=, or metalness= on the material op.',
 					'Previous invalid output:',
 					rawPart
 				].join('\n')
 			);
-			appended = appendGeneratedPart(currentLiveObj, rawPart);
+			try {
+				appended = appendGeneratedPart(currentLiveObj, rawPart);
+			} catch (appendError) {
+				rawPart = await requestPart(
+					[
+						'Your previous validation repair still could not be appended.',
+						`Append error: ${appendError instanceof Error ? appendError.message : String(appendError)}`,
+						'Return the same requested part again, but fix OBJ face indices.',
+						'Every f line must use local indices that reference vertices in this returned part only.',
+						'If a face references vertex 60, this returned part must define at least 60 local vertices; otherwise renumber faces to the local vertex range.',
+						'For #@post material, use only name=material_id.',
+						'Previous invalid output:',
+						rawPart
+					].join('\n')
+				);
+				appended = appendGeneratedPart(currentLiveObj, rawPart);
+			}
 			validation = applyRawPostPartValidation(
 				validateLiveObj(appended.liveObj, currentLiveObj),
 				rawPart,

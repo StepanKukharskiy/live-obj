@@ -154,7 +154,7 @@ function bboxFromText(sourceText: string): LiveObjValidationResult['bbox'] {
 }
 
 function splitPartText(rawPart: string): { preambleLines: string[]; objectText: string } {
-	const clean = stripCodeFences(rawPart).trim();
+	const clean = normalizeGeneratedPartMetadata(rawPart).trim();
 	const lines = clean.split('\n');
 	const firstObject = lines.findIndex((line) => /^\s*o\s+/.test(line));
 	if (firstObject < 0) {
@@ -165,6 +165,44 @@ function splitPartText(rawPart: string): { preambleLines: string[]; objectText: 
 		.filter((line) => /^\s*#@material_preset:\s+/.test(line));
 	const objectText = lines.slice(firstObject).join('\n').trim();
 	return { preambleLines, objectText };
+}
+
+function firstPostAttributeValue(body: string, keys: string[]): string | undefined {
+	for (const key of keys) {
+		const match = body.match(new RegExp(`(?:^|\\s)${key}\\s*=\\s*("[^"]+"|'[^']+'|[^\\s]+)`, 'i'));
+		const value = match?.[1]?.trim();
+		if (!value) continue;
+		return value.replace(/^["']|["']$/g, '');
+	}
+	return undefined;
+}
+
+function normalizeMaterialPostLine(rawLine: string): string[] | undefined {
+	const blockMaterial = rawLine.match(/^(\s*)#@\s*-\s*material\b(.*)$/i);
+	if (blockMaterial) {
+		const materialName = firstPostAttributeValue(blockMaterial[2] ?? '', ['name', 'id']);
+		if (!materialName) return undefined;
+		return [`${blockMaterial[1]}#@ - material name=${materialName}`];
+	}
+
+	const inlineMaterial = rawLine.match(/^(\s*)#@post\s+material\b(.*)$/i);
+	if (inlineMaterial) {
+		const materialName = firstPostAttributeValue(inlineMaterial[2] ?? '', ['name', 'id']);
+		if (!materialName) return undefined;
+		return [
+			`${inlineMaterial[1]}#@post:`,
+			`${inlineMaterial[1]}#@ - material name=${materialName}`
+		];
+	}
+
+	return undefined;
+}
+
+export function normalizeGeneratedPartMetadata(rawPart: string): string {
+	return stripCodeFences(rawPart)
+		.split('\n')
+		.flatMap((line) => normalizeMaterialPostLine(line) ?? [line])
+		.join('\n');
 }
 
 function remapFaceToken(token: string, vertexOffset: number, localIndexOffset = 0): string {
