@@ -93,6 +93,7 @@ Planning rules:
 - Do not use method values "procedural", "recipe", or "hybrid" in this iterative raw OBJ planner.
 - Do not invent executor operations. The default generation method is llm_mesh with semantic metadata and optional generic post notes.
 - If the user asks for controls, sliders, parameters, adjustable dimensions, or editability, preserve that requirement in the relevant part prompts. Do not treat metadata controls as forbidden UI objects.
+- In this Grasshopper decomposed builder, every planned part should expose 2-5 practical Grasshopper controls by default. Add that requirement to each part prompt using #@params and #@controls metadata, with every control referenced by executable #@post syntax.
 - Use stable snake_case ids.'''
 
 
@@ -117,11 +118,14 @@ Raw-first part rules:
 - Fit the part to the existing scene summary and dependencies.
 - Use y as the vertical/up axis unless the current scene summary says otherwise.
 - Keep geometry compact and clean: target 20-90 vertices for ordinary parts and at most about 160 vertices for a main shell. Use simple topology for the first pass; use #@post smooth/subdivide when a softer surface is intended.
+- Match topology to visible intent: if the requested visual property cannot be produced by supported executable #@post syntax, bake it into the raw v/f mesh with enough vertices/faces for the effect to be visible. Do not satisfy visible geometry requests only with object names, #@semantic, #@tag, material names, or unsupported #@post attributes.
 - Prefer quads and simple polygons. Avoid dense grids, seam networks, individual fasteners, tiny bolts, repeated micro-panels, or context clutter in the first pass.
 - Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
 - Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
-- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- For repeated modules, #@post array supports per-copy expressions in scale, position, and pivot using i, index, step, count, t, sin(), cos(), min(), max(), abs(), sqrt(), pi, and tau.
+- For per-vertex edits, #@post deform supports position=[x,y,z] expressions with x/y/z, normalized u/v/w bbox coordinates, i/index, t, vertex_count, params, and the same math functions.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
 - If the user request, plan, or part prompt asks for controls, include #@params: and #@controls: metadata for meaningful dimensions. Every control key must be referenced by executable #@post metadata such as transform, array, mirror/symmetrize, smooth, subdivide, simplify, snap_to_ground, or center_origin. For raw v/f meshes, use controls for object-level scale, height, spacing, count, smoothing, or placement rather than pretending baked vertex coordinates are parametric.
 - Parameter references in #@post expressions must use bare names such as voxel_size or (voxel_size*grid_width)/10. Never use template placeholder syntax such as dollar-brace or curly-brace parameter wrappers.
@@ -134,6 +138,7 @@ SUPPORTED_POST_OPS = set([
     "symmetrize",
     "mirror",
     "array",
+    "deform",
     "subdivide",
     "smooth",
     "simplify",
@@ -142,6 +147,21 @@ SUPPORTED_POST_OPS = set([
     "material",
     "tag",
 ])
+
+SUPPORTED_POST_ATTRS = {
+    "transform": set(["position", "rotation", "scale", "pivot"]),
+    "symmetrize": set(["axis", "side", "tolerance"]),
+    "mirror": set(["axis"]),
+    "array": set(["count", "offset", "centered", "center", "scale", "position", "pivot"]),
+    "deform": set(["position", "expr", "xyz"]),
+    "subdivide": set(["level"]),
+    "smooth": set(["iterations", "strength"]),
+    "simplify": set(["ratio"]),
+    "snap_to_ground": set(["axis"]),
+    "center_origin": set(["axes"]),
+    "material": set(["name"]),
+    "tag": set(["value"]),
+}
 
 
 POST_REPAIR_PROMPT = '''You repair one raw OBJ part for the Spellshape Live OBJ executor.
@@ -154,7 +174,8 @@ Supported #@post operations:
 - transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz] pivot=[x,y,z]
 - symmetrize axis=x|y|z side=positive|negative tolerance=0.000001
 - mirror axis=x|y|z
-- array count=n offset=[x,y,z] centered=true|false
+- array count=n offset=[x,y,z] centered=true|false scale=[sx,sy,sz] position=[x,y,z] pivot=[x,y,z]
+- deform position=[x,y,z]
 - subdivide level=n
 - smooth iterations=n strength=0.5
 - simplify ratio=0.5
@@ -166,6 +187,9 @@ Supported #@post operations:
 Important:
 - smooth uses iterations=, not level=.
 - subdivide uses level=.
+- material uses name= only. Do not include target=, object=, id=, color=, roughness=, or metalness=.
+- transform uses position=, rotation=, scale=, and optional pivot=. Do not use target=, origin=, translate=, rotate=, rotate_y=, axis=, spacing=, or mode=.
+- Unsupported visible behavior must be baked into v/f geometry rather than described with unsupported #@post attributes.
 - Always use block syntax: #@post: then #@ - operation args...'''
 
 
@@ -173,7 +197,7 @@ CONTROL_REPAIR_PROMPT = '''You repair one raw OBJ part for the Spellshape Grassh
 
 Return only complete OBJ text for the same part. Do not return Markdown or explanations.
 Preserve the object's geometry, object names, faces, material intent, and role.
-The original user asked for controls, but this part did not include #@controls metadata.
+This Grasshopper decomposed-builder part requires controls, but it did not include #@controls metadata.
 
 Add minimal useful controls using:
 #@params: key=value, key=value
@@ -445,7 +469,7 @@ def count_faces(text):
 
 
 def split_part_text(raw_part):
-    clean = strip_code_fence(raw_part)
+    clean = normalize_generated_part_metadata(raw_part)
     lines = clean.splitlines()
     first_obj = -1
     for i, line in enumerate(lines):
@@ -519,6 +543,43 @@ def remap_part_faces(obj_text, vertex_offset):
 
 def material_ids(text):
     return set(re.findall(r"^\s*#@material_preset:\s+([^\s]+)", safe_str(text), re.M))
+
+
+def first_post_attribute_value(body, keys):
+    for attr in keys:
+        m = re.search(r"(?:^|\s)%s\s*=\s*(\"[^\"]+\"|'[^']+'|[^\s]+)" % re.escape(attr), safe_str(body), re.I)
+        if not m:
+            continue
+        return m.group(1).strip().strip("\"'")
+    return ""
+
+
+def normalize_material_post_line(raw_line):
+    block = re.match(r"^(\s*)#@\s*-\s*material\b(.*)$", safe_str(raw_line), re.I)
+    if block:
+        material_name = first_post_attribute_value(block.group(2), ["name", "id"])
+        if material_name:
+            return [block.group(1) + "#@ - material name=" + material_name]
+        return None
+    inline = re.match(r"^(\s*)#@post\s+material\b(.*)$", safe_str(raw_line), re.I)
+    if inline:
+        material_name = first_post_attribute_value(inline.group(2), ["name", "id"])
+        if material_name:
+            indent = inline.group(1)
+            return [indent + "#@post:", indent + "#@ - material name=" + material_name]
+        return None
+    return None
+
+
+def normalize_generated_part_metadata(raw_part):
+    lines = []
+    for line in strip_code_fence(raw_part).splitlines():
+        normalized = normalize_material_post_line(line)
+        if normalized is None:
+            lines.append(line)
+        else:
+            lines.extend(normalized)
+    return "\n".join(lines)
 
 
 def insert_materials(scene_text, preamble):
@@ -653,28 +714,31 @@ def part_list(plan):
 def build_part_prompt(plan, part, current_scene, original_request=""):
     action, target = part_action(part, current_scene)
     return "\n".join([
-        "Original user request:",
-        safe_str(original_request),
+        "Original user request: " + (safe_str(original_request).strip() or "Generate the requested part"),
         "",
-        "Overall scene:",
-        safe_str(plan.get("scene", "")),
+        "Requested part spec:",
+        json.dumps(part, indent=2),
         "",
-        "Full plan JSON:",
-        json.dumps(plan),
+        "Overall part plan:",
+        json.dumps(plan, indent=2),
         "",
         "Current scene summary:",
-        summarize_scene(current_scene),
-        "",
-        "Current OBJ source:",
-        safe_str(current_scene)[-12000:],
+        summarize_scene(current_scene) or "(empty scene)",
         "",
         "Execution action:",
         action + ((" target=" + target) if target else ""),
         "",
         "If the action is replace, return one complete OBJ block for the target object. Keep the target object name stable.",
         "",
-        "Generate only this part:",
-        json.dumps(part),
+        "Grasshopper control policy:",
+        "Include #@params: and #@controls: metadata for 2-5 meaningful part controls by default.",
+        "Use canonical control syntax:",
+        "#@controls:",
+        "#@ - slider key=scale label=Scale min=0.5 max=2.0 step=0.05",
+        "Every control key must be referenced by executable #@post syntax. Prefer transform scale/position with pivot, array count/offset, deform position, smooth iterations/strength, simplify ratio, or center_origin.",
+        "Do not emit unsupported #@post attributes such as target=, origin=, translate=, rotate_y=, axis= for array spacing, or mode=.",
+        "",
+        "Generate only the requested part now.",
     ])
 
 
@@ -753,13 +817,18 @@ def validate_post_line(text, object_name):
     if cmd not in SUPPORTED_POST_OPS:
         issues.append("%s: unsupported #@post operation '%s'" % (label, cmd))
         return issues
+    allowed_attrs = SUPPORTED_POST_ATTRS.get(cmd, set())
     for key, value in args.items():
+        if key not in allowed_attrs:
+            issues.append("%s: unsupported #@post %s attribute '%s'" % (label, cmd, key))
         if re.search(r"\$\{[^}]+\}", value) or re.search(r"(?<!\[)\{[A-Za-z_][A-Za-z0-9_]*\}", value):
             issues.append("%s: #@post %s uses template placeholder syntax in %s=%s; use bare parameter names instead" % (label, cmd, key, value))
     if cmd == "smooth" and "level" in args and "iterations" not in args:
         issues.append("%s: smooth uses level=, but the executor expects smooth iterations=n strength=0.5" % label)
     if cmd == "tag" and "name" in args and "value" not in args:
         issues.append("%s: tag uses name=, but the executor contract expects tag value=..." % label)
+    if cmd == "deform" and not ("position" in args or "expr" in args or "xyz" in args):
+        issues.append("%s: deform expects position=[x,y,z]" % label)
     if cmd == "snap_to_ground" and ("surface" in args or "anchor" in args):
         issues.append("%s: snap_to_ground only supports axis=x|y|z; contact-to-surface placement is not supported in #@post" % label)
     return issues
@@ -831,16 +900,11 @@ def repair_post_ops_if_needed(provider_name, api_key, model_name, part_text, bas
 
 
 def repair_controls_if_needed(provider_name, api_key, model_name, part_text, part, original_request, base_url, max_out):
-    control_context = safe_str(original_request) + "\n" + json.dumps(part)
-    if not request_mentions_controls(control_context):
-        return part_text, False
     if has_controls_metadata(part_text):
         return part_text, False
-    if not safe_str(original_request).strip():
-        raise Exception("Controls were requested in the plan, but the original prompt was not stored. Press reset and plan_run again with the updated script.")
     prompt = "\n".join([
         "Original user request:",
-        safe_str(original_request),
+        safe_str(original_request) or "Generate the requested part",
         "",
         "Part plan:",
         json.dumps(part),
@@ -861,6 +925,180 @@ def repair_controls_if_needed(provider_name, api_key, model_name, part_text, par
     if not has_controls_metadata(repaired):
         raise Exception("Generated part still has no #@controls metadata after repair")
     return repaired, True
+
+
+def visible_part_validation_issues(part_text):
+    issues = []
+    try:
+        _, obj_text = split_part_text(part_text)
+    except Exception as e:
+        return [str(e)]
+    blocks = split_scene_blocks(obj_text)[1]
+    if not blocks:
+        issues.append("No OBJ objects found")
+    for name, block in blocks:
+        vertices = count_vertices(block)
+        faces = count_faces(block)
+        if not has_controls_metadata(block):
+            issues.append("Object '%s' is missing required #@controls metadata" % name)
+        if vertices > 0 and faces == 0:
+            issues.append("Object '%s' defines %d vertices but no faces, so it will not render" % (name, vertices))
+        for line_no, line in enumerate(block.splitlines(), 1):
+            if not re.match(r"^\s*f\s+", line):
+                continue
+            refs = face_refs(line)
+            if len(refs) < 3:
+                issues.append("Object '%s' has a face with fewer than 3 vertices near local line %d" % (name, line_no))
+    issues.extend(post_op_issues(obj_text))
+    return issues
+
+
+def build_append_repair_hint(raw_part, append_error):
+    return "\n".join([
+        "Your previous OBJ part was invalid and could not be appended.",
+        "Append error: " + safe_str(append_error),
+        "Return the same requested part again as valid OBJ/Live OBJ only.",
+        "The response must contain at least one OBJ object line like `o main_body` before any mesh vertices.",
+        "Use local face indices starting at 1 for this returned part.",
+        "Every visible raw mesh object/group with vertices must include faces.",
+        "For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness, or metalness on the material op.",
+        "Do not return the plan JSON, scene JSON, Markdown, or explanations.",
+        "Previous invalid output:",
+        safe_str(raw_part)[-12000:],
+    ])
+
+
+def build_validation_repair_hint(raw_part, issues):
+    return "\n".join([
+        "Your previous OBJ part appended but failed validation.",
+        "Validation errors: " + "; ".join(issues[:12]),
+        "Return the same requested part again as valid OBJ/Live OBJ only.",
+        "Use a unique object name, include vertices, and ensure all visible raw mesh objects include faces.",
+        "Every raw mesh object/group with vertices must include faces. Vertices without f lines are invisible and are not acceptable.",
+        "If you model a body shell, connect section rings with side faces and cap the ends.",
+        "For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness, or metalness on the material op.",
+        "Use only supported #@post attributes. If a visual behavior needs unsupported attributes, bake it into real v/f geometry.",
+        "Previous invalid output:",
+        safe_str(raw_part)[-12000:],
+    ])
+
+
+def append_or_replace_part(current_scene, part_text, part):
+    action, target = part_action(part, current_scene)
+    if action == "replace":
+        next_scene, normalized = replace_part(current_scene, part_text, target)
+    else:
+        next_scene, normalized = append_part(current_scene, part_text)
+    return action, next_scene, normalized
+
+
+def request_part_text(provider_name, api_key, model_name, plan, part, current_scene, original_request, base_url, max_out, repair_hint=""):
+    user_prompt = build_part_prompt(plan, part, current_scene, original_request)
+    if repair_hint:
+        user_prompt = user_prompt + "\n\nRepair instruction for this part:\n" + repair_hint
+    raw_part = call_provider(
+        provider_name,
+        api_key,
+        model_name,
+        PART_SYSTEM_PROMPT,
+        user_prompt,
+        base_url,
+        max_out,
+    )
+    part_text = normalize_generated_part_metadata(extract_text(provider_name, raw_part))
+    return raw_part, part_text
+
+
+def prepare_part_text(provider_name, api_key, model_name, part_text, part, original_request, base_url, max_out):
+    part_text = normalize_generated_part_metadata(part_text)
+    part_text, _ = repair_controls_if_needed(
+        provider_name,
+        api_key,
+        model_name,
+        part_text,
+        part,
+        original_request,
+        base_url,
+        max_out,
+    )
+    part_text, _ = repair_post_ops_if_needed(
+        provider_name,
+        api_key,
+        model_name,
+        part_text,
+        base_url,
+        max_out,
+    )
+    return normalize_generated_part_metadata(part_text)
+
+
+def generate_part_with_web_retries(provider_name, api_key, model_name, plan, part, current_scene, original_request, base_url, max_out):
+    raw_attempts = []
+
+    raw_part, part_text = request_part_text(
+        provider_name, api_key, model_name, plan, part, current_scene, original_request, base_url, max_out
+    )
+    raw_attempts.append(extract_text(provider_name, raw_part))
+    part_text = prepare_part_text(provider_name, api_key, model_name, part_text, part, original_request, base_url, max_out)
+
+    try:
+        action, next_scene, normalized = append_or_replace_part(current_scene, part_text, part)
+    except Exception as first_error:
+        raw_part, part_text = request_part_text(
+            provider_name,
+            api_key,
+            model_name,
+            plan,
+            part,
+            current_scene,
+            original_request,
+            base_url,
+            max_out,
+            build_append_repair_hint(part_text, first_error),
+        )
+        raw_attempts.append(extract_text(provider_name, raw_part))
+        part_text = prepare_part_text(provider_name, api_key, model_name, part_text, part, original_request, base_url, max_out)
+        action, next_scene, normalized = append_or_replace_part(current_scene, part_text, part)
+
+    issues = visible_part_validation_issues(part_text)
+    if issues:
+        raw_part, part_text = request_part_text(
+            provider_name,
+            api_key,
+            model_name,
+            plan,
+            part,
+            current_scene,
+            original_request,
+            base_url,
+            max_out,
+            build_validation_repair_hint(part_text, issues),
+        )
+        raw_attempts.append(extract_text(provider_name, raw_part))
+        part_text = prepare_part_text(provider_name, api_key, model_name, part_text, part, original_request, base_url, max_out)
+        try:
+            action, next_scene, normalized = append_or_replace_part(current_scene, part_text, part)
+        except Exception as append_error:
+            raw_part, part_text = request_part_text(
+                provider_name,
+                api_key,
+                model_name,
+                plan,
+                part,
+                current_scene,
+                original_request,
+                base_url,
+                max_out,
+                build_append_repair_hint(part_text, append_error),
+            )
+            raw_attempts.append(extract_text(provider_name, raw_part))
+            part_text = prepare_part_text(provider_name, api_key, model_name, part_text, part, original_request, base_url, max_out)
+            action, next_scene, normalized = append_or_replace_part(current_scene, part_text, part)
+        issues = visible_part_validation_issues(part_text)
+    if issues:
+        raise Exception("Generated part failed validation after repair: " + "; ".join(issues[:6]))
+
+    return action, next_scene, normalized, "\n\n# --- repair attempt ---\n\n".join([safe_str(a) for a in raw_attempts])
 
 
 current_obj = safe_str(get_mem("current_obj", ""))
@@ -914,7 +1152,7 @@ try:
                 "For newly requested objects, set action=\"append\".",
                 "Each replacement part prompt must ask for one complete replacement OBJ block with the same target object name.",
                 "Preserve unrelated objects by not planning steps for them.",
-                "If the user asks for controls, the relevant replacement/addition prompts must explicitly require #@params: and #@controls: metadata. Controls are metadata, not visible scene objects.",
+                "Every replacement/addition prompt must explicitly require #@params: and #@controls: metadata for 2-5 practical Grasshopper controls. Controls are metadata, not visible scene objects.",
                 "",
                 "User edit request:",
                 scene_prompt,
@@ -928,7 +1166,7 @@ try:
             user = "\n".join([
                 "Generation mode: tools-off raw-first OBJ.",
                 "Plan ONLY raw mesh parts. Each part method must be \"llm_mesh\".",
-                "If the user asks for controls, the relevant part prompts must explicitly require #@params: and #@controls: metadata. Controls are metadata, not visible scene objects.",
+                "Every part prompt must explicitly require #@params: and #@controls: metadata for 2-5 practical Grasshopper controls. Controls are metadata, not visible scene objects.",
                 "",
                 "Plan this raw OBJ scene for iterative generation:",
                 scene_prompt,
@@ -973,47 +1211,21 @@ try:
             active_part = "%s: %s" % (part.get("id", "part"), part.get("role", ""))
             status = "generating part %d/%d: %s" % (part_index + 1, len(all_parts), part.get("id", "part"))
             set_message(status)
-            raw_part = call_provider(
+            action, current_obj, normalized, raw_attempts = generate_part_with_web_retries(
                 provider_name,
                 api_key,
                 model_name,
-                PART_SYSTEM_PROMPT,
-                build_part_prompt(plan, part, current_obj, stored_scene_prompt),
-                base_url,
-                max_out,
-            )
-            part_text = extract_text(provider_name, raw_part)
-            part_text, controls_repaired = repair_controls_if_needed(
-                provider_name,
-                api_key,
-                model_name,
-                part_text,
+                plan,
                 part,
+                current_obj,
                 stored_scene_prompt,
                 base_url,
                 max_out,
             )
-            repair_issues = post_op_issues(part_text)
-            if repair_issues:
-                status = "repairing #@post syntax for %s" % part.get("id", "part")
-                set_message(status)
-                part_text, repair_issues = repair_post_ops_if_needed(
-                    provider_name,
-                    api_key,
-                    model_name,
-                    part_text,
-                    base_url,
-                    max_out,
-                )
-            action, target = part_action(part, current_obj)
-            if action == "replace":
-                current_obj, normalized = replace_part(current_obj, part_text, target)
-            else:
-                current_obj, normalized = append_part(current_obj, part_text)
             part_index += 1
             set_mem("current_obj", current_obj)
             set_mem("part_index", part_index)
-            set_mem("last_raw", raw_part)
+            set_mem("last_raw", raw_attempts)
             set_mem("last_part", normalized)
             status = "%s part %d/%d: %s" % ("replaced" if action == "replace" else "appended", part_index, len(all_parts), part.get("id", "part"))
             if auto and part_index < len(all_parts):
