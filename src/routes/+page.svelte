@@ -6,7 +6,6 @@
 		PlaneGeometry,
 		Scene,
 		ShaderMaterial,
-		Vector2,
 		WebGLRenderer
 	} from 'three';
 
@@ -15,11 +14,6 @@
 	let fluidHost: HTMLDivElement | null = $state(null);
 	let triggerFluid: ((strength?: number) => void) | null = null;
 	let activeShowcaseIndex = $state(0);
-
-	const pointer = {
-		x: 0.5,
-		y: 0.5
-	};
 
 	const fluidVertexShader = `
 		varying vec2 vUv;
@@ -36,7 +30,6 @@
 		uniform vec2 u_resolution;
 		uniform float u_time;
 		uniform float u_morph;
-		uniform vec2 u_pointer;
 		varying vec2 vUv;
 
 		float smin(float a, float b, float k) {
@@ -62,7 +55,6 @@
 
 		float map(vec3 p) {
 			vec3 bp = p;
-			bp.xy -= (u_pointer - 0.5) * u_morph * 0.9;
 
 			vec3 p1 = bp;
 			p1.yz *= rot(u_time * 0.34);
@@ -97,7 +89,7 @@
 			p5.yz *= rot(u_time * 1.04);
 			float d5 = sdBox(p5, vec3(0.4));
 
-			float blend = 0.72 + u_morph * 2.4;
+			float blend = 0.12 + u_morph * 3.0;
 			float d = smin(d1, d2, blend);
 			d = smin(d, d3, blend);
 			d = smin(d, d4, blend);
@@ -200,15 +192,13 @@
 			const scene: Scene = new THREE.Scene();
 			const camera: Camera = new THREE.Camera();
 			const uniforms: {
-				u_resolution: { value: Vector2 };
+				u_resolution: { value: THREE.Vector2 };
 				u_time: { value: number };
 				u_morph: { value: number };
-				u_pointer: { value: Vector2 };
 			} = {
 				u_resolution: { value: new THREE.Vector2(1, 1) },
 				u_time: { value: 0 },
-				u_morph: { value: 0 },
-				u_pointer: { value: new THREE.Vector2(pointer.x, pointer.y) }
+				u_morph: { value: 0 }
 			};
 			const geometry: PlaneGeometry = new THREE.PlaneGeometry(2, 2);
 			const material: ShaderMaterial = new THREE.ShaderMaterial({
@@ -252,10 +242,8 @@
 				if (frameTime - lastFrameTime < 1000 / 30) return;
 				lastFrameTime = frameTime;
 
-				const elapsed = frameTime * 0.001;
-				const ambientMorph = 0.16 + (0.5 + 0.5 * Math.sin(elapsed * 0.22)) * 0.18;
-				targetMorph = Math.min(0.78, ambientMorph + cursorEnergy);
-				targetTimeSpeed = 0.0055 + ambientMorph * 0.006 + cursorEnergy * 0.022;
+				targetMorph = Math.min(0.78, cursorEnergy);
+				targetTimeSpeed = 0.006 + cursorEnergy * 0.024;
 				timeSpeed += (targetTimeSpeed - timeSpeed) * 0.045;
 				time += timeSpeed;
 				morphAmount += (targetMorph - morphAmount) * 0.05;
@@ -263,7 +251,6 @@
 
 				uniforms.u_time.value = time;
 				uniforms.u_morph.value = morphAmount;
-				uniforms.u_pointer.value.set(pointer.x, pointer.y);
 				renderer.render(scene, camera);
 			};
 
@@ -294,15 +281,12 @@
 		window.location.href = '/app';
 	}
 
-	function updateFieldPointer(event: PointerEvent) {
-		const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-		pointer.x = (event.clientX - rect.left) / rect.width;
-		pointer.y = 1 - (event.clientY - rect.top) / rect.height;
+	function updateFieldPointer() {
 		triggerFluid?.(0.36);
 	}
 
 	function releaseFieldPointer() {
-		triggerFluid?.(0.04);
+		triggerFluid?.(0);
 	}
 
 	const pathways = [
@@ -333,6 +317,14 @@
 
 	const showcaseVideos = [
 		{
+			src: '/videos/gh_2.mp4',
+			category: 'Architecture',
+			label: 'Spellshape Grasshopper modelling preview',
+			source: 'Made with Grasshopper plugin',
+			prompt: 'An origami tower',
+			objectPosition: 'center 86%'
+		},
+		{
 			src: '/videos/ld_1.MOV',
 			category: 'Level design',
 			label: 'Spellshape live design workflow preview',
@@ -350,12 +342,6 @@
 
 	function selectShowcase(index: number) {
 		activeShowcaseIndex = index;
-	}
-
-	function handleShowcaseKeydown(event: KeyboardEvent, index: number) {
-		if (event.key !== 'Enter' && event.key !== ' ') return;
-		event.preventDefault();
-		selectShowcaseFromCard(index);
 	}
 
 	function selectShowcaseFromCard(index: number) {
@@ -474,16 +460,14 @@
 								id={`showcase-card-${index}`}
 								class:active={activeShowcaseIndex === index}
 								class="showcase-card"
-								role="button"
-								tabindex="0"
-								aria-label={`Show ${video.category} example`}
-								onpointerdown={(event) => {
-									event.preventDefault();
-									selectShowcaseFromCard(index);
-								}}
-								onclick={(event) => event.preventDefault()}
-								onkeydown={(event) => handleShowcaseKeydown(event, index)}
 							>
+								<button
+									class:active={activeShowcaseIndex === index}
+									class="showcase-select"
+									type="button"
+									aria-label={`Show ${video.category} example`}
+									onclick={() => selectShowcaseFromCard(index)}
+								></button>
 								<video
 									class="showcase-video"
 									src={video.src}
@@ -493,6 +477,7 @@
 									playsinline
 									controls={activeShowcaseIndex === index}
 									aria-label={video.label}
+									style={`object-position: ${video.objectPosition ?? 'center center'}`}
 									onpointerdown={(event) => {
 										if (activeShowcaseIndex === index) event.stopPropagation();
 									}}
@@ -890,6 +875,7 @@
 	}
 
 	.showcase-card {
+		position: relative;
 		flex: 0 0 var(--showcase-card-width);
 		border-radius: 12px;
 		cursor: pointer;
@@ -898,6 +884,21 @@
 
 	.showcase-card:focus-visible {
 		box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.32);
+	}
+
+	.showcase-select {
+		position: absolute;
+		inset: 0;
+		z-index: 3;
+		padding: 0;
+		border: 0;
+		border-radius: 12px;
+		background: transparent;
+		cursor: pointer;
+	}
+
+	.showcase-select.active {
+		pointer-events: none;
 	}
 
 	.showcase-video {
