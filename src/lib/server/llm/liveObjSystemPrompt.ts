@@ -31,6 +31,7 @@ Output only valid OBJ content with required scene metadata:
 - Per-object transform: #@transform: position=[x,y,z],rotation=[0,0,0],scale=[1,1,1]
 - Raw post stack (optional): #@post: followed by supported #@ - op lines
 - Material assignment (optional): #@post: then #@ - material name=material_name
+- Raw controls: include #@params: and #@controls: metadata for 2-5 practical controls on every visible raw mesh object by default
 - Always use the block form for post ops:
   #@post:
   #@ - material name=material_name
@@ -86,6 +87,7 @@ Rules:
 - Every object must include #@source: llm_mesh before its v/f block
 - Every object should include #@semantic and #@editable
 - Use #@transform for object-level placement intent even when vertices are already in place
+- Every visible raw mesh object should include #@params: and #@controls: metadata for 2-5 practical controls by default. Every control key must be referenced by executable #@post syntax.
 - Use reasonable default materials (e.g., color=#888888 roughness=0.5 metalness=0.0)
 - Prefer #@post symmetrize over manually modeling both sides when a design is clearly symmetric. Emit the cleaner half or a rough full mesh, then add symmetrize.
 - When adding #@controls for spacing between paired supports, legs, rails, wheels, armrests, or repeated modules, keep the whole object centered as values change. Use \`#@ - array count=n offset=[...] centered=true\` when the base module is centered at the origin, or follow the array with \`#@ - center_origin axes=x|z|xz\` when the mesh is authored as one side and duplicated.

@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import {
 	DEFAULT_LIVE_OBJ_MODEL,
 	requestLiveObjPartFromLlm,
+	requestRawObjControlsRepairFromLlm,
 	streamLiveObjPartFromLlm
 } from '$lib/server/llm/liveObjChat';
 import { withLlmRequestOverrides } from '$lib/server/llm/chat';
@@ -13,8 +14,10 @@ import {
 	stripCodeFences
 } from '$lib/server/liveObj/pipeline';
 import {
+	addDefaultRawObjControls,
 	appendGeneratedPart,
 	normalizeGeneratedPartMetadata,
+	rawObjControlIssues,
 	summarizeLiveObjForPlanning,
 	validateLiveObj,
 	type IterativePartSpec,
@@ -85,6 +88,7 @@ function applyRawPostPartValidation(
 	validation.errors.push(
 		...rawPostValidation.errors.map((message) => `raw-post validation error: ${message}`)
 	);
+	validation.errors.push(...rawObjControlIssues(rawPart));
 	validation.warnings.push(
 		...rawPostValidation.warnings.map((message) => `raw-post validation warning: ${message}`)
 	);
@@ -110,6 +114,7 @@ function validationRepairPrompt(
 		'Return the same requested part again as valid OBJ/Live OBJ only.',
 		'Use a unique object name, include vertices, and ensure all visible raw mesh objects include faces.',
 		'Every raw mesh object/group with vertices must include faces. Vertices without f lines are invisible and are not acceptable.',
+		'Every visible raw mesh object must include #@params and #@controls metadata, and every control must drive executable #@post syntax.',
 		'If you model a body shell, connect section rings with side faces and cap the ends.',
 		'For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness=, or metalness= on the material op.',
 		'Previous invalid output:',
@@ -214,6 +219,34 @@ export const POST: RequestHandler = async ({ request }) => {
 					});
 					const rawAttempts: string[] = [];
 					const usages: TokenUsage[] = [];
+					const repairRawControlsIfNeeded = async (rawPart: string) => {
+						if (useProcedural) return rawPart;
+						const controlIssues = rawObjControlIssues(rawPart);
+						if (controlIssues.length === 0) return rawPart;
+						emit({
+							type: 'status',
+							message: `Adding controls to ${part.id}.`
+						});
+						const repairResult = await withLlmRequestOverrides(
+							reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
+							() =>
+								requestRawObjControlsRepairFromLlm(
+									{
+										userMessage,
+										part,
+										plan: body.plan,
+										rawPart,
+										controlIssues
+									},
+									model
+								)
+						);
+						addUsageStep(usages, repairResult.usage);
+						rawAttempts.push(repairResult.content);
+						const repaired = normalizeGeneratedPartMetadata(stripCodeFences(repairResult.content));
+						const remaining = rawObjControlIssues(repaired);
+						return remaining.length > 0 ? addDefaultRawObjControls(repaired) : repaired;
+					};
 					const llmResult = await withLlmRequestOverrides(
 						reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
 						() =>
@@ -251,7 +284,9 @@ export const POST: RequestHandler = async ({ request }) => {
 						});
 					}
 
-					let rawPart = normalizeGeneratedPartMetadata(stripCodeFences(llmResult.content));
+					let rawPart = await repairRawControlsIfNeeded(
+						normalizeGeneratedPartMetadata(stripCodeFences(llmResult.content))
+					);
 					let appended: ReturnType<typeof appendGeneratedPart>;
 					try {
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
@@ -280,7 +315,9 @@ export const POST: RequestHandler = async ({ request }) => {
 						);
 						addUsageStep(usages, repairResult.usage);
 						rawAttempts.push(repairResult.content);
-						rawPart = normalizeGeneratedPartMetadata(stripCodeFences(repairResult.content));
+						rawPart = await repairRawControlsIfNeeded(
+							normalizeGeneratedPartMetadata(stripCodeFences(repairResult.content))
+						);
 						appended = appendGeneratedPart(currentLiveObj, rawPart);
 					}
 					let validation = applyRawPostPartValidation(
@@ -309,7 +346,9 @@ export const POST: RequestHandler = async ({ request }) => {
 						);
 						addUsageStep(usages, repairResult.usage);
 						rawAttempts.push(repairResult.content);
-						rawPart = normalizeGeneratedPartMetadata(stripCodeFences(repairResult.content));
+						rawPart = await repairRawControlsIfNeeded(
+							normalizeGeneratedPartMetadata(stripCodeFences(repairResult.content))
+						);
 						try {
 							appended = appendGeneratedPart(currentLiveObj, rawPart);
 						} catch (appendError) {
@@ -337,7 +376,9 @@ export const POST: RequestHandler = async ({ request }) => {
 							);
 							addUsageStep(usages, appendRepairResult.usage);
 							rawAttempts.push(appendRepairResult.content);
-							rawPart = normalizeGeneratedPartMetadata(stripCodeFences(appendRepairResult.content));
+							rawPart = await repairRawControlsIfNeeded(
+								normalizeGeneratedPartMetadata(stripCodeFences(appendRepairResult.content))
+							);
 							appended = appendGeneratedPart(currentLiveObj, rawPart);
 						}
 						validation = applyRawPostPartValidation(

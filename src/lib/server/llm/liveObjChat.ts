@@ -6,6 +6,7 @@ import type {
 } from './chat';
 import { requestChatCompletion, streamChatCompletion } from './chat';
 import { LIVE_OBJ_SYSTEM_PROMPT, LLM_ONLY_SYSTEM_PROMPT } from './liveObjSystemPrompt';
+import type { IterativeControlSpec } from '$lib/server/liveObj/iterative';
 
 const DEFAULT_LIVE_OBJ_MODEL = 'gpt-5.5';
 
@@ -103,6 +104,12 @@ Return only JSON with this shape:
       "method": "llm_mesh",
       "dependencies": ["prior_part_id"],
       "prompt": "specific instructions for generating only this part",
+      "controls": [
+        { "key": "part_width", "label": "Part width", "kind": "slider", "default": 1, "min": 0.5, "max": 1.8, "step": 0.05 }
+      ],
+      "controlPostOps": [
+        "transform scale=[part_width,1,1] pivot=[0,0,0]"
+      ],
       "validationHints": ["bbox/contact/detail expectations"]
     }
   ],
@@ -121,6 +128,11 @@ Planning rules:
 - Do not use method values "procedural", "recipe", or "hybrid" in this iterative raw OBJ planner.
 - Do not invent executor operations. The default generation method is llm_mesh with semantic metadata and optional generic post notes.
 - If the user asks for controls, sliders, parameters, adjustable dimensions, or editability, preserve that requirement in the relevant part prompts. Do not treat metadata controls as forbidden UI objects.
+- In raw-first generation, every planned part should expose 2-5 practical controls by default using structured "controls" and "controlPostOps" fields.
+- Do not describe controls in prose inside "prompt". Put all control keys, ranges, defaults, and post ops in the structured fields.
+- Every control key must be referenced by at least one executable controlPostOps entry.
+- controlPostOps entries must be #@post op bodies without "#@ -" prefixes, such as "transform scale=[part_width,part_height,part_depth] pivot=[0,0,0]", "smooth iterations=smooth_iterations strength=0.35", or "array count=module_count offset=[module_spacing,0,0] centered=true".
+- Use only supported raw #@post ops in controlPostOps: transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
 - Use stable snake_case ids.`;
 
 const LIVE_OBJ_ITERATIVE_PART_SYSTEM_PROMPT = `You generate one Live OBJ part for an iterative scene builder.
@@ -176,9 +188,30 @@ Raw-first part rules:
 - For per-vertex edits, #@post deform supports position=[x,y,z] expressions with x/y/z, normalized u/v/w bbox coordinates, i/index, t, vertex_count, params, and the same math functions.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
 - If the user request, plan, or part prompt asks for controls, include #@params: and #@controls: metadata for meaningful dimensions. Every control key must be referenced by executable #@post metadata such as transform, array, mirror/symmetrize, smooth, subdivide, simplify, snap_to_ground, or center_origin. For raw v/f meshes, use controls for object-level scale, height, spacing, count, smoothing, or placement rather than pretending baked vertex coordinates are parametric.
+- In raw-first generation, include #@params: and #@controls: metadata for 2-5 meaningful part controls by default. Use controls for practical dimensions or post modifiers that can actually be executed.
 - Parameter references in #@post expressions must use bare names such as voxel_size or (voxel_size*grid_width)/10. Never use template placeholder syntax such as dollar-brace or curly-brace parameter wrappers.
 - Put material and tag assignments inside #@post blocks. Do not use #@ops in raw-first mode.
 - Always use block syntax: #@post: then lines like #@ - material name=mat_id. Do not emit inline #@post material id=... lines.`;
+
+export const RAW_OBJ_CONTROL_REPAIR_SYSTEM_PROMPT = `You repair one raw OBJ part for the Spellshape raw OBJ renderer.
+
+Return only complete OBJ text for the same part. Do not return Markdown or explanations.
+Preserve the object's geometry, object names, faces, material intent, and role.
+This raw OBJ part requires controls, but one or more visible objects did not include #@controls metadata.
+
+Add minimal useful controls using:
+#@params: key=value, key=value
+#@controls:
+#@ - slider key=key label=Readable_label min=a max=b step=c
+
+Rules:
+- Every visible raw mesh object in the part must include useful #@controls metadata.
+- Every control key must be referenced by executable #@post metadata.
+- For raw v/f meshes, useful controls are object scale, height, width/depth, vertical exaggeration, smoothing, array count/spacing, or placement.
+- Parameter references in #@post expressions must use bare names such as tree_scale or (voxel_size*grid_width)/10.
+- Never use template syntax like \${tree_scale}, {tree_scale}, or \${voxel_size}.
+- Do not create controls that only sit in #@params without affecting geometry.
+- Keep controls small and practical.`;
 
 export type LiveObjLlmResult = {
 	content: string;
@@ -187,6 +220,90 @@ export type LiveObjLlmResult = {
 
 function normalizeImageDataUrls(imageDataUrls?: string[]): string[] {
 	return [...new Set((imageDataUrls ?? []).map((url) => url.trim()).filter(Boolean))];
+}
+
+function recordValue(value: unknown): string | undefined {
+	if (typeof value === 'string') return value.trim();
+	if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+	if (typeof value === 'boolean') return value ? 'true' : 'false';
+	return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function controlSpecsFromPart(part: unknown): IterativeControlSpec[] {
+	if (!isRecord(part) || !Array.isArray(part.controls)) return [];
+	const controls: IterativeControlSpec[] = [];
+	for (const rawControl of part.controls) {
+		if (!isRecord(rawControl)) continue;
+		const key = recordValue(rawControl.key);
+		if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+		const options = Array.isArray(rawControl.options)
+			? rawControl.options.map(recordValue).filter((option): option is string => Boolean(option))
+			: undefined;
+		controls.push({
+			key,
+			label: recordValue(rawControl.label),
+			kind: recordValue(rawControl.kind) ?? 'slider',
+			default: recordValue(rawControl.default),
+			min: recordValue(rawControl.min),
+			max: recordValue(rawControl.max),
+			step: recordValue(rawControl.step),
+			...(options && options.length > 0 ? { options } : {})
+		});
+	}
+	return controls;
+}
+
+function postOpsFromPart(part: unknown, controls: IterativeControlSpec[]): string[] {
+	const rawOps = isRecord(part) && Array.isArray(part.controlPostOps) ? part.controlPostOps : [];
+	const ops = rawOps
+		.map(recordValue)
+		.filter((op): op is string => Boolean(op))
+		.map((op) =>
+			op
+				.replace(/^#@\s*post:\s*$/i, '')
+				.replace(/^#@\s*-\s*/i, '')
+				.replace(/^-\s*/i, '')
+				.trim()
+		)
+		.filter(Boolean);
+	if (ops.length > 0 || controls.length === 0) return ops;
+	const [x, y, z] = controls.map((control) => control.key);
+	return [`transform scale=[${x ?? '1'},${y ?? '1'},${z ?? '1'}] pivot=[0,0,0]`];
+}
+
+function renderPartControlMetadata(part: unknown): string {
+	const controls = controlSpecsFromPart(part);
+	if (controls.length === 0) return '';
+	const params = controls
+		.map((control) => `${control.key}=${recordValue(control.default) ?? '1'}`)
+		.join(', ');
+	const controlLines = controls.map((control) => {
+		const kind = control.kind || 'slider';
+		const attrs = [
+			`key=${control.key}`,
+			`label=${(control.label || control.key).replace(/\s+/g, '_')}`,
+			control.min != null ? `min=${control.min}` : '',
+			control.max != null ? `max=${control.max}` : '',
+			control.step != null ? `step=${control.step}` : '',
+			control.options && control.options.length > 0 ? `options=${control.options.join('|')}` : ''
+		].filter(Boolean);
+		return `#@ - ${kind} ${attrs.join(' ')}`;
+	});
+	const postOps = postOpsFromPart(part, controls);
+	const postLines = postOps.map((op) => `#@ - ${op}`);
+	return [
+		'Required canonical control metadata for this part:',
+		'#@params: ' + params,
+		'#@controls:',
+		...controlLines,
+		'#@post:',
+		...postLines,
+		'Include this metadata block in the generated object before any v/f geometry. Do not restate it as prose.'
+	].join('\n');
 }
 
 function userMessageContent(text: string, imageDataUrls?: string[]): ChatMessageContent {
@@ -421,6 +538,7 @@ export async function requestLiveObjPartPlanFromLlm(
 					'Generation mode: tools-off raw-first OBJ.',
 					'Plan ONLY raw mesh parts. Each part method must be "llm_mesh".',
 					'Do not use method values "procedural", "recipe", or "hybrid" in this mode.',
+					'Every part prompt must explicitly require #@params: and #@controls: metadata for 2-5 practical controls. Controls are metadata, not visible scene objects.',
 					'If a part could be procedural conceptually, still describe it as direct compact OBJ mesh with optional #@post material/tag/smooth/symmetrize notes.'
 				].join('\n')
 			: 'Generation mode: Live OBJ with procedural/recipe/raw mesh parts as appropriate.',
@@ -460,6 +578,8 @@ export async function requestLiveObjPartFromLlm(
 		...(options?.imageDataUrls ?? []),
 		...(options?.imageDataUrl ? [options.imageDataUrl] : [])
 	]);
+	const requiredControlMetadata =
+		options?.useProcedural === false ? renderPartControlMetadata(input.part) : '';
 	const prompt = [
 		`Original user request: ${input.userMessage.trim() || IMAGE_ONLY_USER_HINT}`,
 		'',
@@ -468,6 +588,22 @@ export async function requestLiveObjPartFromLlm(
 		input.plan ? `Overall part plan:\n${JSON.stringify(input.plan, null, 2)}` : '',
 		'',
 		`Current scene summary:\n${input.currentLiveObjSummary || '(empty scene)'}`,
+		'',
+		requiredControlMetadata,
+		'',
+		options?.useProcedural === false
+			? [
+					'Raw OBJ control policy:',
+					requiredControlMetadata
+						? 'Use the required canonical control metadata block above exactly.'
+						: 'Include #@params: and #@controls: metadata for 2-5 meaningful part controls by default.',
+					'Use canonical control syntax:',
+					'#@controls:',
+					'#@ - slider key=scale label=Scale min=0.5 max=2.0 step=0.05',
+					'Every control key must be referenced by executable #@post syntax. Prefer transform scale/position with pivot, array count/offset, deform position, smooth iterations/strength, simplify ratio, or center_origin.',
+					'Do not emit unsupported #@post attributes such as target=, origin=, translate=, rotate_y=, axis= for array spacing, or mode=.'
+				].join('\n')
+			: '',
 		'',
 		'Generate only the requested part now.'
 	]
@@ -505,6 +641,8 @@ export async function streamLiveObjPartFromLlm(
 		...(options?.imageDataUrls ?? []),
 		...(options?.imageDataUrl ? [options.imageDataUrl] : [])
 	]);
+	const requiredControlMetadata =
+		options?.useProcedural === false ? renderPartControlMetadata(input.part) : '';
 	const prompt = [
 		`Original user request: ${input.userMessage.trim() || IMAGE_ONLY_USER_HINT}`,
 		'',
@@ -513,6 +651,22 @@ export async function streamLiveObjPartFromLlm(
 		input.plan ? `Overall part plan:\n${JSON.stringify(input.plan, null, 2)}` : '',
 		'',
 		`Current scene summary:\n${input.currentLiveObjSummary || '(empty scene)'}`,
+		'',
+		requiredControlMetadata,
+		'',
+		options?.useProcedural === false
+			? [
+					'Raw OBJ control policy:',
+					requiredControlMetadata
+						? 'Use the required canonical control metadata block above exactly.'
+						: 'Include #@params: and #@controls: metadata for 2-5 meaningful part controls by default.',
+					'Use canonical control syntax:',
+					'#@controls:',
+					'#@ - slider key=scale label=Scale min=0.5 max=2.0 step=0.05',
+					'Every control key must be referenced by executable #@post syntax. Prefer transform scale/position with pivot, array count/offset, deform position, smooth iterations/strength, simplify ratio, or center_origin.',
+					'Do not emit unsupported #@post attributes such as target=, origin=, translate=, rotate_y=, axis= for array spacing, or mode=.'
+				].join('\n')
+			: '',
 		'',
 		'Generate only the requested part now.'
 	]
@@ -532,6 +686,47 @@ export async function streamLiveObjPartFromLlm(
 		maxTokens: 32000,
 		timeoutMs: imageDataUrls.length > 0 ? 240000 : 180000,
 		onDelta
+	});
+	return { content, usage };
+}
+
+export async function requestRawObjControlsRepairFromLlm(
+	input: {
+		userMessage: string;
+		part: unknown;
+		plan?: unknown;
+		rawPart: string;
+		controlIssues: string[];
+	},
+	model: string = DEFAULT_LIVE_OBJ_MODEL
+): Promise<LiveObjLlmResult> {
+	const requiredControlMetadata = renderPartControlMetadata(input.part);
+	const prompt = [
+		`Original user request: ${input.userMessage.trim() || 'Generate the requested raw OBJ part'}`,
+		'',
+		`Requested part spec:\n${JSON.stringify(input.part, null, 2)}`,
+		'',
+		input.plan ? `Overall part plan:\n${JSON.stringify(input.plan, null, 2)}` : '',
+		'',
+		'Control issues:',
+		...input.controlIssues.map((issue) => `- ${issue}`),
+		'',
+		requiredControlMetadata,
+		'',
+		'OBJ part to repair:',
+		input.rawPart
+	]
+		.filter(Boolean)
+		.join('\n');
+	const { content, usage } = await requestChatCompletion({
+		messages: [
+			{ role: 'system', content: RAW_OBJ_CONTROL_REPAIR_SYSTEM_PROMPT },
+			{ role: 'user', content: prompt }
+		],
+		model: model || DEFAULT_LIVE_OBJ_MODEL,
+		label: 'raw-obj-controls-repair',
+		maxTokens: 32000,
+		timeoutMs: 180000
 	});
 	return { content, usage };
 }

@@ -8,6 +8,19 @@ export type IterativePartSpec = {
 	method?: string;
 	priority?: number;
 	validationHints?: string[];
+	controls?: IterativeControlSpec[];
+	controlPostOps?: string[];
+};
+
+export type IterativeControlSpec = {
+	key: string;
+	label?: string;
+	kind?: 'slider' | 'number' | 'seed' | 'toggle' | 'checkbox' | 'select' | 'enum' | string;
+	default?: string | number | boolean;
+	min?: string | number;
+	max?: string | number;
+	step?: string | number;
+	options?: string[];
 };
 
 export type IterativeScenePlan = {
@@ -103,6 +116,52 @@ function countVertices(sourceText: string): number {
 
 function countFaces(sourceText: string): number {
 	return sourceText.split('\n').filter((line) => /^\s*f\s+/.test(line)).length;
+}
+
+export function hasControlsMetadata(sourceText: string): boolean {
+	return /^\s*#@controls\s*:/m.test(String(sourceText ?? ''));
+}
+
+export function rawObjControlIssues(sourceText: string): string[] {
+	const blocks = String(sourceText ?? '')
+		.split(/(?=^\s*o\s+)/gm)
+		.filter((block) => /^\s*o\s+/.test(block));
+	const issues: string[] = [];
+	for (const block of blocks) {
+		const name = block.match(/^\s*o\s+([^\s#]+)/m)?.[1] ?? 'unnamed';
+		if (countVertices(block) > 0 && !hasControlsMetadata(block)) {
+			issues.push(`Object '${name}' is missing required #@controls metadata`);
+		}
+	}
+	return issues;
+}
+
+function defaultControlLines(): string[] {
+	return [
+		'#@params: control_width=1, control_height=1, control_depth=1',
+		'#@controls:',
+		'#@ - slider key=control_width label=Width min=0.5 max=1.8 step=0.05',
+		'#@ - slider key=control_height label=Height min=0.5 max=1.8 step=0.05',
+		'#@ - slider key=control_depth label=Depth min=0.5 max=1.8 step=0.05',
+		'#@post:',
+		'#@ - transform scale=[control_width,control_height,control_depth] pivot=[0,0,0]'
+	];
+}
+
+function addDefaultControlsToObjectBlock(block: string): string {
+	if (countVertices(block) === 0 || hasControlsMetadata(block)) return block;
+	const lines = block.split('\n');
+	const insertAt = lines.findIndex((line, index) => index > 0 && /^\s*(v|vn|vt|f|l)\s+/.test(line));
+	if (insertAt < 0) return block;
+	lines.splice(insertAt, 0, ...defaultControlLines());
+	return lines.join('\n');
+}
+
+export function addDefaultRawObjControls(sourceText: string): string {
+	return String(sourceText ?? '')
+		.split(/(?=^\s*o\s+)/gm)
+		.map((block) => (/^\s*o\s+/.test(block) ? addDefaultControlsToObjectBlock(block) : block))
+		.join('');
 }
 
 function objectGeometryCoverage(sourceText: string): Array<{

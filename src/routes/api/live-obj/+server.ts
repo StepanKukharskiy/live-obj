@@ -17,6 +17,7 @@ import {
 	applyLiveObjSurgicalPatch,
 	parseLiveObjSurgicalPatch
 } from '$lib/server/liveObj/surgicalPatch';
+import { addDefaultRawObjControls, rawObjControlIssues } from '$lib/server/liveObj/iterative';
 import { normalizeRawPostHeader } from '$lib/liveObj/rawPostHeader';
 import { rawPostValidationIssues, validateRawPostSource } from '$lib/liveObj/rawPostValidation';
 
@@ -508,6 +509,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			correctedLiveObj = useProcedural
 				? applyKernelDefaultHeader(correctedLiveObj, kernelDefault)
 				: normalizeRawPostHeader(correctedLiveObj, { sourcePrompt: userMessage });
+			if (!useProcedural) correctedLiveObj = addDefaultRawObjControls(correctedLiveObj);
 		}
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
@@ -518,6 +520,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const unknownOps = unknownOpsInLiveObj(correctedLiveObj);
 	const unknownMeta = unknownMetaValues(correctedLiveObj);
 	const rawPostValidation = useProcedural ? undefined : validateRawPostSource(correctedLiveObj);
+	const rawPostControlIssues = useProcedural ? [] : rawObjControlIssues(correctedLiveObj);
 
 	let executedObj = correctedLiveObj;
 	let executorWarnings: string[] = [];
@@ -536,6 +539,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		unknownOps,
 		unknownMeta,
 		rawPostValidationIssues: rawPostValidation ? rawPostValidationIssues(rawPostValidation) : [],
+		rawPostControlIssues,
 		executorWarnings,
 		executorError
 	});
@@ -907,6 +911,7 @@ function collectSceneIssues(args: {
 	unknownOps: string[];
 	unknownMeta: { badSources: string[]; badTypes: string[]; badSims: string[] };
 	rawPostValidationIssues?: string[];
+	rawPostControlIssues?: string[];
 	executorWarnings: string[];
 	executorError: string | undefined;
 }): string[] {
@@ -919,6 +924,7 @@ function collectSceneIssues(args: {
 	if (args.unknownMeta.badSims.length > 0)
 		issues.push(`unknown sim values: ${args.unknownMeta.badSims.join(', ')}`);
 	for (const issue of args.rawPostValidationIssues ?? []) issues.push(issue);
+	for (const issue of args.rawPostControlIssues ?? []) issues.push(issue);
 	for (const w of args.executorWarnings) issues.push(`executor warning: ${w}`);
 	if (args.executorError)
 		issues.push(`executor error: ${args.executorError.split('\n').slice(0, 8).join(' | ')}`);
@@ -938,6 +944,10 @@ async function validateAndExpandCleanLiveObj(
 		if (!rawPostValidation.valid) {
 			throw new Error(rawPostValidationIssues(rawPostValidation).join('; '));
 		}
+		const controlIssues = rawObjControlIssues(liveObj);
+		if (controlIssues.length > 0) {
+			throw new Error(controlIssues.join('; '));
+		}
 		rawPostWarnings.push(
 			...rawPostValidation.warnings.map((message) => `raw-post validation warning: ${message}`)
 		);
@@ -954,7 +964,7 @@ async function validateAndExpandCleanLiveObj(
 function correctionOpInstruction(useProcedural: boolean): string {
 	return useProcedural
 		? 'Use only supported ops. Use #@ops: (never #@op: or #@op_experimental).'
-		: 'For raw-post scenes, preserve raw v/f mesh as source geometry and use #@post: blocks for modifiers. Do not add #@ops or procedural sources.';
+		: 'For raw-post scenes, preserve raw v/f mesh as source geometry and use #@post: blocks for modifiers. Do not add #@ops or procedural sources. Every visible raw mesh object must include #@params and #@controls metadata, and every control must reference executable #@post syntax.';
 }
 
 function buildCorrectionPrompt(issues: string[], useProcedural: boolean): string {

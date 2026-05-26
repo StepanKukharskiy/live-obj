@@ -1,6 +1,10 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { DEFAULT_LIVE_OBJ_MODEL, requestLiveObjPartFromLlm } from '$lib/server/llm/liveObjChat';
+import {
+	DEFAULT_LIVE_OBJ_MODEL,
+	requestLiveObjPartFromLlm,
+	requestRawObjControlsRepairFromLlm
+} from '$lib/server/llm/liveObjChat';
 import { withLlmRequestOverrides } from '$lib/server/llm/chat';
 import type { TokenUsage } from '$lib/server/llm/chat';
 import {
@@ -9,8 +13,10 @@ import {
 	stripCodeFences
 } from '$lib/server/liveObj/pipeline';
 import {
+	addDefaultRawObjControls,
 	appendGeneratedPart,
 	normalizeGeneratedPartMetadata,
+	rawObjControlIssues,
 	summarizeLiveObjForPlanning,
 	validateLiveObj,
 	type IterativePartSpec,
@@ -76,6 +82,7 @@ function applyRawPostPartValidation(
 	validation.errors.push(
 		...rawPostValidation.errors.map((message) => `raw-post validation error: ${message}`)
 	);
+	validation.errors.push(...rawObjControlIssues(rawPart));
 	validation.warnings.push(
 		...rawPostValidation.warnings.map((message) => `raw-post validation warning: ${message}`)
 	);
@@ -130,22 +137,48 @@ export const POST: RequestHandler = async ({ request }) => {
 			rawAttempts.push(llmResult.content);
 			return normalizeGeneratedPartMetadata(stripCodeFences(llmResult.content));
 		};
+		const repairRawControlsIfNeeded = async (rawPart: string) => {
+			if (useProcedural) return rawPart;
+			const controlIssues = rawObjControlIssues(rawPart);
+			if (controlIssues.length === 0) return rawPart;
+			const repairResult = await withLlmRequestOverrides(
+				reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
+				() =>
+					requestRawObjControlsRepairFromLlm(
+						{
+							userMessage,
+							part,
+							plan: body.plan,
+							rawPart,
+							controlIssues
+						},
+						model
+					)
+			);
+			if (repairResult.usage) usages.push(repairResult.usage);
+			rawAttempts.push(repairResult.content);
+			const repaired = normalizeGeneratedPartMetadata(stripCodeFences(repairResult.content));
+			const remaining = rawObjControlIssues(repaired);
+			return remaining.length > 0 ? addDefaultRawObjControls(repaired) : repaired;
+		};
 
-		let rawPart = await requestPart();
+		let rawPart = await repairRawControlsIfNeeded(await requestPart());
 		let appended: ReturnType<typeof appendGeneratedPart>;
 		try {
 			appended = appendGeneratedPart(currentLiveObj, rawPart);
 		} catch (firstError) {
-			rawPart = await requestPart(
-				[
-					'Your previous OBJ part was invalid and could not be appended.',
-					`Append error: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
-					'Return the same requested part again, but fix OBJ face indices.',
-					'Every f line must use local indices that reference vertices in this returned part only.',
-					'If a face references vertex 60, this returned part must define at least 60 local vertices; otherwise renumber faces to the local vertex range.',
-					'Previous invalid output:',
-					rawPart
-				].join('\n')
+			rawPart = await repairRawControlsIfNeeded(
+				await requestPart(
+					[
+						'Your previous OBJ part was invalid and could not be appended.',
+						`Append error: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
+						'Return the same requested part again, but fix OBJ face indices.',
+						'Every f line must use local indices that reference vertices in this returned part only.',
+						'If a face references vertex 60, this returned part must define at least 60 local vertices; otherwise renumber faces to the local vertex range.',
+						'Previous invalid output:',
+						rawPart
+					].join('\n')
+				)
 			);
 			appended = appendGeneratedPart(currentLiveObj, rawPart);
 		}
@@ -156,33 +189,38 @@ export const POST: RequestHandler = async ({ request }) => {
 			useProcedural
 		);
 		if (!validation.valid) {
-			rawPart = await requestPart(
-				[
-					'Your previous OBJ part appended but failed validation.',
-					`Validation errors: ${validation.errors.join('; ')}`,
-					'Return the same requested part again as valid OBJ/Live OBJ only.',
-					'Use a unique object name, include vertices, and ensure all faces reference existing local vertices.',
-					'Every raw mesh object/group with vertices must include faces. Do not emit vertices-only logs, rings, supports, lattices, or usemtl-only groups.',
-					'If you model logs or beams as rings/sections, connect each adjacent section with side faces and cap the ends.',
-					'For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness=, or metalness= on the material op.',
-					'Previous invalid output:',
-					rawPart
-				].join('\n')
+			rawPart = await repairRawControlsIfNeeded(
+				await requestPart(
+					[
+						'Your previous OBJ part appended but failed validation.',
+						`Validation errors: ${validation.errors.join('; ')}`,
+						'Return the same requested part again as valid OBJ/Live OBJ only.',
+						'Use a unique object name, include vertices, and ensure all faces reference existing local vertices.',
+						'Every raw mesh object/group with vertices must include faces. Do not emit vertices-only logs, rings, supports, lattices, or usemtl-only groups.',
+						'Every visible raw mesh object must include #@params and #@controls metadata, and every control must drive executable #@post syntax.',
+						'If you model logs or beams as rings/sections, connect each adjacent section with side faces and cap the ends.',
+						'For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness=, or metalness= on the material op.',
+						'Previous invalid output:',
+						rawPart
+					].join('\n')
+				)
 			);
 			try {
 				appended = appendGeneratedPart(currentLiveObj, rawPart);
 			} catch (appendError) {
-				rawPart = await requestPart(
-					[
-						'Your previous validation repair still could not be appended.',
-						`Append error: ${appendError instanceof Error ? appendError.message : String(appendError)}`,
-						'Return the same requested part again, but fix OBJ face indices.',
-						'Every f line must use local indices that reference vertices in this returned part only.',
-						'If a face references vertex 60, this returned part must define at least 60 local vertices; otherwise renumber faces to the local vertex range.',
-						'For #@post material, use only name=material_id.',
-						'Previous invalid output:',
-						rawPart
-					].join('\n')
+				rawPart = await repairRawControlsIfNeeded(
+					await requestPart(
+						[
+							'Your previous validation repair still could not be appended.',
+							`Append error: ${appendError instanceof Error ? appendError.message : String(appendError)}`,
+							'Return the same requested part again, but fix OBJ face indices.',
+							'Every f line must use local indices that reference vertices in this returned part only.',
+							'If a face references vertex 60, this returned part must define at least 60 local vertices; otherwise renumber faces to the local vertex range.',
+							'For #@post material, use only name=material_id.',
+							'Previous invalid output:',
+							rawPart
+						].join('\n')
+					)
 				);
 				appended = appendGeneratedPart(currentLiveObj, rawPart);
 			}

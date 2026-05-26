@@ -75,6 +75,12 @@ Return only JSON with this shape:
       "method": "llm_mesh",
       "dependencies": ["prior_part_id"],
       "prompt": "specific instructions for generating only this part",
+      "controls": [
+        { "key": "part_width", "label": "Part width", "kind": "slider", "default": 1, "min": 0.5, "max": 1.8, "step": 0.05 }
+      ],
+      "controlPostOps": [
+        "transform scale=[part_width,1,1] pivot=[0,0,0]"
+      ],
       "validationHints": ["bbox/contact/detail expectations"]
     }
   ],
@@ -93,7 +99,11 @@ Planning rules:
 - Do not use method values "procedural", "recipe", or "hybrid" in this iterative raw OBJ planner.
 - Do not invent executor operations. The default generation method is llm_mesh with semantic metadata and optional generic post notes.
 - If the user asks for controls, sliders, parameters, adjustable dimensions, or editability, preserve that requirement in the relevant part prompts. Do not treat metadata controls as forbidden UI objects.
-- In this Grasshopper decomposed builder, every planned part should expose 2-5 practical Grasshopper controls by default. Add that requirement to each part prompt using #@params and #@controls metadata, with every control referenced by executable #@post syntax.
+- In raw-first generation, every planned part should expose 2-5 practical controls by default using structured "controls" and "controlPostOps" fields.
+- Do not describe controls in prose inside "prompt". Put all control keys, ranges, defaults, and post ops in the structured fields.
+- Every control key must be referenced by at least one executable controlPostOps entry.
+- controlPostOps entries must be #@post op bodies without "#@ -" prefixes, such as "transform scale=[part_width,part_height,part_depth] pivot=[0,0,0]", "smooth iterations=smooth_iterations strength=0.35", or "array count=module_count offset=[module_spacing,0,0] centered=true".
+- Use only supported raw #@post ops in controlPostOps: transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
 - Use stable snake_case ids.'''
 
 
@@ -128,6 +138,7 @@ Raw-first part rules:
 - For per-vertex edits, #@post deform supports position=[x,y,z] expressions with x/y/z, normalized u/v/w bbox coordinates, i/index, t, vertex_count, params, and the same math functions.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
 - If the user request, plan, or part prompt asks for controls, include #@params: and #@controls: metadata for meaningful dimensions. Every control key must be referenced by executable #@post metadata such as transform, array, mirror/symmetrize, smooth, subdivide, simplify, snap_to_ground, or center_origin. For raw v/f meshes, use controls for object-level scale, height, spacing, count, smoothing, or placement rather than pretending baked vertex coordinates are parametric.
+- In raw-first generation, include #@params: and #@controls: metadata for 2-5 meaningful part controls by default. Use controls for practical dimensions or post modifiers that can actually be executed.
 - Parameter references in #@post expressions must use bare names such as voxel_size or (voxel_size*grid_width)/10. Never use template placeholder syntax such as dollar-brace or curly-brace parameter wrappers.
 - Put material and tag assignments inside #@post blocks. Do not use #@ops in raw-first mode.
 - Always use block syntax: #@post: then lines like #@ - material name=mat_id. Do not emit inline #@post material id=... lines.'''
@@ -193,11 +204,11 @@ Important:
 - Always use block syntax: #@post: then #@ - operation args...'''
 
 
-CONTROL_REPAIR_PROMPT = '''You repair one raw OBJ part for the Spellshape Grasshopper renderer.
+CONTROL_REPAIR_PROMPT = '''You repair one raw OBJ part for the Spellshape raw OBJ renderer.
 
 Return only complete OBJ text for the same part. Do not return Markdown or explanations.
 Preserve the object's geometry, object names, faces, material intent, and role.
-This Grasshopper decomposed-builder part requires controls, but it did not include #@controls metadata.
+This raw OBJ part requires controls, but one or more visible objects did not include #@controls metadata.
 
 Add minimal useful controls using:
 #@params: key=value, key=value
@@ -205,6 +216,7 @@ Add minimal useful controls using:
 #@ - slider key=key label=Readable_label min=a max=b step=c
 
 Rules:
+- Every visible raw mesh object in the part must include useful #@controls metadata.
 - Every control key must be referenced by executable #@post metadata.
 - For raw v/f meshes, useful controls are object scale, height, width/depth, vertical exaggeration, smoothing, array count/spacing, or placement.
 - Parameter references in #@post expressions must use bare names such as tree_scale or (voxel_size*grid_width)/10.
@@ -711,8 +723,77 @@ def part_list(plan):
         return []
 
 
+def control_value(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = safe_str(value).strip()
+    return text if text else None
+
+
+def render_part_control_metadata(part):
+    controls = []
+    for raw in part.get("controls", []) if isinstance(part.get("controls", []), list) else []:
+        if not isinstance(raw, dict):
+            continue
+        key = control_value(raw.get("key"))
+        if not key or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            continue
+        controls.append({
+            "key": key,
+            "label": control_value(raw.get("label")) or key,
+            "kind": control_value(raw.get("kind")) or "slider",
+            "default": control_value(raw.get("default")) or "1",
+            "min": control_value(raw.get("min")),
+            "max": control_value(raw.get("max")),
+            "step": control_value(raw.get("step")),
+            "options": [control_value(v) for v in raw.get("options", [])] if isinstance(raw.get("options"), list) else [],
+        })
+    if not controls:
+        return ""
+    params = ", ".join(["%s=%s" % (c["key"], c["default"]) for c in controls])
+    lines = [
+        "Required canonical control metadata for this part:",
+        "#@params: " + params,
+        "#@controls:",
+    ]
+    for c in controls:
+        attrs = ["key=" + c["key"], "label=" + safe_str(c["label"]).replace(" ", "_")]
+        if c["min"] is not None:
+            attrs.append("min=" + c["min"])
+        if c["max"] is not None:
+            attrs.append("max=" + c["max"])
+        if c["step"] is not None:
+            attrs.append("step=" + c["step"])
+        options = [o for o in c["options"] if o]
+        if options:
+            attrs.append("options=" + "|".join(options))
+        lines.append("#@ - %s %s" % (c["kind"], " ".join(attrs)))
+    post_ops = []
+    for raw in part.get("controlPostOps", []) if isinstance(part.get("controlPostOps", []), list) else []:
+        op = control_value(raw)
+        if not op:
+            continue
+        op = re.sub(r"^#@\s*post:\s*$", "", op, flags=re.I)
+        op = re.sub(r"^#@\s*-\s*", "", op, flags=re.I)
+        op = re.sub(r"^-\s*", "", op, flags=re.I).strip()
+        if op:
+            post_ops.append(op)
+    if not post_ops:
+        keys = [c["key"] for c in controls[:3]]
+        while len(keys) < 3:
+            keys.append("1")
+        post_ops.append("transform scale=[%s,%s,%s] pivot=[0,0,0]" % (keys[0], keys[1], keys[2]))
+    lines.append("#@post:")
+    lines.extend(["#@ - " + op for op in post_ops])
+    lines.append("Include this metadata block in the generated object before any v/f geometry. Do not restate it as prose.")
+    return "\n".join(lines)
+
+
 def build_part_prompt(plan, part, current_scene, original_request=""):
     action, target = part_action(part, current_scene)
+    required_control_metadata = render_part_control_metadata(part)
     return "\n".join([
         "Original user request: " + (safe_str(original_request).strip() or "Generate the requested part"),
         "",
@@ -730,8 +811,10 @@ def build_part_prompt(plan, part, current_scene, original_request=""):
         "",
         "If the action is replace, return one complete OBJ block for the target object. Keep the target object name stable.",
         "",
+        required_control_metadata,
+        "",
         "Grasshopper control policy:",
-        "Include #@params: and #@controls: metadata for 2-5 meaningful part controls by default.",
+        "Use the required canonical control metadata block above exactly." if required_control_metadata else "Include #@params: and #@controls: metadata for 2-5 meaningful part controls by default.",
         "Use canonical control syntax:",
         "#@controls:",
         "#@ - slider key=scale label=Scale min=0.5 max=2.0 step=0.05",

@@ -64,9 +64,11 @@ def replace_assignment(path: Path, name: str, value: str) -> None:
 def main() -> None:
     plan_prompt = extract_const(CHAT_PROMPTS, "LIVE_OBJ_ITERATIVE_PLAN_SYSTEM_PROMPT")
     raw_part_prompt = extract_const(CHAT_PROMPTS, "RAW_OBJ_ITERATIVE_PART_SYSTEM_PROMPT")
+    control_repair_prompt = extract_const(CHAT_PROMPTS, "RAW_OBJ_CONTROL_REPAIR_SYSTEM_PROMPT")
 
     replace_assignment(GH_DECOMPOSED, "PLANNER_PROMPT", plan_prompt)
     replace_assignment(GH_DECOMPOSED, "PART_SYSTEM_PROMPT", raw_part_prompt)
+    replace_assignment(GH_DECOMPOSED, "CONTROL_REPAIR_PROMPT", control_repair_prompt)
 
     print("Synced GHPython prompts from web TypeScript source.")
 
