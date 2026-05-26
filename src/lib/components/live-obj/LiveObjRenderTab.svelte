@@ -1,7 +1,15 @@
 <script lang="ts">
 	let {
 		liveObjText = '',
-		providerSettings = { provider: 'openai', apiKey: '', apiUrl: '', imageUrl: '', textModel: '', imageModel: '', rememberMe: false },
+		providerSettings = {
+			provider: 'openai',
+			apiKey: '',
+			apiUrl: '',
+			imageUrl: '',
+			textModel: '',
+			imageModel: '',
+			rememberMe: false
+		},
 		onCaptureSceneScreenshot,
 		prompt = $bindable(''),
 		screenshotDataUrl = $bindable(''),
@@ -10,7 +18,15 @@
 		errorLine = $bindable<string | null>(null)
 	}: {
 		liveObjText?: string;
-		providerSettings?: { provider: string; apiKey: string; apiUrl: string; imageUrl: string; textModel: string; imageModel: string; rememberMe: boolean };
+		providerSettings?: {
+			provider: string;
+			apiKey: string;
+			apiUrl: string;
+			imageUrl: string;
+			textModel: string;
+			imageModel: string;
+			rememberMe: boolean;
+		};
 		onCaptureSceneScreenshot?: () => string;
 		prompt?: string;
 		screenshotDataUrl?: string;
@@ -21,6 +37,8 @@
 
 	let fullscreenImageDataUrl = $state('');
 	let fullscreenDialog: HTMLDialogElement | null = $state(null);
+	let promptBusy = $state(false);
+	let generatedDirectionJson = $state('');
 
 	function openFullscreen(imageDataUrl: string) {
 		fullscreenImageDataUrl = imageDataUrl;
@@ -53,6 +71,39 @@
 			return;
 		}
 		screenshotDataUrl = dataUrl;
+	}
+
+	async function generatePrompt() {
+		if (promptBusy || busy) return;
+		errorLine = null;
+		promptBusy = true;
+		try {
+			const response = await fetch('/api/render-prompt', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					liveObjText,
+					currentPrompt: prompt,
+					apiKey: providerSettings.apiKey?.trim() || undefined,
+					apiUrl: providerSettings.apiUrl?.trim() || undefined,
+					model: providerSettings.textModel
+				})
+			});
+			const payload = (await response.json().catch(() => ({}))) as {
+				message?: string;
+				prompt?: string;
+				direction?: unknown;
+			};
+			if (!response.ok || !payload.prompt) {
+				throw new Error(payload.message || 'Prompt generation failed');
+			}
+			prompt = payload.prompt;
+			generatedDirectionJson = payload.direction ? JSON.stringify(payload.direction, null, 2) : '';
+		} catch (e) {
+			errorLine = e instanceof Error ? e.message : String(e);
+		} finally {
+			promptBusy = false;
+		}
 	}
 
 	async function generateImage() {
@@ -107,15 +158,40 @@
 			rows="4"
 			placeholder="Describe the final rendered image style and mood..."
 			bind:value={prompt}
-			disabled={busy}
+			disabled={busy || promptBusy}
 		></textarea>
 	</label>
 	<div class="planner-render-actions">
-		<button type="button" class="send-button" onclick={takeScreenshot} disabled={busy}>Take screenshot</button>
-		<button type="button" class="send-button" onclick={generateImage} disabled={busy || !prompt.trim() || !screenshotDataUrl}>
+		<button
+			type="button"
+			class="send-button planner-render-secondary-button"
+			onclick={generatePrompt}
+			disabled={busy || promptBusy || !liveObjText.trim()}
+		>
+			{promptBusy ? 'Directing…' : 'Generate prompt'}
+		</button>
+		<button
+			type="button"
+			class="send-button planner-render-secondary-button"
+			onclick={takeScreenshot}
+			disabled={busy || promptBusy}>Take screenshot</button
+		>
+		<button
+			type="button"
+			class="send-button"
+			onclick={generateImage}
+			disabled={busy || promptBusy || !prompt.trim() || !screenshotDataUrl}
+		>
 			{busy ? 'Generating…' : 'Generate image'}
 		</button>
 	</div>
+
+	{#if generatedDirectionJson}
+		<details class="planner-render-direction">
+			<summary>Visual direction JSON</summary>
+			<pre>{generatedDirectionJson}</pre>
+		</details>
+	{/if}
 
 	{#if screenshotDataUrl}
 		<div class="planner-render-preview">
@@ -129,10 +205,18 @@
 					aria-label="Download screenshot"
 					onclick={() => downloadImage(screenshotDataUrl, 'scene-screenshot')}
 				>
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
-						<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-						<polyline points="7 10 12 15 17 10"/>
-						<line x1="12" y1="15" x2="12" y2="3"/>
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						width="15"
+						height="15"
+						aria-hidden="true"
+					>
+						<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+						<polyline points="7 10 12 15 17 10" />
+						<line x1="12" y1="15" x2="12" y2="3" />
 					</svg>
 				</button>
 				<button
@@ -142,8 +226,18 @@
 					aria-label="View screenshot fullscreen"
 					onclick={() => openFullscreen(screenshotDataUrl)}
 				>
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
-						<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						width="15"
+						height="15"
+						aria-hidden="true"
+					>
+						<path
+							d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
+						/>
 					</svg>
 				</button>
 			</div>
@@ -162,10 +256,18 @@
 					aria-label="Download generated image"
 					onclick={() => downloadImage(generatedImageDataUrl, 'rendered-image')}
 				>
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
-						<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-						<polyline points="7 10 12 15 17 10"/>
-						<line x1="12" y1="15" x2="12" y2="3"/>
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						width="15"
+						height="15"
+						aria-hidden="true"
+					>
+						<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+						<polyline points="7 10 12 15 17 10" />
+						<line x1="12" y1="15" x2="12" y2="3" />
 					</svg>
 				</button>
 				<button
@@ -175,8 +277,18 @@
 					aria-label="View generated image fullscreen"
 					onclick={() => openFullscreen(generatedImageDataUrl)}
 				>
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
-						<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						width="15"
+						height="15"
+						aria-hidden="true"
+					>
+						<path
+							d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
+						/>
 					</svg>
 				</button>
 			</div>
@@ -188,13 +300,22 @@
 	{/if}
 </div>
 
-<dialog bind:this={fullscreenDialog} class="live-obj-render-dialog" onclose={closeFullscreen} onclick={(e) => {
-	if (e.target === fullscreenDialog) closeFullscreen();
-}}>
+<dialog
+	bind:this={fullscreenDialog}
+	class="live-obj-render-dialog"
+	onclose={closeFullscreen}
+	onclick={(e) => {
+		if (e.target === fullscreenDialog) closeFullscreen();
+	}}
+>
 	{#if fullscreenImageDataUrl}
 		<div class="live-obj-render-fullscreen-inner">
 			<img src={fullscreenImageDataUrl} alt="Fullscreen render preview" />
-			<button type="button" class="send-button live-obj-render-fullscreen-close" onclick={closeFullscreen}>Close</button>
+			<button
+				type="button"
+				class="send-button live-obj-render-fullscreen-close"
+				onclick={closeFullscreen}>Close</button
+			>
 		</div>
 	{/if}
 </dialog>
@@ -219,6 +340,46 @@
 		display: flex;
 		gap: 10px;
 		flex-wrap: wrap;
+	}
+	.planner-render-secondary-button {
+		border: 1px solid rgba(0, 0, 235, 0.48);
+		background: transparent;
+		color: var(--spell-blue);
+		box-shadow: none;
+	}
+	.planner-render-secondary-button:hover:not(:disabled) {
+		border-color: var(--spell-blue);
+		background: rgba(0, 0, 235, 0.05);
+		color: var(--spell-blue-hover);
+		box-shadow: none;
+	}
+	.planner-render-secondary-button:disabled {
+		border-color: rgba(0, 0, 0, 0.14);
+		background: transparent;
+		color: rgba(0, 0, 0, 0.3);
+		box-shadow: none;
+	}
+	.planner-render-direction {
+		border: 1px solid rgba(0, 0, 0, 0.1);
+		border-radius: 8px;
+		background: rgba(255, 255, 255, 0.45);
+		padding: 9px 10px;
+	}
+	.planner-render-direction summary {
+		cursor: pointer;
+		font-size: 12px;
+		font-weight: 600;
+		color: #4a4a4a;
+	}
+	.planner-render-direction pre {
+		margin: 10px 0 0;
+		max-height: 260px;
+		overflow: auto;
+		white-space: pre-wrap;
+		word-break: break-word;
+		font-size: 11px;
+		line-height: 1.45;
+		color: #242424;
 	}
 	.planner-render-preview {
 		display: flex;
