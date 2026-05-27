@@ -188,6 +188,9 @@ Output format:
 Rules:
 - Output only one primary direction.
 - The primary direction must be specific, not generic.
+- If the user provides draft guidance, treat it as creative intent to expand, clarify, and art-direct.
+- Preserve concrete user constraints from draft guidance unless they conflict with the Live OBJ geometry.
+- If the user provides no draft guidance, choose the strongest direction from the scene metadata alone.
 - Supporting references are optional and must be limited to 3 maximum.
 - The story must be readable in a still image and expandable into a 3-second animation.
 - The animation must have one simple visual change, not a complex sequence.
@@ -226,7 +229,10 @@ ${sceneSummary}
 Live OBJ metadata:
 ${sceneMetadata}
 
-${currentPrompt ? `Current render prompt or user intent to consider:\n${currentPrompt}` : 'No current render prompt was provided.'}
+Draft user guidance from the render prompt field:
+${currentPrompt || '(empty - start from scratch)'}
+
+If draft guidance is present, expand it into a complete image prompt while keeping the geometry as the protagonist. If the draft guidance is empty, start from the Live OBJ scene alone.
 
 Choose one strong visual direction and return the required JSON object.`;
 
