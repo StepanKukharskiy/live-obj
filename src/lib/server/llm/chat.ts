@@ -165,6 +165,22 @@ function isOpenAiApiUrl(apiUrl: string): boolean {
 	return apiUrl.includes('api.openai.com');
 }
 
+function isOpenRouterApiUrl(apiUrl: string): boolean {
+	return apiUrl.includes('openrouter.ai');
+}
+
+function isTogetherApiUrl(apiUrl: string): boolean {
+	return apiUrl.includes('api.together.xyz');
+}
+
+function buildCompletionRequestHeaders(apiUrl: string, apiKey: string): Record<string, string> {
+	return {
+		'Content-Type': 'application/json',
+		Authorization: `Bearer ${apiKey}`,
+		...(isOpenRouterApiUrl(apiUrl) ? { 'X-OpenRouter-Title': 'Spellshape' } : {})
+	};
+}
+
 /**
  * Some OpenAI chat models (GPT-5 line, o-series) reject custom temperature; only the
  * default (1) is allowed. Typical API errors include "Only the default (1) value is
@@ -294,7 +310,7 @@ export async function requestChatCompletion({
 		throw new Error('API URL not configured');
 	}
 
-	const fallbackModels = isOpenAiApiUrl(apiUrl) ? [] : TOGETHER_FALLBACK_MODELS;
+	const fallbackModels = isTogetherApiUrl(apiUrl) ? TOGETHER_FALLBACK_MODELS : [];
 
 	let lastError: Error | null = null;
 	const modelsToTry = Array.from(
@@ -323,10 +339,7 @@ export async function requestChatCompletion({
 			try {
 				const response = await fetch(apiUrl, {
 					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						Authorization: `Bearer ${apiKey}`
-					},
+					headers: buildCompletionRequestHeaders(apiUrl, apiKey),
 					signal: controller.signal,
 					body: JSON.stringify(requestPayload)
 				});
@@ -514,10 +527,7 @@ export async function streamChatCompletion({
 	try {
 		const response = await fetch(apiUrl, {
 			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				Authorization: `Bearer ${apiKey}`
-			},
+			headers: buildCompletionRequestHeaders(apiUrl, apiKey),
 			signal: controller.signal,
 			body: JSON.stringify(requestPayload)
 		});

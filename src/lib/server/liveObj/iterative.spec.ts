@@ -104,6 +104,29 @@ describe('iterative Live OBJ helpers', () => {
 		expect(validateRawPostSource(normalized).valid).toBe(true);
 	});
 
+	it('normalizes raw-post tag name aliases to value syntax', () => {
+		const part = [
+			'o glazing',
+			'#@source: llm_mesh',
+			'#@semantic: flat glass panels',
+			'#@post:',
+			'#@ - tag name=glass_tint',
+			'#@post tag id=window_group',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 0 1 0',
+			'f 1 2 3'
+		].join('\n');
+
+		const normalized = normalizeGeneratedPartMetadata(part);
+
+		expect(normalized).toContain('#@ - tag value=glass_tint');
+		expect(normalized).toContain('#@post:\n#@ - tag value=window_group');
+		expect(normalized).not.toContain('tag name=');
+		expect(normalized).not.toContain('tag id=');
+		expect(validateRawPostSource(normalized).valid).toBe(true);
+	});
+
 	it('remaps local line indices when appending', () => {
 		const current = [
 			'#@live_obj_version: 0.1',
@@ -127,7 +150,7 @@ describe('iterative Live OBJ helpers', () => {
 		expect(parsed.parts[0].id).toBe('deck');
 	});
 
-	it('reports visible raw OBJ objects without controls', () => {
+	it('allows visible raw OBJ objects without controls', () => {
 		const source = [
 			'o body',
 			'#@source: llm_mesh',
@@ -150,12 +173,10 @@ describe('iterative Live OBJ helpers', () => {
 			'f 4 5 6'
 		].join('\n');
 
-		expect(rawObjControlIssues(source)).toEqual([
-			"Object 'body' is missing required #@controls metadata"
-		]);
+		expect(rawObjControlIssues(source)).toEqual([]);
 	});
 
-	it('can add fallback executable controls to visible raw OBJ objects', () => {
+	it('can add neutral fallback controls to visible raw OBJ objects', () => {
 		const source = [
 			'o bag_base_cup',
 			'#@source: llm_mesh',
@@ -170,7 +191,7 @@ describe('iterative Live OBJ helpers', () => {
 
 		expect(rawObjControlIssues(repaired)).toEqual([]);
 		expect(repaired).toContain('#@controls:');
-		expect(repaired).toContain('#@ - transform scale=[control_width,control_height,control_depth]');
+		expect(repaired).toContain('#@ - transform scale=[control_scale,control_scale,control_scale]');
 		expect(validateRawPostSource(repaired).valid).toBe(true);
 	});
 });

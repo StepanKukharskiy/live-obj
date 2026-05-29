@@ -123,28 +123,17 @@ export function hasControlsMetadata(sourceText: string): boolean {
 }
 
 export function rawObjControlIssues(sourceText: string): string[] {
-	const blocks = String(sourceText ?? '')
-		.split(/(?=^\s*o\s+)/gm)
-		.filter((block) => /^\s*o\s+/.test(block));
-	const issues: string[] = [];
-	for (const block of blocks) {
-		const name = block.match(/^\s*o\s+([^\s#]+)/m)?.[1] ?? 'unnamed';
-		if (countVertices(block) > 0 && !hasControlsMetadata(block)) {
-			issues.push(`Object '${name}' is missing required #@controls metadata`);
-		}
-	}
-	return issues;
+	void sourceText;
+	return [];
 }
 
 function defaultControlLines(): string[] {
 	return [
-		'#@params: control_width=1, control_height=1, control_depth=1',
+		'#@params: control_scale=1',
 		'#@controls:',
-		'#@ - slider key=control_width label=Width min=0.5 max=1.8 step=0.05',
-		'#@ - slider key=control_height label=Height min=0.5 max=1.8 step=0.05',
-		'#@ - slider key=control_depth label=Depth min=0.5 max=1.8 step=0.05',
+		'#@ - slider key=control_scale label=Scale min=0.5 max=1.8 step=0.05',
 		'#@post:',
-		'#@ - transform scale=[control_width,control_height,control_depth] pivot=[0,0,0]'
+		'#@ - transform scale=[control_scale,control_scale,control_scale] pivot=[0,0,0]'
 	];
 }
 
@@ -257,10 +246,28 @@ function normalizeMaterialPostLine(rawLine: string): string[] | undefined {
 	return undefined;
 }
 
+function normalizeTagPostLine(rawLine: string): string[] | undefined {
+	const blockTag = rawLine.match(/^(\s*)#@\s*-\s*tag\b(.*)$/i);
+	if (blockTag) {
+		const tagValue = firstPostAttributeValue(blockTag[2] ?? '', ['value', 'name', 'id']);
+		if (!tagValue) return undefined;
+		return [`${blockTag[1]}#@ - tag value=${tagValue}`];
+	}
+
+	const inlineTag = rawLine.match(/^(\s*)#@post\s+tag\b(.*)$/i);
+	if (inlineTag) {
+		const tagValue = firstPostAttributeValue(inlineTag[2] ?? '', ['value', 'name', 'id']);
+		if (!tagValue) return undefined;
+		return [`${inlineTag[1]}#@post:`, `${inlineTag[1]}#@ - tag value=${tagValue}`];
+	}
+
+	return undefined;
+}
+
 export function normalizeGeneratedPartMetadata(rawPart: string): string {
 	return stripCodeFences(rawPart)
 		.split('\n')
-		.flatMap((line) => normalizeMaterialPostLine(line) ?? [line])
+		.flatMap((line) => normalizeMaterialPostLine(line) ?? normalizeTagPostLine(line) ?? [line])
 		.join('\n');
 }
 

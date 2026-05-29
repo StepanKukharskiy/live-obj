@@ -17,7 +17,7 @@ import {
 	applyLiveObjSurgicalPatch,
 	parseLiveObjSurgicalPatch
 } from '$lib/server/liveObj/surgicalPatch';
-import { addDefaultRawObjControls, rawObjControlIssues } from '$lib/server/liveObj/iterative';
+import { rawObjControlIssues } from '$lib/server/liveObj/iterative';
 import { normalizeRawPostHeader } from '$lib/liveObj/rawPostHeader';
 import { rawPostValidationIssues, validateRawPostSource } from '$lib/liveObj/rawPostValidation';
 
@@ -509,7 +509,6 @@ export const POST: RequestHandler = async ({ request }) => {
 			correctedLiveObj = useProcedural
 				? applyKernelDefaultHeader(correctedLiveObj, kernelDefault)
 				: normalizeRawPostHeader(correctedLiveObj, { sourcePrompt: userMessage });
-			if (!useProcedural) correctedLiveObj = addDefaultRawObjControls(correctedLiveObj);
 		}
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
@@ -964,7 +963,7 @@ async function validateAndExpandCleanLiveObj(
 function correctionOpInstruction(useProcedural: boolean): string {
 	return useProcedural
 		? 'Use only supported ops. Use #@ops: (never #@op: or #@op_experimental).'
-		: 'For raw-post scenes, preserve raw v/f mesh as source geometry and use #@post: blocks for modifiers. Do not add #@ops or procedural sources. Every visible raw mesh object must include #@params and #@controls metadata, and every control must reference executable #@post syntax.';
+		: 'For raw-post scenes, preserve raw v/f mesh as source geometry and use #@post: blocks for modifiers. Do not add #@ops or procedural sources. Controls are optional; add at most 1-2 only when they are safe executable post modifiers that preserve the authored mesh intent. Prefer #@post material for whole-object materials; if using usemtl, each usemtl must be followed by the face block it colors before the next usemtl.';
 }
 
 function buildCorrectionPrompt(issues: string[], useProcedural: boolean): string {

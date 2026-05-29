@@ -41,9 +41,16 @@ function isGoogleGenerateContentUrl(url: string): boolean {
 	return url.includes('generativelanguage.googleapis.com') && url.includes(':generateContent');
 }
 
+function isOpenRouterUrl(url: string): boolean {
+	return url.includes('openrouter.ai');
+}
+
 function googleGenerateContentUrlForModel(url: string, model: string): string {
 	if (!isGoogleGenerateContentUrl(url)) return url;
-	return url.replace(/\/models\/[^/:]+:generateContent/, `/models/${encodeURIComponent(model)}:generateContent`);
+	return url.replace(
+		/\/models\/[^/:]+:generateContent/,
+		`/models/${encodeURIComponent(model)}:generateContent`
+	);
 }
 
 async function urlToDataUrl(url: string): Promise<string> {
@@ -59,10 +66,45 @@ function networkErrorMessage(err: unknown): string {
 	return String(err);
 }
 
+function openRouterOutputModalities(model: string): string[] {
+	const imageOnlyPrefixes = [
+		'black-forest-labs/',
+		'bytedance-seed/',
+		'sourceful/',
+		'x-ai/grok-imagine'
+	];
+	return imageOnlyPrefixes.some((prefix) => model.startsWith(prefix))
+		? ['image']
+		: ['image', 'text'];
+}
+
+async function imageUrlToDataUrl(imageUrl: string): Promise<string> {
+	if (imageUrl.startsWith('data:image/')) return imageUrl;
+	return urlToDataUrl(imageUrl);
+}
+
 export const POST: RequestHandler = async ({ request }) => {
-	let body: { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; apiUrl?: string; imageUrl?: string; imageModel?: string };
+	let body: {
+		prompt?: string;
+		screenshotDataUrl?: string;
+		liveObjText?: string;
+		provider?: string;
+		apiKey?: string;
+		apiUrl?: string;
+		imageUrl?: string;
+		imageModel?: string;
+	};
 	try {
-		body = (await request.json()) as { prompt?: string; screenshotDataUrl?: string; liveObjText?: string; provider?: string; apiKey?: string; apiUrl?: string; imageUrl?: string; imageModel?: string };
+		body = (await request.json()) as {
+			prompt?: string;
+			screenshotDataUrl?: string;
+			liveObjText?: string;
+			provider?: string;
+			apiKey?: string;
+			apiUrl?: string;
+			imageUrl?: string;
+			imageModel?: string;
+		};
 	} catch {
 		throw error(400, 'Invalid JSON');
 	}
@@ -72,10 +114,12 @@ export const POST: RequestHandler = async ({ request }) => {
 	const liveObjText = body.liveObjText ?? '';
 
 	if (!prompt) throw error(400, 'prompt is required');
-	if (!screenshotDataUrl.startsWith('data:image/')) throw error(400, 'screenshotDataUrl must be an image data URL');
+	if (!screenshotDataUrl.startsWith('data:image/'))
+		throw error(400, 'screenshotDataUrl must be an image data URL');
 
 	const requestApiKey = body.apiKey?.trim() ?? '';
 	const requestImageUrl = body.imageUrl?.trim() ?? '';
+	const provider = body.provider?.trim().toLowerCase() ?? '';
 	const imageModel = body.imageModel?.trim() || OPENAI_IMAGE_MODEL;
 	const apiKey = requestApiKey;
 	const imagesApiUrl = requestImageUrl || DEFAULT_OPENAI_IMAGES_API_URL;
@@ -88,6 +132,63 @@ Do not redesign the object. Preserve exact silhouette, object count, relative po
 
 Use this scene metadata as a hard constraint for objects, materials, and structure:
 ${sceneMetadata || '(no #@ metadata found)'}`;
+
+	if (provider === 'openrouter' || isOpenRouterUrl(imagesApiUrl)) {
+		const abortController = new AbortController();
+		const timeout = setTimeout(() => abortController.abort(), OPENAI_IMAGES_TIMEOUT_MS);
+		let response: Response;
+		try {
+			response = await fetch(imagesApiUrl, {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					'Content-Type': 'application/json',
+					'X-OpenRouter-Title': 'Spellshape'
+				},
+				body: JSON.stringify({
+					model: imageModel,
+					messages: [
+						{
+							role: 'user',
+							content: [
+								{ type: 'text', text: fullPrompt },
+								{ type: 'image_url', image_url: { url: screenshotDataUrl } }
+							]
+						}
+					],
+					modalities: openRouterOutputModalities(imageModel),
+					stream: false
+				}),
+				signal: abortController.signal
+			});
+		} catch (err) {
+			const message =
+				err instanceof Error && err.name === 'AbortError'
+					? `Image provider request timed out after ${Math.round(OPENAI_IMAGES_TIMEOUT_MS / 1000)}s`
+					: `Unable to reach image provider (${imagesApiUrl}): ${networkErrorMessage(err)}`;
+			throw error(502, message);
+		} finally {
+			clearTimeout(timeout);
+		}
+
+		const payload = (await response.json().catch(() => ({}))) as {
+			error?: { message?: string };
+			choices?: Array<{
+				message?: {
+					content?: unknown;
+					images?: Array<{ image_url?: { url?: string }; imageUrl?: { url?: string } }>;
+				};
+			}>;
+		};
+		if (!response.ok) {
+			throw error(response.status, payload.error?.message ?? 'Image generation failed');
+		}
+
+		const images = payload.choices?.[0]?.message?.images ?? [];
+		const firstImageUrl = images[0]?.image_url?.url ?? images[0]?.imageUrl?.url ?? '';
+		if (!firstImageUrl) throw error(502, 'No image returned by provider');
+		return json({ imageDataUrl: await imageUrlToDataUrl(firstImageUrl) });
+	}
 
 	if (isGoogleGenerateContentUrl(imagesApiUrl)) {
 		const image = dataUrlToInlineImage(screenshotDataUrl);
@@ -157,7 +258,10 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 				? { mimeType: imagePart.inline_data.mime_type, data: imagePart.inline_data.data }
 				: undefined;
 		if (!inlineImage?.data) {
-			const text = parts.map((part) => part.text).filter(Boolean).join(' ');
+			const text = parts
+				.map((part) => part.text)
+				.filter(Boolean)
+				.join(' ');
 			throw error(502, text || 'No image returned by provider');
 		}
 
@@ -198,7 +302,8 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 		data?: Array<{ b64_json?: string; url?: string }>;
 	};
 
-	const providerMessage = initialPayload.error?.message ?? JSON.stringify(initialPayload.detail ?? '');
+	const providerMessage =
+		initialPayload.error?.message ?? JSON.stringify(initialPayload.detail ?? '');
 
 	// Some OpenAI-compatible providers validate as JSON-only and reject multipart with:
 	// [{'type': 'dict_type', 'loc': ('body',), 'msg': 'Input should be a valid dictionary'}]
@@ -223,7 +328,10 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 				})
 			});
 		} catch (err) {
-			throw error(502, `Unable to reach image provider (${imagesApiUrl}) on JSON fallback: ${networkErrorMessage(err)}`);
+			throw error(
+				502,
+				`Unable to reach image provider (${imagesApiUrl}) on JSON fallback: ${networkErrorMessage(err)}`
+			);
 		}
 	}
 
@@ -239,7 +347,9 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 	if (!response.ok) {
 		const message =
 			finalPayload.error?.message ??
-			(typeof finalPayload.detail === 'string' ? finalPayload.detail : JSON.stringify(finalPayload.detail ?? '')) ??
+			(typeof finalPayload.detail === 'string'
+				? finalPayload.detail
+				: JSON.stringify(finalPayload.detail ?? '')) ??
 			'Image generation failed';
 		throw error(response.status, message);
 	}
@@ -255,7 +365,10 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 		try {
 			return json({ imageDataUrl: await urlToDataUrl(first.url) });
 		} catch (err) {
-			throw error(502, `Image provider returned URL but proxy fetch failed: ${networkErrorMessage(err)}`);
+			throw error(
+				502,
+				`Image provider returned URL but proxy fetch failed: ${networkErrorMessage(err)}`
+			);
 		}
 	}
 

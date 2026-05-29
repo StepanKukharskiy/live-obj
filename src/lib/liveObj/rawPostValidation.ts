@@ -147,6 +147,47 @@ function faceRefs(line: string, vertexCount: number): number[] {
 		.map((n) => (n < 0 ? vertexCount + n + 1 : n));
 }
 
+function ineffectiveUsemtlWarnings(sourceText: string): string[] {
+	const warnings: string[] = [];
+	let currentObject = '(scene)';
+	let activeMaterial: { name: string; line: number; objectName: string; used: boolean } | null = null;
+
+	const flushMaterial = (reason: string) => {
+		if (!activeMaterial || activeMaterial.used) return;
+		warnings.push(
+			`usemtl '${activeMaterial.name}' in object '${activeMaterial.objectName}' on line ${activeMaterial.line} has no following faces before ${reason}`
+		);
+	};
+
+	for (const [lineIndex, rawLine] of sourceText.split(/\r?\n/).entries()) {
+		const lineNumber = lineIndex + 1;
+		const line = rawLine.trim();
+		const objectMatch = line.match(/^o\s+([^\s#]+)/);
+		if (objectMatch) {
+			flushMaterial('the next object');
+			activeMaterial = null;
+			currentObject = objectMatch[1];
+			continue;
+		}
+		const materialMatch = line.match(/^usemtl\s+(\S+)/);
+		if (materialMatch) {
+			flushMaterial('the next usemtl');
+			activeMaterial = {
+				name: materialMatch[1],
+				line: lineNumber,
+				objectName: currentObject,
+				used: false
+			};
+			continue;
+		}
+		if (/^f\s+/.test(line) && activeMaterial) {
+			activeMaterial.used = true;
+		}
+	}
+	flushMaterial('end of file');
+	return warnings;
+}
+
 export function summarizeRawPostObjects(sourceText: string): RawPostObjectSummary[] {
 	const objects: RawPostObjectSummary[] = [];
 	let current: RawPostObjectSummary | null = null;
@@ -188,6 +229,7 @@ export function validateRawPostSource(sourceText: string): RawPostValidationResu
 	const objects = summarizeRawPostObjects(text);
 	const objectNames = objects.map((object) => object.name);
 	if (objects.length === 0) errors.push('No OBJ objects found');
+	warnings.push(...ineffectiveUsemtlWarnings(text));
 
 	const duplicateNames = objectNames.filter((name, index) => objectNames.indexOf(name) !== index);
 	if (duplicateNames.length > 0) {

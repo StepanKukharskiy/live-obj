@@ -164,4 +164,49 @@ f 1 2 3
 		expect(result.valid).toBe(true);
 		expect(result.errors).toEqual([]);
 	});
+
+	it('warns when usemtl directives are overwritten before any faces use them', () => {
+		const result = validateRawPostSource(`#@scene
+#@live_obj_version: 0.1
+#@workflow: raw_post
+o wheel
+#@source: llm_mesh
+#@semantic: wheel with intended tire and rim materials
+usemtl tire_rubber
+usemtl wheel_cover
+v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3
+`);
+
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings.join('\n')).toContain(
+			"usemtl 'tire_rubber' in object 'wheel'"
+		);
+		expect(result.warnings.join('\n')).toContain('before the next usemtl');
+	});
+
+	it('accepts usemtl directives that each own a following face block', () => {
+		const result = validateRawPostSource(`#@scene
+#@live_obj_version: 0.1
+#@workflow: raw_post
+o two_material_panel
+#@source: llm_mesh
+#@semantic: panel with two face materials
+v 0 0 0
+v 1 0 0
+v 0 1 0
+v 1 1 0
+usemtl first
+f 1 2 3
+usemtl second
+f 2 4 3
+`);
+
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toEqual([]);
+	});
 });

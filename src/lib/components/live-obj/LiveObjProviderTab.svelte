@@ -8,11 +8,35 @@
 		imageModel: string;
 		rememberMe: boolean;
 	};
+	type ProviderModelConfig = { text: string[]; image: string[] };
 
-	const PROVIDER_MODELS = {
+	const PROVIDER_MODELS: Record<string, ProviderModelConfig> = {
 		openai: {
 			text: ['gpt-5.5', 'gpt-4o'],
 			image: ['gpt-image-2', 'gpt-image-1.5']
+		},
+		openrouter: {
+			text: [
+				'openai/gpt-5.5',
+				'anthropic/claude-opus-4.8',
+				'google/gemini-3.1-pro-preview',
+				'anthropic/claude-sonnet-4.6',
+				'openai/gpt-5.4-pro',
+				'openai/gpt-5.4-mini',
+				'google/gemini-3-flash-preview',
+				'moonshotai/kimi-k2-thinking',
+				'openrouter/auto'
+			],
+			image: [
+				'google/gemini-3.1-flash-image-preview',
+				'openai/gpt-5.4-image-2',
+				'bytedance-seed/seedream-4.5',
+				'google/gemini-3-pro-image-preview',
+				'x-ai/grok-imagine-image-quality',
+				'black-forest-labs/flux.2-pro',
+				'black-forest-labs/flux.2-max',
+				'openai/gpt-5-image-mini'
+			]
 		},
 		google: {
 			text: [
@@ -36,10 +60,14 @@
 		}
 	};
 
-	const PROVIDER_DEFAULT_URLS = {
+	const PROVIDER_DEFAULT_URLS: Record<string, { text: string; image: string }> = {
 		openai: {
 			text: 'https://api.openai.com/v1/chat/completions',
 			image: 'https://api.openai.com/v1/images/edits'
+		},
+		openrouter: {
+			text: 'https://openrouter.ai/api/v1/chat/completions',
+			image: 'https://openrouter.ai/api/v1/chat/completions'
 		},
 		google: {
 			text: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
@@ -140,6 +168,7 @@
 		>Provider
 		<select bind:value={settings.provider} disabled={busy}>
 			<option value="openai">OpenAI</option>
+			<option value="openrouter">OpenRouter</option>
 			<option value="google">Google</option>
 			<option value="together">Together</option>
 		</select>

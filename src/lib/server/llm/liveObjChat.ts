@@ -128,9 +128,10 @@ Planning rules:
 - Do not use method values "procedural", "recipe", or "hybrid" in this iterative raw OBJ planner.
 - Do not invent executor operations. The default generation method is llm_mesh with semantic metadata and optional generic post notes.
 - If the user asks for controls, sliders, parameters, adjustable dimensions, or editability, preserve that requirement in the relevant part prompts. Do not treat metadata controls as forbidden UI objects.
-- In raw-first generation, every planned part should expose 2-5 practical controls by default using structured "controls" and "controlPostOps" fields.
+- In raw-first generation, controls are optional but useful when they preserve the authored shape. Add at most 1-2 structured "controls" and "controlPostOps" for a part when the requested edit is safely expressible as a post operation without distorting fitted raw mesh details.
+- Prefer neutral multiplier controls with default 1, such as part_scale, relief_amount, smoothing, count, spacing, or placement offsets. Do not use final authored dimensions directly as scale values.
 - Do not describe controls in prose inside "prompt". Put all control keys, ranges, defaults, and post ops in the structured fields.
-- Every control key must be referenced by at least one executable controlPostOps entry.
+- Every emitted control key should be referenced by at least one executable controlPostOps entry.
 - controlPostOps entries must be #@post op bodies without "#@ -" prefixes, such as "transform scale=[part_width,part_height,part_depth] pivot=[0,0,0]", "smooth iterations=smooth_iterations strength=0.35", or "array count=module_count offset=[module_spacing,0,0] centered=true".
 - Use only supported raw #@post ops in controlPostOps: transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
 - Use stable snake_case ids.`;
@@ -183,12 +184,14 @@ Raw-first part rules:
 - Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
 - Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
+- For materials, prefer #@post material for whole-object assignment. If one object needs multiple materials, put each usemtl immediately before the face block it should color; do not list several usemtl directives before vertices or before a single shared face block.
 - Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
 - For repeated modules, #@post array supports per-copy expressions in scale, position, and pivot using i, index, step, count, t, sin(), cos(), min(), max(), abs(), sqrt(), pi, and tau.
 - For per-vertex edits, #@post deform supports position=[x,y,z] expressions with x/y/z, normalized u/v/w bbox coordinates, i/index, t, vertex_count, params, and the same math functions.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
 - If the user request, plan, or part prompt asks for controls, include #@params: and #@controls: metadata for meaningful dimensions. Every control key must be referenced by executable #@post metadata such as transform, array, mirror/symmetrize, smooth, subdivide, simplify, snap_to_ground, or center_origin. For raw v/f meshes, use controls for object-level scale, height, spacing, count, smoothing, or placement rather than pretending baked vertex coordinates are parametric.
-- In raw-first generation, include #@params: and #@controls: metadata for 2-5 meaningful part controls by default. Use controls for practical dimensions or post modifiers that can actually be executed.
+- In raw-first generation, #@params and #@controls are optional by default. Add at most 1-2 controls when there are safe post modifiers that preserve the authored mesh intent.
+- For scale controls on raw meshes, prefer neutral multiplier defaults such as scale=1. Do not use final authored dimensions such as body_width/body_height/body_length directly as transform scale values.
 - Parameter references in #@post expressions must use bare names such as voxel_size or (voxel_size*grid_width)/10. Never use template placeholder syntax such as dollar-brace or curly-brace parameter wrappers.
 - Put material and tag assignments inside #@post blocks. Do not use #@ops in raw-first mode.
 - Always use block syntax: #@post: then lines like #@ - material name=mat_id. Do not emit inline #@post material id=... lines.`;
@@ -197,7 +200,7 @@ export const RAW_OBJ_CONTROL_REPAIR_SYSTEM_PROMPT = `You repair one raw OBJ part
 
 Return only complete OBJ text for the same part. Do not return Markdown or explanations.
 Preserve the object's geometry, object names, faces, material intent, and role.
-This raw OBJ part requires controls, but one or more visible objects did not include #@controls metadata.
+This raw OBJ part has problematic or specifically requested controls that need repair.
 
 Add minimal useful controls using:
 #@params: key=value, key=value
@@ -205,9 +208,10 @@ Add minimal useful controls using:
 #@ - slider key=key label=Readable_label min=a max=b step=c
 
 Rules:
-- Every visible raw mesh object in the part must include useful #@controls metadata.
-- Every control key must be referenced by executable #@post metadata.
-- For raw v/f meshes, useful controls are object scale, height, width/depth, vertical exaggeration, smoothing, array count/spacing, or placement.
+- Add controls only when they are safe and useful for the part.
+- Every emitted control key should be referenced by executable #@post metadata.
+- For raw v/f meshes, useful controls are neutral uniform scale, vertical exaggeration, smoothing, array count/spacing, or placement.
+- Do not use final authored dimensions such as body_width/body_height/body_length directly as transform scale values.
 - Parameter references in #@post expressions must use bare names such as tree_scale or (voxel_size*grid_width)/10.
 - Never use template syntax like \${tree_scale}, {tree_scale}, or \${voxel_size}.
 - Do not create controls that only sit in #@params without affecting geometry.
@@ -270,9 +274,8 @@ function postOpsFromPart(part: unknown, controls: IterativeControlSpec[]): strin
 				.trim()
 		)
 		.filter(Boolean);
-	if (ops.length > 0 || controls.length === 0) return ops;
-	const [x, y, z] = controls.map((control) => control.key);
-	return [`transform scale=[${x ?? '1'},${y ?? '1'},${z ?? '1'}] pivot=[0,0,0]`];
+	void controls;
+	return ops;
 }
 
 function renderPartControlMetadata(part: unknown): string {
@@ -538,7 +541,7 @@ export async function requestLiveObjPartPlanFromLlm(
 					'Generation mode: tools-off raw-first OBJ.',
 					'Plan ONLY raw mesh parts. Each part method must be "llm_mesh".',
 					'Do not use method values "procedural", "recipe", or "hybrid" in this mode.',
-					'Every part prompt must explicitly require #@params: and #@controls: metadata for 2-5 practical controls. Controls are metadata, not visible scene objects.',
+					'Controls are optional. Add at most 1-2 controls only for safe post operations such as uniform scale, placement, smoothing, repetition count/spacing, terrain relief, or other modifiers that preserve the authored mesh intent.',
 					'If a part could be procedural conceptually, still describe it as direct compact OBJ mesh with optional #@post material/tag/smooth/symmetrize notes.'
 				].join('\n')
 			: 'Generation mode: Live OBJ with procedural/recipe/raw mesh parts as appropriate.',
@@ -596,11 +599,12 @@ export async function requestLiveObjPartFromLlm(
 					'Raw OBJ control policy:',
 					requiredControlMetadata
 						? 'Use the required canonical control metadata block above exactly.'
-						: 'Include #@params: and #@controls: metadata for 2-5 meaningful part controls by default.',
+						: 'Include at most 1-2 #@params: and #@controls: entries when a control is safe and genuinely useful for this part; otherwise omit controls.',
 					'Use canonical control syntax:',
 					'#@controls:',
 					'#@ - slider key=scale label=Scale min=0.5 max=2.0 step=0.05',
-					'Every control key must be referenced by executable #@post syntax. Prefer transform scale/position with pivot, array count/offset, deform position, smooth iterations/strength, simplify ratio, or center_origin.',
+					'Every emitted control key should be referenced by executable #@post syntax. Prefer neutral multiplier controls with default 1 for scale, or direct controls for position, array count/offset, deform amount, smooth iterations/strength, simplify ratio, or center_origin.',
+					'Do not use final object dimensions such as body_width/body_height/body_length directly as transform scale values on raw meshes that are already authored at those dimensions.',
 					'Do not emit unsupported #@post attributes such as target=, origin=, translate=, rotate_y=, axis= for array spacing, or mode=.'
 				].join('\n')
 			: '',
@@ -659,11 +663,12 @@ export async function streamLiveObjPartFromLlm(
 					'Raw OBJ control policy:',
 					requiredControlMetadata
 						? 'Use the required canonical control metadata block above exactly.'
-						: 'Include #@params: and #@controls: metadata for 2-5 meaningful part controls by default.',
+						: 'Include at most 1-2 #@params: and #@controls: entries when a control is safe and genuinely useful for this part; otherwise omit controls.',
 					'Use canonical control syntax:',
 					'#@controls:',
 					'#@ - slider key=scale label=Scale min=0.5 max=2.0 step=0.05',
-					'Every control key must be referenced by executable #@post syntax. Prefer transform scale/position with pivot, array count/offset, deform position, smooth iterations/strength, simplify ratio, or center_origin.',
+					'Every emitted control key should be referenced by executable #@post syntax. Prefer neutral multiplier controls with default 1 for scale, or direct controls for position, array count/offset, deform amount, smooth iterations/strength, simplify ratio, or center_origin.',
+					'Do not use final object dimensions such as body_width/body_height/body_length directly as transform scale values on raw meshes that are already authored at those dimensions.',
 					'Do not emit unsupported #@post attributes such as target=, origin=, translate=, rotate_y=, axis= for array spacing, or mode=.'
 				].join('\n')
 			: '',
