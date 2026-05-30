@@ -4,11 +4,13 @@
 		apiKey: string;
 		apiUrl: string;
 		imageUrl: string;
+		videoUrl?: string;
 		textModel: string;
 		imageModel: string;
+		videoModel?: string;
 		rememberMe: boolean;
 	};
-	type ProviderModelConfig = { text: string[]; image: string[] };
+	type ProviderModelConfig = { text: string[]; image: string[]; video?: string[] };
 
 	const PROVIDER_MODELS: Record<string, ProviderModelConfig> = {
 		openai: {
@@ -36,6 +38,12 @@
 				'black-forest-labs/flux.2-pro',
 				'black-forest-labs/flux.2-max',
 				'openai/gpt-5-image-mini'
+			],
+			video: [
+				'google/veo-3.1-lite',
+				'google/veo-3.1',
+				'openai/sora-2-pro',
+				'bytedance-seed/seedance-2.0'
 			]
 		},
 		google: {
@@ -45,7 +53,11 @@
 				'gemini-3.1-pro-preview',
 				'gemini-2.5-flash'
 			],
-			image: ['gemini-3.1-flash-image-preview']
+			image: ['gemini-3.1-flash-image-preview'],
+			video: [
+				'veo-3.1-generate-preview',
+				'veo-3.1-fast-generate-preview'
+			]
 		},
 		together: {
 			text: [
@@ -60,19 +72,21 @@
 		}
 	};
 
-	const PROVIDER_DEFAULT_URLS: Record<string, { text: string; image: string }> = {
+	const PROVIDER_DEFAULT_URLS: Record<string, { text: string; image: string; video?: string }> = {
 		openai: {
 			text: 'https://api.openai.com/v1/chat/completions',
 			image: 'https://api.openai.com/v1/images/edits'
 		},
 		openrouter: {
 			text: 'https://openrouter.ai/api/v1/chat/completions',
-			image: 'https://openrouter.ai/api/v1/chat/completions'
+			image: 'https://openrouter.ai/api/v1/chat/completions',
+			video: 'https://openrouter.ai/api/v1/videos'
 		},
 		google: {
 			text: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
 			image:
-				'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent'
+				'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
+			video: 'https://generativelanguage.googleapis.com/v1beta'
 		},
 		together: {
 			text: 'https://api.together.xyz/v1/chat/completions',
@@ -83,6 +97,9 @@
 	const CUSTOM = '__custom__';
 	const DEFAULT_TEXT_URLS = Object.values(PROVIDER_DEFAULT_URLS).map((defaults) => defaults.text);
 	const DEFAULT_IMAGE_URLS = Object.values(PROVIDER_DEFAULT_URLS).map((defaults) => defaults.image);
+	const DEFAULT_VIDEO_URLS = Object.values(PROVIDER_DEFAULT_URLS)
+		.map((defaults) => defaults.video)
+		.filter((url): url is string => !!url);
 
 	let {
 		settings = $bindable<ProviderSettings>({
@@ -90,8 +107,10 @@
 			apiKey: '',
 			apiUrl: 'https://api.openai.com/v1/chat/completions',
 			imageUrl: 'https://api.openai.com/v1/images/edits',
+			videoUrl: '',
 			textModel: 'gpt-5.5',
 			imageModel: 'gpt-image-1.5',
+			videoModel: '',
 			rememberMe: false
 		}),
 		busy = false
@@ -103,12 +122,22 @@
 	let imageModels = $derived(
 		PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS]?.image || []
 	);
+	let videoModels = $derived(
+		PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS]?.video || []
+	);
+	let providerSupportsVideo = $derived(videoModels.length > 0);
+	let providerVideoUnavailableMessage = $derived(
+		'Video generation is not available for this provider yet.'
+	);
 
 	let textModelChoice = $derived(
 		textModels.includes(settings.textModel) ? settings.textModel : CUSTOM
 	);
 	let imageModelChoice = $derived(
 		imageModels.includes(settings.imageModel) ? settings.imageModel : CUSTOM
+	);
+	let videoModelChoice = $derived(
+		videoModels.includes(settings.videoModel ?? '') ? (settings.videoModel ?? '') : CUSTOM
 	);
 
 	// Auto-update apiUrl, imageUrl, and models when provider changes
@@ -126,6 +155,9 @@
 			if (!settings.imageUrl || DEFAULT_IMAGE_URLS.includes(settings.imageUrl)) {
 				settings.imageUrl = defaults.image;
 			}
+			if (!settings.videoUrl || DEFAULT_VIDEO_URLS.includes(settings.videoUrl)) {
+				settings.videoUrl = defaults.video ?? '';
+			}
 			// Set model to first in list if current model is not in the new provider's model list
 			if (models && models.text && models.text.length > 0) {
 				if (!models.text.includes(settings.textModel)) {
@@ -137,6 +169,13 @@
 					settings.imageModel = models.image[0];
 				}
 			}
+			if (models && models.video && models.video.length > 0) {
+				if (!models.video.includes(settings.videoModel ?? '')) {
+					settings.videoModel = models.video[0];
+				}
+			} else {
+				settings.videoModel = '';
+			}
 		}
 	});
 
@@ -146,14 +185,19 @@
 	function chooseImageModel(v: string) {
 		settings.imageModel = v === CUSTOM ? '' : v;
 	}
+	function chooseVideoModel(v: string) {
+		settings.videoModel = v === CUSTOM ? '' : v;
+	}
 
 	function clearProviderSettings() {
 		settings.provider = 'openai';
 		settings.apiKey = '';
 		settings.apiUrl = PROVIDER_DEFAULT_URLS.openai.text;
 		settings.imageUrl = PROVIDER_DEFAULT_URLS.openai.image;
+		settings.videoUrl = '';
 		settings.textModel = PROVIDER_MODELS.openai.text[0];
 		settings.imageModel = PROVIDER_MODELS.openai.image[0];
+		settings.videoModel = '';
 		settings.rememberMe = false;
 	}
 </script>
@@ -237,6 +281,34 @@
 			/>
 		</label>
 	{/if}
+	{#if providerSupportsVideo}
+		<label
+			>Video Model
+			<select
+				value={videoModelChoice}
+				onchange={(e) => chooseVideoModel((e.currentTarget as HTMLSelectElement).value)}
+				disabled={busy}
+			>
+				{#each videoModels as model (model)}
+					<option value={model}>{model}</option>
+				{/each}
+				<option value={CUSTOM}>Custom…</option>
+			</select>
+		</label>
+		{#if videoModelChoice === CUSTOM}
+			<label
+				>Custom Video Model
+				<input
+					type="text"
+					bind:value={settings.videoModel}
+					placeholder="enter video model id"
+					disabled={busy}
+				/>
+			</label>
+		{/if}
+	{:else}
+		<div class="provider-capability-note">{providerVideoUnavailableMessage}</div>
+	{/if}
 	<button type="button" class="provider-clear" onclick={clearProviderSettings} disabled={busy}>
 		Clear provider settings
 	</button>
@@ -292,6 +364,11 @@
 	}
 	.provider-note a:hover {
 		text-decoration: underline;
+	}
+	.provider-capability-note {
+		font-size: 12px;
+		line-height: 1.4;
+		color: #64748b;
 	}
 	.provider-remember {
 		grid-template-columns: auto 1fr;

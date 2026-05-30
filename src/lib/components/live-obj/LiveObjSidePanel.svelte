@@ -35,6 +35,31 @@
 	};
 	type PanelTab = 'chat' | 'provider' | 'adjust' | 'tools' | 'scene' | 'render';
 	type RenderingMode = 'standard' | 'outline' | 'toon';
+	type CanvasAspectRatio =
+		| 'fill'
+		| '1:1'
+		| '4:3'
+		| '16:9'
+		| '9:16'
+		| '4:5'
+		| '3:2'
+		| '2:3'
+		| '21:9';
+	type CameraSnapshot = {
+		projection?: string;
+		position?: number[];
+		target?: number[];
+		fov?: number | null;
+		zoom?: number | null;
+	} | null;
+	type FrameAsset = {
+		id: string;
+		label: string;
+		source: 'screenshot' | 'generated';
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
 
 	let {
 		showPanel = $bindable(true),
@@ -48,6 +73,7 @@
 		sceneEpoch = 0,
 		sourceApplyBusy = false,
 		backgroundColor = $bindable('#3a3a36'),
+		canvasAspectRatio = $bindable<CanvasAspectRatio>('fill'),
 		showGrid = $bindable(false),
 		showAxes = $bindable(false),
 		wireframe = $bindable(false),
@@ -81,13 +107,16 @@
 			apiKey: '',
 			apiUrl: 'https://api.openai.com/v1/chat/completions',
 			imageUrl: 'https://api.openai.com/v1/images/edits',
+			videoUrl: '',
 			textModel: 'gpt-5.5',
 			imageModel: 'gpt-image-1.5',
+			videoModel: '',
 			rememberMe: false
 		}),
 		onSend,
 		onStopGeneration,
 		onCaptureSceneScreenshot,
+		onCaptureSceneCameraSnapshot,
 		onLaunchObjExample,
 		onOpenLiveObj,
 		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery')
@@ -103,6 +132,7 @@
 		sceneEpoch?: number;
 		sourceApplyBusy?: boolean;
 		backgroundColor?: string;
+		canvasAspectRatio?: CanvasAspectRatio;
 		showGrid?: boolean;
 		showAxes?: boolean;
 		wireframe?: boolean;
@@ -136,13 +166,16 @@
 			apiKey: string;
 			apiUrl: string;
 			imageUrl: string;
+			videoUrl?: string;
 			textModel: string;
 			imageModel: string;
+			videoModel?: string;
 			rememberMe: boolean;
 		};
 		onSend?: (payload: SendPayload) => void;
 		onStopGeneration?: () => void;
 		onCaptureSceneScreenshot?: () => string;
+		onCaptureSceneCameraSnapshot?: () => CameraSnapshot;
 		onLaunchObjExample?: (liveObj: string) => void;
 		onOpenLiveObj?: (sourceText: string) => void | Promise<void>;
 		kernelDefault?: 'auto' | 'cadquery';
@@ -154,8 +187,10 @@
 	let chatFeedbackPasses = $state(3);
 	let chatAttachedDataUrl = $state<string | undefined>(undefined);
 	let renderPrompt = $state('');
+	let renderVideoPrompt = $state('');
 	let renderScreenshotDataUrl = $state('');
 	let renderGeneratedImageDataUrl = $state('');
+	let renderFrameAssets = $state<FrameAsset[]>([]);
 	let renderBusy = $state(false);
 	let renderErrorLine = $state<string | null>(null);
 </script>
@@ -254,6 +289,7 @@
 			{:else if activeTab === 'scene'}
 				<LiveObjSceneTab
 					bind:backgroundColor
+					bind:canvasAspectRatio
 					bind:showGrid
 					bind:showAxes
 					bind:wireframe
@@ -280,9 +316,13 @@
 					{liveObjText}
 					{providerSettings}
 					{onCaptureSceneScreenshot}
+					{onCaptureSceneCameraSnapshot}
+					{canvasAspectRatio}
 					bind:prompt={renderPrompt}
+					bind:videoPrompt={renderVideoPrompt}
 					bind:screenshotDataUrl={renderScreenshotDataUrl}
 					bind:generatedImageDataUrl={renderGeneratedImageDataUrl}
+					bind:frameAssets={renderFrameAssets}
 					bind:busy={renderBusy}
 					bind:errorLine={renderErrorLine}
 				/>

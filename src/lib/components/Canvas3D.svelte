@@ -420,6 +420,17 @@
 		return screenshotDataUrl;
 	}
 
+	export function captureCameraSnapshot() {
+		if (!camera || !controls) return null;
+		return {
+			projection: cameraProjection,
+			position: camera.position.toArray(),
+			target: controls.target?.toArray?.() ?? [0, 0, 0],
+			fov: camera.fov ?? null,
+			zoom: camera.zoom ?? null
+		};
+	}
+
 	export async function exportToGLB(): Promise<Blob> {
 		return new Promise((resolve, reject) => {
 			if (!scene) return reject(new Error('Scene not initialized'));

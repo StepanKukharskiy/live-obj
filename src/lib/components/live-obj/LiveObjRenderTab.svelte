@@ -1,4 +1,44 @@
 <script lang="ts">
+	type CameraSnapshot = {
+		projection?: string;
+		position?: number[];
+		target?: number[];
+		fov?: number | null;
+		zoom?: number | null;
+	} | null;
+	type ShotFrame = {
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
+	type GeneratedClip = {
+		id: string;
+		status: string;
+		videoUrl?: string;
+		jobId?: string;
+		error?: string;
+	};
+	type FrameAsset = ShotFrame & {
+		id: string;
+		label: string;
+		source: 'screenshot' | 'generated';
+	};
+	type VideoShot = {
+		start?: ShotFrame;
+		end?: ShotFrame;
+		clips: GeneratedClip[];
+	};
+	type CanvasAspectRatio =
+		| 'fill'
+		| '1:1'
+		| '4:3'
+		| '16:9'
+		| '9:16'
+		| '4:5'
+		| '3:2'
+		| '2:3'
+		| '21:9';
+
 	let {
 		liveObjText = '',
 		providerSettings = {
@@ -6,14 +46,20 @@
 			apiKey: '',
 			apiUrl: '',
 			imageUrl: '',
+			videoUrl: '',
 			textModel: '',
 			imageModel: '',
+			videoModel: '',
 			rememberMe: false
 		},
 		onCaptureSceneScreenshot,
+		onCaptureSceneCameraSnapshot,
+		canvasAspectRatio = 'fill',
 		prompt = $bindable(''),
+		videoPrompt = $bindable(''),
 		screenshotDataUrl = $bindable(''),
 		generatedImageDataUrl = $bindable(''),
+		frameAssets = $bindable<FrameAsset[]>([]),
 		busy = $bindable(false),
 		errorLine = $bindable<string | null>(null)
 	}: {
@@ -23,14 +69,20 @@
 			apiKey: string;
 			apiUrl: string;
 			imageUrl: string;
+			videoUrl?: string;
 			textModel: string;
 			imageModel: string;
+			videoModel?: string;
 			rememberMe: boolean;
 		};
 		onCaptureSceneScreenshot?: () => string;
+		onCaptureSceneCameraSnapshot?: () => CameraSnapshot;
+		canvasAspectRatio?: CanvasAspectRatio;
 		prompt?: string;
+		videoPrompt?: string;
 		screenshotDataUrl?: string;
 		generatedImageDataUrl?: string;
+		frameAssets?: FrameAsset[];
 		busy?: boolean;
 		errorLine?: string | null;
 	} = $props();
@@ -39,6 +91,51 @@
 	let fullscreenDialog: HTMLDialogElement | null = $state(null);
 	let promptBusy = $state(false);
 	let generatedDirectionJson = $state('');
+	let videoBusy = $state(false);
+	let videoShot = $state<VideoShot>(createEmptyShot());
+
+	let videoProviderReady = $derived(
+		(providerSettings.provider === 'openrouter' || providerSettings.provider === 'google') &&
+			!!providerSettings.apiKey?.trim() &&
+			!!providerSettings.videoModel?.trim()
+	);
+	let videoProviderLabel = $derived(
+		providerSettings.provider === 'google'
+			? 'Google Veo'
+			: providerSettings.provider === 'openrouter'
+				? 'OpenRouter video'
+				: 'Video provider'
+	);
+	let videoAspectRatio = $derived(canvasAspectRatio === 'fill' ? '16:9' : canvasAspectRatio);
+	let selectedVideoSupportsEndFrame = $derived(
+		modelSupportsEndFrame(providerSettings.provider, providerSettings.videoModel ?? '')
+	);
+
+	function createEmptyShot(): VideoShot {
+		return {
+			clips: []
+		};
+	}
+
+	function modelSupportsEndFrame(provider: string, model: string): boolean {
+		const normalizedProvider = provider.trim().toLowerCase();
+		const normalizedModel = model.trim().toLowerCase();
+		if (!normalizedModel) return false;
+		if (normalizedProvider === 'google') {
+			return (
+				normalizedModel === 'veo-3.1-generate-preview' ||
+				normalizedModel === 'veo-3.1-fast-generate-preview'
+			);
+		}
+		if (normalizedProvider === 'openrouter') {
+			return (
+				normalizedModel.includes('veo-3.1') ||
+				normalizedModel.includes('wan') ||
+				normalizedModel.includes('seedance')
+			);
+		}
+		return false;
+	}
 
 	function openFullscreen(imageDataUrl: string) {
 		fullscreenImageDataUrl = imageDataUrl;
@@ -63,6 +160,36 @@
 		document.body.removeChild(link);
 	}
 
+	function downloadVideo(videoUrl: string, filenamePrefix: string) {
+		if (!videoUrl) return;
+		const link = document.createElement('a');
+		link.href = videoUrl;
+		link.download = `${filenamePrefix}-${Date.now()}.mp4`;
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+	}
+
+	function generatedAnimationPrompt(): string {
+		return animationPromptFromDirectionJson(generatedDirectionJson);
+	}
+
+	function animationPromptFromDirectionJson(directionJson: string): string {
+		if (!directionJson) return '';
+		try {
+			const direction = JSON.parse(directionJson) as {
+				story_for_image_and_3s_animation?: { animation_prompt?: string };
+			};
+			return direction.story_for_image_and_3s_animation?.animation_prompt?.trim() ?? '';
+		} catch {
+			return '';
+		}
+	}
+
+	function promptForVideo(): string {
+		return videoPrompt.trim();
+	}
+
 	function takeScreenshot() {
 		errorLine = null;
 		const dataUrl = onCaptureSceneScreenshot?.() ?? '';
@@ -71,6 +198,127 @@
 			return;
 		}
 		screenshotDataUrl = dataUrl;
+		addFrameAsset(dataUrl, 'screenshot');
+	}
+
+	function addFrameAsset(imageDataUrl: string, source: FrameAsset['source']) {
+		const id =
+			typeof crypto !== 'undefined' && 'randomUUID' in crypto
+				? crypto.randomUUID()
+				: `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		const label = source === 'screenshot' ? `Shot ${frameAssets.length + 1}` : `Image ${frameAssets.length + 1}`;
+		frameAssets = [
+			{
+				id,
+				label,
+				source,
+				imageDataUrl,
+				camera: onCaptureSceneCameraSnapshot?.() ?? null,
+				capturedAt: Date.now()
+			},
+			...frameAssets
+		].slice(0, 12);
+	}
+
+	function updateActiveVideoShot(patch: Partial<VideoShot>) {
+		videoShot = { ...videoShot, ...patch };
+	}
+
+	function assignFrameAsset(frame: 'start' | 'end', asset: FrameAsset) {
+		errorLine = null;
+		updateActiveVideoShot({
+			[frame]: {
+				imageDataUrl: asset.imageDataUrl,
+				camera: asset.camera,
+				capturedAt: asset.capturedAt
+			},
+			clips: []
+		});
+	}
+
+	async function generateVideoClips() {
+		if (videoBusy) return;
+		errorLine = null;
+		if (!videoShot.start?.imageDataUrl) {
+			errorLine = 'Capture a start frame first.';
+			return;
+		}
+		const videoPrompt = promptForVideo();
+		if (!videoPrompt) {
+			errorLine = 'Please enter a render prompt.';
+			return;
+		}
+		if (providerSettings.provider !== 'openrouter' && providerSettings.provider !== 'google') {
+			errorLine = 'Select OpenRouter or Google in Provider.';
+			return;
+		}
+		if (!videoProviderReady) {
+			errorLine = 'Add an API key and video model in Provider.';
+			return;
+		}
+
+		videoBusy = true;
+		const shot = videoShot;
+		let clips: GeneratedClip[] = [];
+		updateActiveVideoShot({ clips: [] });
+		for (let take = 1; take <= 1; take += 1) {
+			const clipId =
+				typeof crypto !== 'undefined' && 'randomUUID' in crypto
+					? crypto.randomUUID()
+					: `${Date.now()}-${take}`;
+			const runningClip: GeneratedClip = { id: clipId, status: `Take ${take}: running` };
+			clips = [...clips, runningClip];
+			updateActiveVideoShot({ clips });
+			try {
+				const response = await fetch('/api/render-video', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						prompt: videoPrompt,
+						liveObjText,
+						provider: providerSettings.provider,
+						apiKey: providerSettings.apiKey?.trim() || undefined,
+						videoUrl: providerSettings.videoUrl?.trim() || undefined,
+						videoModel: providerSettings.videoModel,
+						startFrameDataUrl: shot.start?.imageDataUrl,
+						endFrameDataUrl: shot.end?.imageDataUrl,
+						aspectRatio: videoAspectRatio
+					})
+				});
+				const payload = (await response.json().catch(() => ({}))) as {
+					message?: string;
+					status?: string;
+					jobId?: string;
+					videoUrl?: string;
+					videoDataUrl?: string;
+				};
+				if (!response.ok) {
+					throw new Error(payload.message || 'Video generation failed');
+				}
+				const completedClip: GeneratedClip = {
+					id: clipId,
+					status:
+						payload.videoUrl || payload.videoDataUrl
+							? `Take ${take}: ready`
+							: `Take ${take}: ${payload.status ?? 'pending'}`,
+					videoUrl: payload.videoUrl || payload.videoDataUrl,
+					jobId: payload.jobId
+				};
+				clips = clips.map((clip) => (clip.id === clipId ? completedClip : clip));
+				updateActiveVideoShot({ clips });
+			} catch (e) {
+				const failedClip: GeneratedClip = {
+					id: clipId,
+					status: `Take ${take}: failed`,
+					error: e instanceof Error ? e.message : String(e)
+				};
+				clips = clips.map((clip) => (clip.id === clipId ? failedClip : clip));
+				updateActiveVideoShot({ clips });
+				errorLine = failedClip.error ?? 'Video generation failed';
+				break;
+			}
+		}
+		videoBusy = false;
 	}
 
 	async function generatePrompt() {
@@ -98,7 +346,10 @@
 				throw new Error(payload.message || 'Prompt generation failed');
 			}
 			prompt = payload.prompt;
-			generatedDirectionJson = payload.direction ? JSON.stringify(payload.direction, null, 2) : '';
+			const directionJson = payload.direction ? JSON.stringify(payload.direction, null, 2) : '';
+			generatedDirectionJson = directionJson;
+			const animationPrompt = animationPromptFromDirectionJson(directionJson);
+			if (animationPrompt) videoPrompt = animationPrompt;
 		} catch (e) {
 			errorLine = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -142,6 +393,7 @@
 				throw new Error(payload.message || 'Image generation failed');
 			}
 			generatedImageDataUrl = payload.imageDataUrl;
+			addFrameAsset(payload.imageDataUrl, 'generated');
 		} catch (e) {
 			errorLine = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -186,113 +438,201 @@
 		</button>
 	</div>
 
+	<section class="planner-video-sequence" aria-label="Video sequence">
+		<div class="planner-video-head">
+			<div>
+				<div class="planner-render-title">Video shot</div>
+				<div class="planner-video-note">
+					Start frame, optional end frame, {videoAspectRatio} clip.
+				</div>
+			</div>
+			<span class="planner-video-provider-pill">{videoProviderLabel}</span>
+		</div>
+
+		{#if frameAssets.length}
+			<div class="planner-frame-gallery" aria-label="Frame gallery">
+				{#each frameAssets as asset (asset.id)}
+					<div class="planner-frame-asset">
+						<button
+							type="button"
+							class="planner-frame-thumb"
+							onclick={() => openFullscreen(asset.imageDataUrl)}
+							title="View frame"
+							aria-label={`View ${asset.label}`}
+						>
+							<img src={asset.imageDataUrl} alt={asset.label} />
+						</button>
+						<div class="planner-frame-meta">
+							<span>{asset.label}</span>
+							<span>{asset.source === 'generated' ? 'Generated' : 'Screenshot'}</span>
+						</div>
+						<div class="planner-frame-actions">
+							<button
+								type="button"
+								class:active={videoShot.start?.imageDataUrl === asset.imageDataUrl}
+								onclick={() => assignFrameAsset('start', asset)}
+								disabled={videoBusy}>Start</button
+							>
+							<button
+								type="button"
+								class:active={videoShot.end?.imageDataUrl === asset.imageDataUrl}
+								onclick={() => assignFrameAsset('end', asset)}
+								title={selectedVideoSupportsEndFrame
+									? 'Use as end frame'
+									: 'Selected video model does not use an end frame'}
+								disabled={videoBusy || !selectedVideoSupportsEndFrame}>End</button
+							>
+						</div>
+						<div class="planner-frame-utility-actions">
+							<button
+								type="button"
+								class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
+								title="View fullscreen"
+								aria-label={`View ${asset.label} fullscreen`}
+								onclick={() => openFullscreen(asset.imageDataUrl)}
+							>
+								<svg
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									width="14"
+									height="14"
+									aria-hidden="true"
+								>
+									<path
+										d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
+									/>
+								</svg>
+							</button>
+							<button
+								type="button"
+								class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
+								title="Download frame"
+								aria-label={`Download ${asset.label}`}
+								onclick={() => downloadImage(asset.imageDataUrl, asset.label.toLowerCase().replaceAll(' ', '-'))}
+							>
+								<svg
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									width="14"
+									height="14"
+									aria-hidden="true"
+								>
+									<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+									<polyline points="7 10 12 15 17 10" />
+									<line x1="12" y1="15" x2="12" y2="3" />
+								</svg>
+							</button>
+						</div>
+					</div>
+				{/each}
+			</div>
+		{:else}
+			<div class="planner-video-note">
+				Take a screenshot or generate an image to add frames here.
+			</div>
+		{/if}
+
+		<div class="planner-video-controls">
+			<label>
+				<span class="planner-label-inline">Video prompt</span>
+				<textarea
+					class="planner-text-input planner-render-prompt planner-video-prompt"
+					rows="3"
+					placeholder="Describe the camera move and motion for the clip..."
+					bind:value={videoPrompt}
+					disabled={videoBusy || promptBusy}
+				></textarea>
+			</label>
+		</div>
+
+		<div class="planner-video-actions">
+			<button
+				type="button"
+				class="send-button"
+				onclick={generateVideoClips}
+				disabled={busy ||
+					promptBusy ||
+					videoBusy ||
+					!promptForVideo() ||
+					!videoShot.start?.imageDataUrl ||
+					!videoProviderReady}
+			>
+				{videoBusy ? 'Generating…' : 'Generate clip'}
+			</button>
+		</div>
+
+		{#if !videoProviderReady}
+			<div class="planner-video-note">
+				Add an API key and choose a video model in Provider.
+			</div>
+		{/if}
+
+		{#if videoShot.start || videoShot.end}
+			<div class="planner-video-frames">
+				{#if videoShot.start}
+					<div class="planner-video-frame">
+						<span>Start</span>
+						<img src={videoShot.start.imageDataUrl} alt="Video start frame" />
+					</div>
+				{/if}
+				{#if videoShot.end}
+					<div class="planner-video-frame">
+						<span>End{selectedVideoSupportsEndFrame ? '' : ' ignored'}</span>
+						<img src={videoShot.end.imageDataUrl} alt="Video end frame" />
+					</div>
+				{/if}
+			</div>
+		{/if}
+
+		{#if videoShot.clips.length}
+			<div class="planner-video-clips">
+				{#each videoShot.clips as clip (clip.id)}
+					<div class="planner-video-clip">
+						<div class="planner-video-clip-status">{clip.status}</div>
+						{#if clip.videoUrl}
+							<!-- svelte-ignore a11y_media_has_caption -->
+							<video src={clip.videoUrl} controls playsinline></video>
+							<div class="planner-video-clip-actions">
+								<button
+									type="button"
+									class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
+									title="Download clip"
+									aria-label="Download clip"
+									onclick={() => downloadVideo(clip.videoUrl ?? '', 'video-clip')}
+								>
+									<svg
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										width="14"
+										height="14"
+										aria-hidden="true"
+									>
+										<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+										<polyline points="7 10 12 15 17 10" />
+										<line x1="12" y1="15" x2="12" y2="3" />
+									</svg>
+								</button>
+							</div>
+						{:else if clip.error}
+							<div class="planner-status" role="status">{clip.error}</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</section>
+
 	{#if generatedDirectionJson}
 		<details class="planner-render-direction">
 			<summary>Visual direction JSON</summary>
 			<pre>{generatedDirectionJson}</pre>
 		</details>
-	{/if}
-
-	{#if screenshotDataUrl}
-		<div class="planner-render-preview">
-			<div class="planner-render-title">Scene screenshot</div>
-			<img src={screenshotDataUrl} alt="Scene capture preview" />
-			<div class="planner-render-image-actions">
-				<button
-					type="button"
-					class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
-					title="Download screenshot"
-					aria-label="Download screenshot"
-					onclick={() => downloadImage(screenshotDataUrl, 'scene-screenshot')}
-				>
-					<svg
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						width="15"
-						height="15"
-						aria-hidden="true"
-					>
-						<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-						<polyline points="7 10 12 15 17 10" />
-						<line x1="12" y1="15" x2="12" y2="3" />
-					</svg>
-				</button>
-				<button
-					type="button"
-					class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
-					title="View screenshot fullscreen"
-					aria-label="View screenshot fullscreen"
-					onclick={() => openFullscreen(screenshotDataUrl)}
-				>
-					<svg
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						width="15"
-						height="15"
-						aria-hidden="true"
-					>
-						<path
-							d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
-						/>
-					</svg>
-				</button>
-			</div>
-		</div>
-	{/if}
-
-	{#if generatedImageDataUrl}
-		<div class="planner-render-preview">
-			<div class="planner-render-title">Generated image</div>
-			<img src={generatedImageDataUrl} alt="Generated render result" />
-			<div class="planner-render-image-actions">
-				<button
-					type="button"
-					class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
-					title="Download generated image"
-					aria-label="Download generated image"
-					onclick={() => downloadImage(generatedImageDataUrl, 'rendered-image')}
-				>
-					<svg
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						width="15"
-						height="15"
-						aria-hidden="true"
-					>
-						<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-						<polyline points="7 10 12 15 17 10" />
-						<line x1="12" y1="15" x2="12" y2="3" />
-					</svg>
-				</button>
-				<button
-					type="button"
-					class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
-					title="View generated image fullscreen"
-					aria-label="View generated image fullscreen"
-					onclick={() => openFullscreen(generatedImageDataUrl)}
-				>
-					<svg
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						width="15"
-						height="15"
-						aria-hidden="true"
-					>
-						<path
-							d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
-						/>
-					</svg>
-				</button>
-			</div>
-		</div>
 	{/if}
 
 	{#if errorLine}
@@ -381,32 +721,192 @@
 		line-height: 1.45;
 		color: #242424;
 	}
-	.planner-render-preview {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
 	.planner-render-title {
 		font-size: 12px;
 		font-weight: 600;
 		color: #4a4a4a;
 	}
-	.planner-render-preview img {
-		width: 100%;
-		border-radius: 10px;
-		border: 1px solid rgba(0, 0, 0, 0.1);
-		background: rgba(255, 255, 255, 0.4);
+	.planner-video-sequence {
+		display: flex;
+		flex-direction: column;
+		gap: 9px;
+		border: 1px solid var(--spell-border-soft);
+		border-radius: var(--spell-radius-md);
+		background: var(--spell-surface-faint);
+		padding: 12px;
 	}
-	.planner-render-image-actions {
+	.planner-video-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+	}
+	.planner-video-provider-pill {
+		flex: 0 0 auto;
+		border: 1px solid rgba(0, 0, 235, 0.12);
+		border-radius: var(--spell-radius-pill);
+		background: var(--spell-blue-soft);
+		color: var(--spell-blue);
+		padding: 4px 8px;
+		font-size: 10px;
+		font-weight: 750;
+		white-space: nowrap;
+	}
+	.planner-video-note {
+		font-size: 11px;
+		line-height: 1.4;
+		color: #64748b;
+	}
+	.planner-video-controls {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 8px;
+	}
+	.planner-frame-gallery {
 		display: flex;
 		gap: 8px;
-		flex-wrap: wrap;
+		overflow-x: auto;
+		padding-bottom: 2px;
+		scrollbar-width: thin;
 	}
-	.planner-monaco-action-btn--icon-only {
-		width: 32px;
-		height: 32px;
+	.planner-frame-asset {
+		flex: 0 0 118px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.planner-frame-thumb {
+		display: block;
+		width: 100%;
+		aspect-ratio: 16 / 9;
 		padding: 0;
+		border: 1px solid var(--spell-border-soft);
+		border-radius: var(--spell-radius-sm);
+		background: var(--spell-surface-soft);
+		overflow: hidden;
+		cursor: pointer;
+	}
+	.planner-frame-thumb img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+	.planner-frame-meta {
+		display: flex;
+		justify-content: space-between;
+		gap: 6px;
+		font-size: 10px;
+		font-weight: 650;
+		color: #64748b;
+	}
+	.planner-frame-meta span:first-child {
+		color: #334155;
+	}
+	.planner-frame-actions {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 5px;
+	}
+	.planner-frame-actions button {
+		border: 1px solid var(--spell-border);
+		border-radius: var(--spell-radius-pill);
+		background: var(--spell-surface-soft);
+		color: var(--spell-muted);
+		min-height: 24px;
+		font: inherit;
+		font-size: 10px;
+		font-weight: 750;
+		cursor: pointer;
+	}
+	.planner-frame-actions button.active {
+		border-color: var(--spell-blue);
+		background: var(--spell-blue);
+		color: #fff;
+	}
+	.planner-frame-actions button:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+	.planner-frame-utility-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 5px;
+	}
+	.planner-frame-utility-actions .planner-monaco-action-btn--icon-only {
+		width: 26px;
+		height: 26px;
+		min-height: 26px;
+		padding: 0;
+		border-radius: var(--spell-radius-sm);
+	}
+	.planner-video-controls label {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		min-width: 0;
+	}
+	.planner-video-actions {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 8px;
+	}
+	.planner-video-actions > button {
+		width: 100%;
+		padding-inline: 8px;
+		white-space: nowrap;
+	}
+	.planner-video-frames {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+	}
+	.planner-video-frame {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		font-size: 11px;
+		font-weight: 650;
+		color: #475569;
+	}
+	.planner-video-frame img {
+		width: 100%;
+		aspect-ratio: 16 / 9;
+		object-fit: cover;
 		border-radius: 8px;
+		border: 1px solid rgba(0, 0, 0, 0.1);
+	}
+	.planner-video-clips {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.planner-video-clip {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.planner-video-clip-status {
+		font-size: 12px;
+		font-weight: 700;
+		color: #334155;
+	}
+	.planner-video-clip video {
+		width: 100%;
+		border-radius: 8px;
+		background: #111;
+	}
+	.planner-video-clip-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 5px;
+	}
+	.planner-video-clip-actions .planner-monaco-action-btn--icon-only {
+		width: 26px;
+		height: 26px;
+		min-height: 26px;
+		padding: 0;
+		border-radius: var(--spell-radius-sm);
 	}
 	.live-obj-render-dialog {
 		border: none;

@@ -61,6 +61,17 @@
 		feedbackPasses?: number;
 	};
 
+	type CanvasAspectRatio =
+		| 'fill'
+		| '1:1'
+		| '4:3'
+		| '16:9'
+		| '9:16'
+		| '4:5'
+		| '3:2'
+		| '2:3'
+		| '21:9';
+
 	type LiveObjApiPayload = {
 		message?: string;
 		liveObj?: string;
@@ -178,8 +189,28 @@ f 4 5 1
 		'#cfdccf',
 		'#e5dcba'
 	];
+	const CANVAS_ASPECT_RATIOS: Record<
+		Exclude<CanvasAspectRatio, 'fill'>,
+		{ css: string; value: number }
+	> = {
+		'1:1': { css: '1 / 1', value: 1 },
+		'4:3': { css: '4 / 3', value: 4 / 3 },
+		'16:9': { css: '16 / 9', value: 16 / 9 },
+		'9:16': { css: '9 / 16', value: 9 / 16 },
+		'4:5': { css: '4 / 5', value: 4 / 5 },
+		'3:2': { css: '3 / 2', value: 3 / 2 },
+		'2:3': { css: '2 / 3', value: 2 / 3 },
+		'21:9': { css: '21 / 9', value: 21 / 9 }
+	};
 
 	let backgroundColor = $state(DEFAULT_CANVAS_BACKGROUND);
+	let canvasAspectRatio = $state<CanvasAspectRatio>('fill');
+	let canvasFrameAspectRatio = $derived(
+		canvasAspectRatio === 'fill' ? '' : CANVAS_ASPECT_RATIOS[canvasAspectRatio].css
+	);
+	let canvasFrameAspectValue = $derived(
+		canvasAspectRatio === 'fill' ? 1 : CANVAS_ASPECT_RATIOS[canvasAspectRatio].value
+	);
 	let showGrid = $state(false);
 	let showAxes = $state(false);
 	let ambientLightIntensity = $state(1);
@@ -699,8 +730,10 @@ f 4 5 1
 		apiKey: '',
 		apiUrl: 'https://api.openai.com/v1/chat/completions',
 		imageUrl: 'https://api.openai.com/v1/images/edits',
+		videoUrl: '',
 		textModel: 'gpt-5.5',
 		imageModel: 'gpt-image-1.5',
+		videoModel: '',
 		rememberMe: false
 	});
 	let initialSceneBuilt = $state(false);
@@ -1676,42 +1709,58 @@ f 4 5 1
 			}) ?? ''
 		);
 	}
+
+	function captureSceneCameraSnapshot() {
+		return canvasRef?.captureCameraSnapshot() ?? null;
+	}
 </script>
 
 <div class="app-root">
-	<div class="canvas-layer">
-		<Canvas3D
-			bind:this={canvasRef}
-			className="app-canvas"
-			{backgroundColor}
-			{renderObject}
-			{objectColor}
-			renderMode={renderingMode}
-			{outlineThickness}
-			{outlineDepthSensitivity}
-			{outlineNormalSensitivity}
-			{toonSteps}
-			{toonOutline}
-			respectObjectMaterials={preserveObjMaterials}
-			{showGrid}
-			{showAxes}
-			{ambientLightIntensity}
-			{directionalLightIntensity}
-			showWireframe={wireframe}
-			{enableShadows}
-			{fogEnabled}
-			{fogNear}
-			{fogFar}
-			{fogColor}
-			{cameraFov}
-			{toneMappingExposure}
-			autoFrameOnObjectChange={true}
-		/>
-		{#if (busy && !iterativeGenerationActive) || sourceApplyBusy}
-			<div class="canvas-loading-overlay" aria-live="polite" aria-busy="true">
-				<div class="canvas-loading-spinner"></div>
-			</div>
-		{/if}
+	<div
+		class="canvas-layer"
+		class:canvas-layer--fixed-aspect={canvasAspectRatio !== 'fill'}
+		style={`--canvas-matte: ${backgroundColor};`}
+	>
+		<div
+			class="canvas-frame"
+			class:canvas-frame--fixed-aspect={canvasAspectRatio !== 'fill'}
+			style={canvasFrameAspectRatio
+				? `aspect-ratio: ${canvasFrameAspectRatio}; --canvas-aspect: ${canvasFrameAspectValue};`
+				: ''}
+		>
+			<Canvas3D
+				bind:this={canvasRef}
+				className="app-canvas"
+				{backgroundColor}
+				{renderObject}
+				{objectColor}
+				renderMode={renderingMode}
+				{outlineThickness}
+				{outlineDepthSensitivity}
+				{outlineNormalSensitivity}
+				{toonSteps}
+				{toonOutline}
+				respectObjectMaterials={preserveObjMaterials}
+				{showGrid}
+				{showAxes}
+				{ambientLightIntensity}
+				{directionalLightIntensity}
+				showWireframe={wireframe}
+				{enableShadows}
+				{fogEnabled}
+				{fogNear}
+				{fogFar}
+				{fogColor}
+				{cameraFov}
+				{toneMappingExposure}
+				autoFrameOnObjectChange={true}
+			/>
+			{#if (busy && !iterativeGenerationActive) || sourceApplyBusy}
+				<div class="canvas-loading-overlay" aria-live="polite" aria-busy="true">
+					<div class="canvas-loading-spinner"></div>
+				</div>
+			{/if}
+		</div>
 	</div>
 
 	<LiveObjSidePanel
@@ -1726,6 +1775,7 @@ f 4 5 1
 		{sceneEpoch}
 		{sourceApplyBusy}
 		bind:backgroundColor
+		bind:canvasAspectRatio
 		bind:showGrid
 		bind:showAxes
 		bind:wireframe
@@ -1767,6 +1817,7 @@ f 4 5 1
 		onSend={(p) => void sendPrompt(p)}
 		onStopGeneration={stopGeneration}
 		onCaptureSceneScreenshot={captureSceneScreenshot}
+		onCaptureSceneCameraSnapshot={captureSceneCameraSnapshot}
 		onLaunchObjExample={launchObjExample}
 		bind:kernelDefault
 	/>
@@ -1783,6 +1834,32 @@ f 4 5 1
 		inset: 0;
 		z-index: 0;
 	}
+	.canvas-layer--fixed-aspect {
+		display: grid;
+		place-items: center;
+		padding: 16px;
+		background:
+			linear-gradient(rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.18)), var(--canvas-matte);
+	}
+	.canvas-frame {
+		position: relative;
+		width: 100%;
+		height: 100%;
+	}
+	.canvas-frame--fixed-aspect {
+		width: min(calc(100vw - 32px), calc((100vh - 32px) * var(--canvas-aspect)));
+		height: auto;
+		max-width: calc(100vw - 32px);
+		max-height: calc(100vh - 32px);
+		overflow: hidden;
+		border: 1px solid var(--spell-border-soft);
+		border-radius: var(--spell-radius-lg);
+		background: var(--spell-surface-soft);
+		box-shadow:
+			0 34px 92px rgba(8, 8, 22, 0.2),
+			0 12px 32px rgba(8, 8, 22, 0.12),
+			0 1px 0 rgba(255, 255, 255, 0.72) inset;
+	}
 	:global(.app-canvas) {
 		width: 100%;
 		height: 100%;
@@ -1790,6 +1867,9 @@ f 4 5 1
 	:global(.app-canvas canvas) {
 		border-radius: 0;
 		box-shadow: none;
+	}
+	.canvas-frame--fixed-aspect :global(.app-canvas canvas) {
+		border-radius: inherit;
 	}
 	.canvas-loading-overlay {
 		position: absolute;
