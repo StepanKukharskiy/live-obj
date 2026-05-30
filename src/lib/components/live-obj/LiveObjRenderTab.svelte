@@ -95,9 +95,14 @@
 	let videoShot = $state<VideoShot>(createEmptyShot());
 
 	let videoProviderReady = $derived(
-		(providerSettings.provider === 'openrouter' || providerSettings.provider === 'google') &&
+		providerSettings.provider === 'google' &&
 			!!providerSettings.apiKey?.trim() &&
 			!!providerSettings.videoModel?.trim()
+	);
+	let videoProviderMessage = $derived(
+		providerSettings.provider === 'openrouter'
+			? 'OpenRouter needs public image URLs for frame video. Use Google for gallery frames.'
+			: 'Add an API key and choose a video model in Provider.'
 	);
 	let videoProviderLabel = $derived(
 		providerSettings.provider === 'google'
@@ -125,13 +130,6 @@
 			return (
 				normalizedModel === 'veo-3.1-generate-preview' ||
 				normalizedModel === 'veo-3.1-fast-generate-preview'
-			);
-		}
-		if (normalizedProvider === 'openrouter') {
-			return (
-				normalizedModel.includes('veo-3.1') ||
-				normalizedModel.includes('wan') ||
-				normalizedModel.includes('seedance')
 			);
 		}
 		return false;
@@ -190,6 +188,10 @@
 		return videoPrompt.trim();
 	}
 
+	function wait(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
 	function takeScreenshot() {
 		errorLine = null;
 		const dataUrl = onCaptureSceneScreenshot?.() ?? '';
@@ -236,6 +238,66 @@
 		});
 	}
 
+	function replaceClip(clips: GeneratedClip[], clipId: string, patch: Partial<GeneratedClip>) {
+		return clips.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip));
+	}
+
+	async function downloadGoogleVideoUri(videoUri: string): Promise<string> {
+		const response = await fetch('/api/render-video/download', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				provider: providerSettings.provider,
+				apiKey: providerSettings.apiKey?.trim() || undefined,
+				videoUri
+			})
+		});
+		if (!response.ok) {
+			const payload = (await response.json().catch(() => ({}))) as { message?: string };
+			throw new Error(payload.message || 'Video download failed');
+		}
+		return URL.createObjectURL(await response.blob());
+	}
+
+	async function pollVideoClip(clipId: string, jobId: string, clips: GeneratedClip[]) {
+		let currentClips = clips;
+		for (let attempt = 1; attempt <= 60; attempt += 1) {
+			await wait(10_000);
+			const response = await fetch('/api/render-video/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					provider: providerSettings.provider,
+					apiKey: providerSettings.apiKey?.trim() || undefined,
+					jobId
+				})
+			});
+			const payload = (await response.json().catch(() => ({}))) as {
+				message?: string;
+				status?: string;
+				jobId?: string;
+				videoUri?: string;
+			};
+			if (!response.ok) throw new Error(payload.message || 'Video polling failed');
+			if (payload.status === 'completed' && payload.videoUri) {
+				const videoUrl = await downloadGoogleVideoUri(payload.videoUri);
+				currentClips = replaceClip(currentClips, clipId, {
+					status: 'Take 1: ready',
+					videoUrl,
+					jobId: payload.jobId ?? jobId
+				});
+				updateActiveVideoShot({ clips: currentClips });
+				return currentClips;
+			}
+			currentClips = replaceClip(currentClips, clipId, {
+				status: `Take 1: processing ${attempt}/60`,
+				jobId: payload.jobId ?? jobId
+			});
+			updateActiveVideoShot({ clips: currentClips });
+		}
+		throw new Error('Video generation is still processing. Try again later.');
+	}
+
 	async function generateVideoClips() {
 		if (videoBusy) return;
 		errorLine = null;
@@ -249,11 +311,11 @@
 			return;
 		}
 		if (providerSettings.provider !== 'openrouter' && providerSettings.provider !== 'google') {
-			errorLine = 'Select OpenRouter or Google in Provider.';
+			errorLine = 'Select Google in Provider.';
 			return;
 		}
 		if (!videoProviderReady) {
-			errorLine = 'Add an API key and video model in Provider.';
+			errorLine = videoProviderMessage;
 			return;
 		}
 
@@ -278,7 +340,6 @@
 						liveObjText,
 						provider: providerSettings.provider,
 						apiKey: providerSettings.apiKey?.trim() || undefined,
-						videoUrl: providerSettings.videoUrl?.trim() || undefined,
 						videoModel: providerSettings.videoModel,
 						startFrameDataUrl: shot.start?.imageDataUrl,
 						endFrameDataUrl: shot.end?.imageDataUrl,
@@ -295,17 +356,18 @@
 				if (!response.ok) {
 					throw new Error(payload.message || 'Video generation failed');
 				}
-				const completedClip: GeneratedClip = {
-					id: clipId,
+				clips = replaceClip(clips, clipId, {
 					status:
 						payload.videoUrl || payload.videoDataUrl
 							? `Take ${take}: ready`
 							: `Take ${take}: ${payload.status ?? 'pending'}`,
 					videoUrl: payload.videoUrl || payload.videoDataUrl,
 					jobId: payload.jobId
-				};
-				clips = clips.map((clip) => (clip.id === clipId ? completedClip : clip));
+				});
 				updateActiveVideoShot({ clips });
+				if (!payload.videoUrl && !payload.videoDataUrl && payload.jobId) {
+					clips = await pollVideoClip(clipId, payload.jobId, clips);
+				}
 			} catch (e) {
 				const failedClip: GeneratedClip = {
 					id: clipId,
@@ -567,7 +629,7 @@
 
 		{#if !videoProviderReady}
 			<div class="planner-video-note">
-				Add an API key and choose a video model in Provider.
+				{videoProviderMessage}
 			</div>
 		{/if}
 

@@ -303,8 +303,7 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 		const firstImage = dataUrlToInlineImage(startFrameDataUrl);
 		const lastImage = endFrameDataUrl ? dataUrlToInlineImage(endFrameDataUrl) : undefined;
 		const googleDuration = lastImage ? 8 : 4;
-		const submitUrl = googleSubmitUrl(body.videoUrl, videoModel);
-		const baseUrl = googleBaseUrl(body.videoUrl);
+		const submitUrl = googleSubmitUrl(undefined, videoModel);
 		const buildPayload = () => ({
 			instances: [
 				{
@@ -345,19 +344,19 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 			);
 		}
 
-		const completed = await pollGoogleOperation(submitted, apiKey, baseUrl);
-		const videoUri =
-			completed.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri ??
-			completed.response?.generatedVideos?.[0]?.video?.uri ??
-			'';
-		const videoDataUrl = videoUri ? await fetchGoogleVideoDataUrl(videoUri, apiKey) : '';
-
 		return json({
-			status: completed.done ? 'completed' : 'pending',
-			jobId: completed.name ?? submitted.name,
+			status: 'pending',
+			jobId: submitted.name,
 			videoUrl: '',
-			videoDataUrl
+			videoDataUrl: ''
 		});
+	}
+
+	if (provider === 'openrouter') {
+		throw error(
+			400,
+			'OpenRouter video frame inputs require publicly reachable HTTPS image URLs. Spellshape gallery frames are local data URLs, so use Google Veo for gallery-frame video or add an image upload host before using OpenRouter frames.'
+		);
 	}
 
 	const frameImages = [
