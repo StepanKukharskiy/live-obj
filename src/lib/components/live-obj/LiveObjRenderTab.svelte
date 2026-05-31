@@ -224,7 +224,8 @@
 		).label ?? fallback;
 	}
 
-	async function aspectRatioFromFrame(dataUrl: string): Promise<string> {
+	async function aspectRatioForVideo(dataUrl: string): Promise<string> {
+		if (canvasAspectRatio !== 'fill') return canvasAspectRatio;
 		const image = await loadImageFromDataUrl(dataUrl);
 		return aspectRatioLabel(image.naturalWidth, image.naturalHeight, videoAspectRatio);
 	}
@@ -434,7 +435,7 @@
 				formData.set('apiKey', providerSettings.apiKey?.trim() || '');
 				formData.set('videoModel', providerSettings.videoModel ?? '');
 				formData.set('videoUrl', providerSettings.videoUrl?.trim() || '');
-				formData.set('aspectRatio', await aspectRatioFromFrame(startFrameDataUrl));
+				formData.set('aspectRatio', await aspectRatioForVideo(startFrameDataUrl));
 				formData.set('startFrame', await dataUrlToVideoFrameBlob(startFrameDataUrl), 'start-frame.jpg');
 				if (endFrameDataUrl) {
 					formData.set('endFrame', await dataUrlToVideoFrameBlob(endFrameDataUrl), 'end-frame.jpg');
