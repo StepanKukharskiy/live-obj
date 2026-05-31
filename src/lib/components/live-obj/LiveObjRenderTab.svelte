@@ -188,11 +188,34 @@
 		return videoPrompt.trim();
 	}
 
-	function dataUrlToBlob(dataUrl: string): Blob {
-		const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
-		if (!match) throw new Error('Invalid image data URL');
-		const bytes = Uint8Array.from(atob(match[2]), (char) => char.charCodeAt(0));
-		return new Blob([bytes], { type: match[1] });
+	async function dataUrlToVideoFrameBlob(dataUrl: string): Promise<Blob> {
+		const image = new Image();
+		image.decoding = 'async';
+		const loaded = new Promise<void>((resolve, reject) => {
+			image.onload = () => resolve();
+			image.onerror = () => reject(new Error('Invalid image data URL'));
+		});
+		image.src = dataUrl;
+		await loaded;
+
+		const maxSide = 1280;
+		const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+		const width = Math.max(1, Math.round(image.naturalWidth * scale));
+		const height = Math.max(1, Math.round(image.naturalHeight * scale));
+		const canvas = document.createElement('canvas');
+		canvas.width = width;
+		canvas.height = height;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) throw new Error('Unable to prepare video frame');
+		ctx.drawImage(image, 0, 0, width, height);
+
+		return new Promise<Blob>((resolve, reject) => {
+			canvas.toBlob(
+				(blob) => (blob ? resolve(blob) : reject(new Error('Unable to encode video frame'))),
+				'image/jpeg',
+				0.86
+			);
+		});
 	}
 
 	function wait(ms: number): Promise<void> {
@@ -348,9 +371,9 @@
 				formData.set('apiKey', providerSettings.apiKey?.trim() || '');
 				formData.set('videoModel', providerSettings.videoModel ?? '');
 				formData.set('aspectRatio', videoAspectRatio);
-				formData.set('startFrame', dataUrlToBlob(startFrameDataUrl), 'start-frame.png');
+				formData.set('startFrame', await dataUrlToVideoFrameBlob(startFrameDataUrl), 'start-frame.jpg');
 				if (endFrameDataUrl) {
-					formData.set('endFrame', dataUrlToBlob(endFrameDataUrl), 'end-frame.png');
+					formData.set('endFrame', await dataUrlToVideoFrameBlob(endFrameDataUrl), 'end-frame.jpg');
 				}
 				const response = await fetch('/api/render-video', {
 					method: 'POST',

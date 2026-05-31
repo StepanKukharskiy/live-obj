@@ -52,6 +52,11 @@ type ParsedRenderVideoBody = RenderVideoBody & {
 	startFrameImage?: InlineImage;
 	endFrameImage?: InlineImage;
 };
+type FormFileLike = {
+	size: number;
+	type?: string;
+	arrayBuffer: () => Promise<ArrayBuffer>;
+};
 
 function metadataFromLiveObj(liveObjText: string): string {
 	return liveObjText
@@ -80,8 +85,25 @@ function dataUrlToInlineImage(dataUrl: string): InlineImage {
 	return { mimeType: match[1], data: match[2] };
 }
 
-async function blobToInlineImage(value: FormDataEntryValue | null, label: string): Promise<InlineImage | undefined> {
-	if (!(value instanceof Blob) || value.size === 0) return undefined;
+function cleanProviderField(value: string | undefined): string | undefined {
+	const cleaned = value?.replace(/[^\t\x20-\xff]/g, '').trim();
+	return cleaned || undefined;
+}
+
+function isFormFileLike(value: FormDataEntryValue | null): value is FormDataEntryValue & FormFileLike {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		typeof (value as Partial<FormFileLike>).size === 'number' &&
+		typeof (value as FormFileLike).arrayBuffer === 'function'
+	);
+}
+
+async function blobToInlineImage(
+	value: FormDataEntryValue | null,
+	label: string
+): Promise<InlineImage | undefined> {
+	if (!isFormFileLike(value) || !value.size) return undefined;
 	const mimeType = value.type || 'image/png';
 	if (!mimeType.startsWith('image/')) throw error(400, `${label} must be an image file`);
 	const arrayBuffer = await value.arrayBuffer();
@@ -96,14 +118,19 @@ function formString(form: FormData, key: string): string | undefined {
 async function parseRenderVideoRequest(request: Request): Promise<ParsedRenderVideoBody> {
 	const contentType = request.headers.get('content-type') ?? '';
 	if (contentType.includes('multipart/form-data')) {
-		const form = await request.formData();
+		let form: FormData;
+		try {
+			form = await request.formData();
+		} catch (err) {
+			throw error(400, `Invalid multipart form data: ${networkErrorMessage(err)}`);
+		}
 		return {
 			prompt: formString(form, 'prompt'),
 			liveObjText: formString(form, 'liveObjText'),
 			provider: formString(form, 'provider'),
-			apiKey: formString(form, 'apiKey'),
-			videoUrl: formString(form, 'videoUrl'),
-			videoModel: formString(form, 'videoModel'),
+			apiKey: cleanProviderField(formString(form, 'apiKey')),
+			videoUrl: cleanProviderField(formString(form, 'videoUrl')),
+			videoModel: cleanProviderField(formString(form, 'videoModel')),
 			aspectRatio: formString(form, 'aspectRatio'),
 			startFrameImage: await blobToInlineImage(form.get('startFrame'), 'startFrame'),
 			endFrameImage: await blobToInlineImage(form.get('endFrame'), 'endFrame')

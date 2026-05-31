@@ -1,4 +1,8 @@
 FROM node:20-slim
+
+# SvelteKit adapter-node defaults to 512K, which is too small for video frame uploads.
+ENV BODY_SIZE_LIMIT=8M
+
 # Install Python 3.11 and X11/graphics libraries for OCP
 RUN apt-get update \
  && apt-get install -y python3.11 python3-pip libgl1 libxrender1 libxext6 \
