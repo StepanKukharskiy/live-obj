@@ -95,14 +95,12 @@
 	let videoShot = $state<VideoShot>(createEmptyShot());
 
 	let videoProviderReady = $derived(
-		providerSettings.provider === 'google' &&
+		(providerSettings.provider === 'google' || providerSettings.provider === 'openrouter') &&
 			!!providerSettings.apiKey?.trim() &&
 			!!providerSettings.videoModel?.trim()
 	);
 	let videoProviderMessage = $derived(
-		providerSettings.provider === 'openrouter'
-			? 'OpenRouter needs public image URLs for frame video. Use Google for gallery frames.'
-			: 'Add an API key and choose a video model in Provider.'
+		'Add an API key and choose a video model in Provider.'
 	);
 	let videoProviderLabel = $derived(
 		providerSettings.provider === 'google'
@@ -130,6 +128,13 @@
 			return (
 				normalizedModel === 'veo-3.1-generate-preview' ||
 				normalizedModel === 'veo-3.1-fast-generate-preview'
+			);
+		}
+		if (normalizedProvider === 'openrouter') {
+			return (
+				normalizedModel.includes('veo-3.1') ||
+				normalizedModel.includes('wan') ||
+				normalizedModel.includes('seedance')
 			);
 		}
 		return false;
@@ -272,14 +277,14 @@
 		return clips.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip));
 	}
 
-	async function downloadGoogleVideoUri(videoUri: string): Promise<string> {
+	async function downloadProviderVideoUri(videoUri: string): Promise<string> {
 		const response = await fetch('/api/render-video/download', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
-				provider: providerSettings.provider,
-				apiKey: providerSettings.apiKey?.trim() || undefined,
-				videoUri
+					provider: providerSettings.provider,
+					apiKey: providerSettings.apiKey?.trim() || undefined,
+					videoUri
 			})
 		});
 		if (!response.ok) {
@@ -299,6 +304,7 @@
 				body: JSON.stringify({
 					provider: providerSettings.provider,
 					apiKey: providerSettings.apiKey?.trim() || undefined,
+					videoUrl: providerSettings.videoUrl?.trim() || undefined,
 					jobId
 				})
 			});
@@ -310,7 +316,7 @@
 			};
 			if (!response.ok) throw new Error(payload.message || 'Video polling failed');
 			if (payload.status === 'completed' && payload.videoUri) {
-				const videoUrl = await downloadGoogleVideoUri(payload.videoUri);
+				const videoUrl = await downloadProviderVideoUri(payload.videoUri);
 				currentClips = replaceClip(currentClips, clipId, {
 					status: 'Take 1: ready',
 					videoUrl,
@@ -370,6 +376,7 @@
 				formData.set('provider', providerSettings.provider);
 				formData.set('apiKey', providerSettings.apiKey?.trim() || '');
 				formData.set('videoModel', providerSettings.videoModel ?? '');
+				formData.set('videoUrl', providerSettings.videoUrl?.trim() || '');
 				formData.set('aspectRatio', videoAspectRatio);
 				formData.set('startFrame', await dataUrlToVideoFrameBlob(startFrameDataUrl), 'start-frame.jpg');
 				if (endFrameDataUrl) {

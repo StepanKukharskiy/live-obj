@@ -1,5 +1,6 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { storeVideoFrame } from '$lib/server/videoFrameStore';
 
 const DEFAULT_OPENROUTER_VIDEO_URL = 'https://openrouter.ai/api/v1/videos';
 const DEFAULT_GOOGLE_VIDEO_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
@@ -33,6 +34,25 @@ type GoogleOperation = {
 		};
 		generatedVideos?: Array<{ video?: { uri?: string; mimeType?: string } }>;
 	};
+};
+
+type OpenRouterVideoModel = {
+	id?: string;
+	canonical_slug?: string;
+	supported_durations?: number[] | null;
+	supported_frame_images?: string[] | null;
+	supported_aspect_ratios?: string[] | null;
+	supported_resolutions?: string[] | null;
+	supported_sizes?: string[] | null;
+};
+
+type OpenRouterVideoCapabilities = {
+	supportsFirstFrame: boolean;
+	supportsLastFrame: boolean;
+	supportedDurations?: number[];
+	aspectRatio?: string;
+	resolution?: string;
+	size?: string;
 };
 
 type RenderVideoBody = {
@@ -150,6 +170,26 @@ function googleImagePayload(image: { mimeType: string; data: string }) {
 	};
 }
 
+function publicVideoFrameUrl(requestUrl: URL, image: InlineImage): string {
+	const id = storeVideoFrame(Buffer.from(image.data, 'base64'), image.mimeType);
+	return new URL(`/api/render-video/frame/${id}`, requestUrl).toString();
+}
+
+function assertPublicHttpsOrigin(requestUrl: URL) {
+	const hostname = requestUrl.hostname.toLowerCase();
+	const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+	const isPrivateIp =
+		/^10\./.test(hostname) ||
+		/^192\.168\./.test(hostname) ||
+		/^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname);
+	if (requestUrl.protocol !== 'https:' || isLocalhost || isPrivateIp) {
+		throw error(
+			400,
+			'OpenRouter frame video needs public HTTPS frame URLs. Test OpenRouter video from the deployed app or a public HTTPS tunnel; use Google for localhost.'
+		);
+	}
+}
+
 function normalizeGoogleVideoModel(model: string): string {
 	return GOOGLE_VIDEO_MODEL_ALIASES[model] ?? model;
 }
@@ -224,11 +264,55 @@ function knownModelSupportsEndFrame(provider: string, model: string): boolean {
 	return false;
 }
 
-async function openRouterModelSupportsEndFrame(
+function openRouterFallbackCapabilities(model: string, requestedAspectRatio: string): OpenRouterVideoCapabilities {
+	const supportsLastFrame = knownModelSupportsEndFrame('openrouter', model);
+	const supportedDurations = model.trim().toLowerCase().includes('veo-3.1') ? [4, 6, 8] : [5, 8];
+	return {
+		supportsFirstFrame: true,
+		supportsLastFrame,
+		supportedDurations,
+		aspectRatio: requestedAspectRatio,
+		resolution: '720p'
+	};
+}
+
+function chooseOpenRouterDuration(supportedDurations: number[] | null | undefined, hasEndFrame: boolean): number {
+	const durations = [...(supportedDurations ?? [])]
+		.filter((duration) => Number.isFinite(duration) && duration > 0)
+		.sort((a, b) => a - b);
+	if (!durations.length) return hasEndFrame ? 8 : 5;
+	if (hasEndFrame) return durations.find((duration) => duration >= 8) ?? durations.at(-1) ?? 8;
+	return (
+		durations.find((duration) => duration === 5) ??
+		durations.find((duration) => duration === 4) ??
+		durations[0]
+	);
+}
+
+function chooseOpenRouterAspectRatio(
+	supportedAspectRatios: string[] | null | undefined,
+	requestedAspectRatio: string
+): string | undefined {
+	if (!supportedAspectRatios?.length) return requestedAspectRatio;
+	if (supportedAspectRatios.includes(requestedAspectRatio)) return requestedAspectRatio;
+	if (supportedAspectRatios.includes('16:9')) return '16:9';
+	return supportedAspectRatios[0];
+}
+
+function chooseOpenRouterResolution(
+	supportedResolutions: string[] | null | undefined
+): string | undefined {
+	if (!supportedResolutions?.length) return '720p';
+	if (supportedResolutions.includes('720p')) return '720p';
+	return supportedResolutions[0];
+}
+
+async function openRouterVideoCapabilities(
 	videoUrl: string | undefined,
 	apiKey: string,
-	model: string
-): Promise<boolean> {
+	model: string,
+	requestedAspectRatio: string
+): Promise<OpenRouterVideoCapabilities> {
 	const modelsUrl = new URL('./models', bodyVideoUrlBase(videoUrl)).toString();
 	try {
 		const response = await fetch(modelsUrl, {
@@ -237,15 +321,24 @@ async function openRouterModelSupportsEndFrame(
 				'X-OpenRouter-Title': 'Spellshape'
 			}
 		});
-		if (!response.ok) return knownModelSupportsEndFrame('openrouter', model);
+		if (!response.ok) return openRouterFallbackCapabilities(model, requestedAspectRatio);
 		const payload = (await response.json().catch(() => ({}))) as {
-			data?: Array<{ id?: string; supported_frame_images?: string[] }>;
+			data?: OpenRouterVideoModel[];
 		};
-		const match = payload.data?.find((entry) => entry.id === model);
-		if (!match) return knownModelSupportsEndFrame('openrouter', model);
-		return match.supported_frame_images?.includes('last_frame') ?? false;
+		const match = payload.data?.find((entry) => entry.id === model || entry.canonical_slug === model);
+		if (!match) return openRouterFallbackCapabilities(model, requestedAspectRatio);
+		const supportedFrames = match.supported_frame_images;
+		const supportsLastFrame = supportedFrames?.includes('last_frame') ?? false;
+		return {
+			supportsFirstFrame: !supportedFrames || supportedFrames.includes('first_frame'),
+			supportsLastFrame,
+			supportedDurations: match.supported_durations ?? undefined,
+			aspectRatio: chooseOpenRouterAspectRatio(match.supported_aspect_ratios, requestedAspectRatio),
+			resolution: chooseOpenRouterResolution(match.supported_resolutions),
+			size: match.supported_sizes?.[0]
+		};
 	} catch {
-		return knownModelSupportsEndFrame('openrouter', model);
+		return openRouterFallbackCapabilities(model, requestedAspectRatio);
 	}
 }
 
@@ -319,7 +412,7 @@ async function submitGoogleVideo(
 	return { response, body: (await response.json().catch(() => ({}))) as GoogleOperation };
 }
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, url }) => {
 	const body = await parseRenderVideoRequest(request);
 
 	const provider = body.provider?.trim().toLowerCase() ?? '';
@@ -333,7 +426,6 @@ export const POST: RequestHandler = async ({ request }) => {
 	const videoModel = provider === 'google' ? normalizeGoogleVideoModel(requestedVideoModel) : requestedVideoModel;
 	const startFrameDataUrl = body.startFrameDataUrl?.trim() ?? '';
 	const requestedEndFrameDataUrl = body.endFrameDataUrl?.trim() ?? '';
-	const durationSeconds = Math.max(1, Math.min(10, Math.round(body.durationSeconds ?? 5)));
 	const aspectRatio = body.aspectRatio?.trim() || '16:9';
 
 	if (!apiKey) throw error(500, 'API key is required');
@@ -348,16 +440,20 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!startFrameDataUrl && !body.startFrameImage) throw error(400, 'startFrame is required');
 	if (startFrameDataUrl) assertImageDataUrl(startFrameDataUrl, 'startFrameDataUrl');
 	if (requestedEndFrameDataUrl) assertImageDataUrl(requestedEndFrameDataUrl, 'endFrameDataUrl');
-	const supportsEndFrame =
+	const openRouterCapabilities =
 		provider === 'openrouter'
-			? await openRouterModelSupportsEndFrame(body.videoUrl, apiKey, videoModel)
-			: knownModelSupportsEndFrame(provider, videoModel);
+			? await openRouterVideoCapabilities(body.videoUrl, apiKey, videoModel, aspectRatio)
+			: null;
+	const supportsEndFrame =
+		openRouterCapabilities?.supportsLastFrame ?? knownModelSupportsEndFrame(provider, videoModel);
+	if (provider === 'openrouter' && !openRouterCapabilities?.supportsFirstFrame) {
+		throw error(400, `${videoModel} does not support first-frame video input.`);
+	}
 	const startFrameImage = body.startFrameImage ?? dataUrlToInlineImage(startFrameDataUrl);
 	const endFrameImage =
 		supportsEndFrame && (body.endFrameImage || requestedEndFrameDataUrl)
 			? (body.endFrameImage ?? dataUrlToInlineImage(requestedEndFrameDataUrl))
 			: undefined;
-	const endFrameDataUrl = endFrameImage ? requestedEndFrameDataUrl : '';
 
 	const sceneMetadata = metadataFromLiveObj(body.liveObjText ?? '');
 	const fullPrompt = `${prompt}
@@ -421,71 +517,72 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 	}
 
 	if (provider === 'openrouter') {
-		throw error(
-			400,
-			'OpenRouter video frame inputs require publicly reachable HTTPS image URLs. Spellshape gallery frames are local data URLs, so use Google Veo for gallery-frame video or add an image upload host before using OpenRouter frames.'
+		assertPublicHttpsOrigin(url);
+		const firstFrameUrl = publicVideoFrameUrl(url, startFrameImage);
+		const lastFrameUrl = endFrameImage ? publicVideoFrameUrl(url, endFrameImage) : '';
+		const openRouterDuration = chooseOpenRouterDuration(
+			openRouterCapabilities?.supportedDurations,
+			!!lastFrameUrl
 		);
-	}
-
-	const frameImages = [
-		{
-			type: 'image_url',
-			image_url: { url: startFrameDataUrl },
-			frame_type: 'first_frame'
-		},
-		...(endFrameDataUrl
-			? [
-					{
-						type: 'image_url',
-						image_url: { url: endFrameDataUrl },
-						frame_type: 'last_frame'
-					}
-				]
-			: [])
-	];
-
-	let submitResponse: Response;
-	try {
-		submitResponse = await fetch(body.videoUrl?.trim() || DEFAULT_OPENROUTER_VIDEO_URL, {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				'Content-Type': 'application/json',
-				'X-OpenRouter-Title': 'Spellshape'
+		const frameImages = [
+			{
+				type: 'image_url',
+				image_url: { url: firstFrameUrl },
+				frame_type: 'first_frame'
 			},
-			body: JSON.stringify({
-				model: videoModel,
-				prompt: fullPrompt,
-				duration: durationSeconds,
-				resolution: '720p',
-				aspect_ratio: aspectRatio,
-				generate_audio: false,
-				frame_images: frameImages
-			})
+			...(lastFrameUrl
+				? [
+						{
+							type: 'image_url',
+							image_url: { url: lastFrameUrl },
+							frame_type: 'last_frame'
+						}
+					]
+				: [])
+		];
+
+		let submitResponse: Response;
+		try {
+			submitResponse = await fetch(body.videoUrl?.trim() || DEFAULT_OPENROUTER_VIDEO_URL, {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					'Content-Type': 'application/json',
+					'X-OpenRouter-Title': 'Spellshape'
+				},
+				body: JSON.stringify({
+					model: videoModel,
+					prompt: fullPrompt,
+					duration: openRouterDuration,
+					...(openRouterCapabilities?.size
+						? { size: openRouterCapabilities.size }
+						: {
+								resolution: openRouterCapabilities?.resolution ?? '720p',
+								aspect_ratio: openRouterCapabilities?.aspectRatio ?? aspectRatio
+							}),
+					generate_audio: false,
+					frame_images: frameImages
+				})
+			});
+		} catch (err) {
+			throw error(502, `Unable to reach video provider: ${networkErrorMessage(err)}`);
+		}
+
+		const submitted = (await submitResponse.json().catch(() => ({}))) as VideoJob;
+		if (!submitResponse.ok) {
+			throw error(submitResponse.status, submitted.error || 'Video generation failed');
+		}
+
+		const unsignedUrl = submitted.unsigned_urls?.[0] ?? '';
+		return json({
+			status: submitted.status ?? 'pending',
+			jobId: submitted.id,
+			generationId: submitted.generation_id,
+			pollingUrl: submitted.polling_url,
+			videoUrl: unsignedUrl ? normalizeOpenRouterUrl(unsignedUrl) : '',
+			videoDataUrl: ''
 		});
-	} catch (err) {
-		throw error(502, `Unable to reach video provider: ${networkErrorMessage(err)}`);
 	}
 
-	const submitted = (await submitResponse.json().catch(() => ({}))) as VideoJob;
-	if (!submitResponse.ok) {
-		throw error(submitResponse.status, submitted.error || 'Video generation failed');
-	}
-
-	const completed = await pollOpenRouterJob(submitted, apiKey);
-	const unsignedUrl = completed.unsigned_urls?.[0] ?? '';
-	const contentUrl =
-		completed.status === 'completed' && completed.id
-			? `${DEFAULT_OPENROUTER_VIDEO_URL}/${completed.id}/content?index=0`
-			: '';
-	const videoDataUrl = !unsignedUrl && contentUrl ? await fetchVideoDataUrl(contentUrl, apiKey) : '';
-
-	return json({
-		status: completed.status ?? submitted.status ?? 'pending',
-		jobId: completed.id ?? submitted.id,
-		generationId: completed.generation_id ?? submitted.generation_id,
-		pollingUrl: completed.polling_url ?? submitted.polling_url,
-		videoUrl: unsignedUrl ? normalizeOpenRouterUrl(unsignedUrl) : '',
-		videoDataUrl
-	});
+	throw error(400, 'Video generation currently supports OpenRouter and Google.');
 };

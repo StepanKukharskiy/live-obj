@@ -18,12 +18,19 @@ export const POST: RequestHandler = async ({ request }) => {
 	const provider = body.provider?.trim().toLowerCase() ?? '';
 	const apiKey = body.apiKey?.trim() ?? '';
 	const videoUri = body.videoUri?.trim() ?? '';
-	if (provider !== 'google') throw error(400, 'Video download currently supports Google.');
+	if (provider !== 'google' && provider !== 'openrouter') {
+		throw error(400, 'Video download currently supports Google and OpenRouter.');
+	}
 	if (!apiKey) throw error(500, 'API key is required');
 	if (!videoUri.startsWith('https://')) throw error(400, 'videoUri must be an HTTPS URL');
 
 	const response = await fetch(videoUri, {
-		headers: { 'x-goog-api-key': apiKey }
+		headers:
+			provider === 'google'
+				? { 'x-goog-api-key': apiKey }
+				: videoUri.includes('openrouter.ai')
+					? { Authorization: `Bearer ${apiKey}` }
+					: {}
 	});
 	if (!response.ok) {
 		throw error(response.status, 'Video completed, but content download failed');
