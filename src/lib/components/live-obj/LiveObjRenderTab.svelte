@@ -255,15 +255,20 @@
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
-	function takeScreenshot() {
+	function captureScreenshotDataUrl(addToGallery: boolean): string {
 		errorLine = null;
 		const dataUrl = onCaptureSceneScreenshot?.() ?? '';
 		if (!dataUrl) {
 			errorLine = 'Unable to capture screenshot from the 3D scene.';
-			return;
+			return '';
 		}
 		screenshotDataUrl = dataUrl;
-		addFrameAsset(dataUrl, 'screenshot');
+		if (addToGallery) addFrameAsset(dataUrl, 'screenshot');
+		return dataUrl;
+	}
+
+	function takeScreenshot() {
+		captureScreenshotDataUrl(true);
 	}
 
 	function addFrameAsset(imageDataUrl: string, source: FrameAsset['source']) {
@@ -299,6 +304,30 @@
 			},
 			clips: []
 		});
+	}
+
+	function hasTimelineSpace(): boolean {
+		return !videoShot.start || (selectedVideoSupportsEndFrame && !videoShot.end);
+	}
+
+	function addFrameAssetToTimeline(asset: FrameAsset) {
+		if (videoBusy) return;
+		if (!videoShot.start) {
+			assignFrameAsset('start', asset);
+			return;
+		}
+		if (selectedVideoSupportsEndFrame && !videoShot.end) {
+			assignFrameAsset('end', asset);
+			return;
+		}
+		errorLine = selectedVideoSupportsEndFrame
+			? 'Clear a timeline frame before adding another.'
+			: 'This video model uses one start frame.';
+	}
+
+	function clearTimelineFrame(frame: 'start' | 'end') {
+		errorLine = null;
+		updateActiveVideoShot({ [frame]: undefined, clips: [] });
 	}
 
 	function replaceClip(clips: GeneratedClip[], clipId: string, patch: Partial<GeneratedClip>) {
@@ -495,10 +524,8 @@
 			errorLine = 'Please enter a render prompt.';
 			return;
 		}
-		if (!screenshotDataUrl) {
-			errorLine = 'Take a screenshot first.';
-			return;
-		}
+		const renderScreenshotDataUrl = captureScreenshotDataUrl(false);
+		if (!renderScreenshotDataUrl) return;
 		busy = true;
 		try {
 			const response = await fetch('/api/render-image', {
@@ -506,7 +533,7 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					prompt,
-					screenshotDataUrl,
+					screenshotDataUrl: renderScreenshotDataUrl,
 					liveObjText,
 					provider: providerSettings.provider,
 					apiKey: providerSettings.apiKey?.trim() || undefined,
@@ -562,7 +589,7 @@
 			type="button"
 			class="send-button"
 			onclick={generateImage}
-			disabled={busy || promptBusy || !prompt.trim() || !screenshotDataUrl}
+			disabled={busy || promptBusy || !prompt.trim()}
 		>
 			{busy ? 'Generating…' : 'Generate image'}
 		</button>
@@ -577,6 +604,41 @@
 				</div>
 			</div>
 			<span class="planner-video-provider-pill">{videoProviderLabel}</span>
+		</div>
+
+		<div class="planner-video-timeline" aria-label="Video timeline">
+			<div class="planner-video-slot" class:filled={!!videoShot.start}>
+				<div class="planner-video-slot-head">
+					<span>Start</span>
+					{#if videoShot.start}
+						<button type="button" onclick={() => clearTimelineFrame('start')} disabled={videoBusy}
+							>Clear</button
+						>
+					{/if}
+				</div>
+				{#if videoShot.start}
+					<img src={videoShot.start.imageDataUrl} alt="Video start frame" />
+				{:else}
+					<div class="planner-video-slot-empty">Add first frame</div>
+				{/if}
+			</div>
+			<div class="planner-video-slot" class:filled={!!videoShot.end} class:disabled={!selectedVideoSupportsEndFrame}>
+				<div class="planner-video-slot-head">
+					<span>End</span>
+					{#if videoShot.end}
+						<button type="button" onclick={() => clearTimelineFrame('end')} disabled={videoBusy}
+							>Clear</button
+						>
+					{/if}
+				</div>
+				{#if videoShot.end}
+					<img src={videoShot.end.imageDataUrl} alt="Video end frame" />
+				{:else}
+					<div class="planner-video-slot-empty">
+						{selectedVideoSupportsEndFrame ? 'Add optional end frame' : 'Not used by model'}
+					</div>
+				{/if}
+			</div>
 		</div>
 
 		{#if frameAssets.length}
@@ -599,21 +661,10 @@
 						<div class="planner-frame-actions">
 							<button
 								type="button"
-								class:active={videoShot.start?.imageDataUrl === asset.imageDataUrl}
-								onclick={() => assignFrameAsset('start', asset)}
-								disabled={videoBusy}>Start</button
+								class="planner-frame-add-button"
+								onclick={() => addFrameAssetToTimeline(asset)}
+								disabled={videoBusy || !hasTimelineSpace()}>Add to timeline</button
 							>
-							<button
-								type="button"
-								class:active={videoShot.end?.imageDataUrl === asset.imageDataUrl}
-								onclick={() => assignFrameAsset('end', asset)}
-								title={selectedVideoSupportsEndFrame
-									? 'Use as end frame'
-									: 'Selected video model does not use an end frame'}
-								disabled={videoBusy || !selectedVideoSupportsEndFrame}>End</button
-							>
-						</div>
-						<div class="planner-frame-utility-actions">
 							<button
 								type="button"
 								class="planner-monaco-action-btn planner-monaco-action-btn--icon-only"
@@ -698,23 +749,6 @@
 		{#if !videoProviderReady}
 			<div class="planner-video-note">
 				{videoProviderMessage}
-			</div>
-		{/if}
-
-		{#if videoShot.start || videoShot.end}
-			<div class="planner-video-frames">
-				{#if videoShot.start}
-					<div class="planner-video-frame">
-						<span>Start</span>
-						<img src={videoShot.start.imageDataUrl} alt="Video start frame" />
-					</div>
-				{/if}
-				{#if videoShot.end}
-					<div class="planner-video-frame">
-						<span>End{selectedVideoSupportsEndFrame ? '' : ' ignored'}</span>
-						<img src={videoShot.end.imageDataUrl} alt="Video end frame" />
-					</div>
-				{/if}
 			</div>
 		{/if}
 
@@ -892,6 +926,75 @@
 		grid-template-columns: minmax(0, 1fr);
 		gap: 8px;
 	}
+	.planner-video-timeline {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+	}
+	.planner-video-slot {
+		min-width: 0;
+		border: 1px dashed var(--spell-border);
+		border-radius: var(--spell-radius-sm);
+		background: rgba(255, 255, 255, 0.42);
+		padding: 7px;
+	}
+	.planner-video-slot.filled {
+		border-style: solid;
+		background: var(--spell-surface-soft);
+	}
+	.planner-video-slot.disabled {
+		opacity: 0.58;
+	}
+	.planner-video-slot-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 6px;
+		margin-bottom: 6px;
+		font-size: 11px;
+		font-weight: 750;
+		color: #475569;
+	}
+	.planner-video-slot-head button {
+		border: 0;
+		background: transparent;
+		color: var(--spell-blue);
+		font: inherit;
+		font-size: 10px;
+		font-weight: 750;
+		cursor: pointer;
+		padding: 0;
+	}
+	.planner-video-slot-head button:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+	.planner-video-slot img,
+	.planner-video-slot-empty {
+		box-sizing: border-box;
+		width: 100%;
+		min-height: 52px;
+		border-radius: var(--spell-radius-sm);
+	}
+	.planner-video-slot img {
+		aspect-ratio: 16 / 9;
+		display: block;
+		object-fit: cover;
+		border: 1px solid rgba(0, 0, 0, 0.1);
+	}
+	.planner-video-slot-empty {
+		display: grid;
+		place-items: center;
+		border: 1px solid var(--spell-border-soft);
+		background: rgba(255, 255, 255, 0.5);
+		color: #94a3b8;
+		font-size: 10px;
+		font-weight: 650;
+		line-height: 1.25;
+		text-align: center;
+		padding: 7px 5px;
+		overflow-wrap: anywhere;
+	}
 	.planner-frame-gallery {
 		display: flex;
 		gap: 8px;
@@ -935,10 +1038,11 @@
 	}
 	.planner-frame-actions {
 		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: minmax(0, 1fr) auto auto;
+		align-items: center;
 		gap: 5px;
 	}
-	.planner-frame-actions button {
+	.planner-frame-add-button {
 		border: 1px solid var(--spell-border);
 		border-radius: var(--spell-radius-pill);
 		background: var(--spell-surface-soft);
@@ -949,21 +1053,11 @@
 		font-weight: 750;
 		cursor: pointer;
 	}
-	.planner-frame-actions button.active {
-		border-color: var(--spell-blue);
-		background: var(--spell-blue);
-		color: #fff;
-	}
 	.planner-frame-actions button:disabled {
 		cursor: not-allowed;
 		opacity: 0.55;
 	}
-	.planner-frame-utility-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 5px;
-	}
-	.planner-frame-utility-actions .planner-monaco-action-btn--icon-only {
+	.planner-frame-actions .planner-monaco-action-btn--icon-only {
 		width: 26px;
 		height: 26px;
 		min-height: 26px;
@@ -985,26 +1079,6 @@
 		width: 100%;
 		padding-inline: 8px;
 		white-space: nowrap;
-	}
-	.planner-video-frames {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 8px;
-	}
-	.planner-video-frame {
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-		font-size: 11px;
-		font-weight: 650;
-		color: #475569;
-	}
-	.planner-video-frame img {
-		width: 100%;
-		aspect-ratio: 16 / 9;
-		object-fit: cover;
-		border-radius: 8px;
-		border: 1px solid rgba(0, 0, 0, 0.1);
 	}
 	.planner-video-clips {
 		display: flex;
