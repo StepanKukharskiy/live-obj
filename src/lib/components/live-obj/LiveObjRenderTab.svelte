@@ -193,7 +193,7 @@
 		return videoPrompt.trim();
 	}
 
-	async function dataUrlToVideoFrameBlob(dataUrl: string): Promise<Blob> {
+	async function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
 		const image = new Image();
 		image.decoding = 'async';
 		const loaded = new Promise<void>((resolve, reject) => {
@@ -202,7 +202,35 @@
 		});
 		image.src = dataUrl;
 		await loaded;
+		return image;
+	}
 
+	function aspectRatioLabel(width: number, height: number, fallback: string): string {
+		const ratio = width / height;
+		const options = [
+			{ label: '1:1', ratio: 1 },
+			{ label: '4:3', ratio: 4 / 3 },
+			{ label: '16:9', ratio: 16 / 9 },
+			{ label: '9:16', ratio: 9 / 16 },
+			{ label: '4:5', ratio: 4 / 5 },
+			{ label: '3:2', ratio: 3 / 2 },
+			{ label: '2:3', ratio: 2 / 3 },
+			{ label: '21:9', ratio: 21 / 9 }
+		];
+		return options.reduce((best, option) =>
+			Math.abs(Math.log(option.ratio / ratio)) < Math.abs(Math.log(best.ratio / ratio))
+				? option
+				: best
+		).label ?? fallback;
+	}
+
+	async function aspectRatioFromFrame(dataUrl: string): Promise<string> {
+		const image = await loadImageFromDataUrl(dataUrl);
+		return aspectRatioLabel(image.naturalWidth, image.naturalHeight, videoAspectRatio);
+	}
+
+	async function dataUrlToVideoFrameBlob(dataUrl: string): Promise<Blob> {
+		const image = await loadImageFromDataUrl(dataUrl);
 		const maxSide = 1280;
 		const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
 		const width = Math.max(1, Math.round(image.naturalWidth * scale));
@@ -377,7 +405,7 @@
 				formData.set('apiKey', providerSettings.apiKey?.trim() || '');
 				formData.set('videoModel', providerSettings.videoModel ?? '');
 				formData.set('videoUrl', providerSettings.videoUrl?.trim() || '');
-				formData.set('aspectRatio', videoAspectRatio);
+				formData.set('aspectRatio', await aspectRatioFromFrame(startFrameDataUrl));
 				formData.set('startFrame', await dataUrlToVideoFrameBlob(startFrameDataUrl), 'start-frame.jpg');
 				if (endFrameDataUrl) {
 					formData.set('endFrame', await dataUrlToVideoFrameBlob(endFrameDataUrl), 'end-frame.jpg');

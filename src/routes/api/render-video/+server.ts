@@ -50,6 +50,7 @@ type OpenRouterVideoCapabilities = {
 	supportsFirstFrame: boolean;
 	supportsLastFrame: boolean;
 	supportedDurations?: number[];
+	supportedAspectRatios?: string[];
 	aspectRatio?: string;
 	resolution?: string;
 	size?: string;
@@ -271,6 +272,7 @@ function openRouterFallbackCapabilities(model: string, requestedAspectRatio: str
 		supportsFirstFrame: true,
 		supportsLastFrame,
 		supportedDurations,
+		supportedAspectRatios: undefined,
 		aspectRatio: requestedAspectRatio,
 		resolution: '720p'
 	};
@@ -295,8 +297,7 @@ function chooseOpenRouterAspectRatio(
 ): string | undefined {
 	if (!supportedAspectRatios?.length) return requestedAspectRatio;
 	if (supportedAspectRatios.includes(requestedAspectRatio)) return requestedAspectRatio;
-	if (supportedAspectRatios.includes('16:9')) return '16:9';
-	return supportedAspectRatios[0];
+	return undefined;
 }
 
 function chooseOpenRouterResolution(
@@ -333,6 +334,7 @@ async function openRouterVideoCapabilities(
 			supportsFirstFrame: !supportedFrames || supportedFrames.includes('first_frame'),
 			supportsLastFrame,
 			supportedDurations: match.supported_durations ?? undefined,
+			supportedAspectRatios: match.supported_aspect_ratios ?? undefined,
 			aspectRatio: chooseOpenRouterAspectRatio(match.supported_aspect_ratios, requestedAspectRatio),
 			resolution: chooseOpenRouterResolution(match.supported_resolutions),
 			size: match.supported_sizes?.[0]
@@ -448,6 +450,16 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		openRouterCapabilities?.supportsLastFrame ?? knownModelSupportsEndFrame(provider, videoModel);
 	if (provider === 'openrouter' && !openRouterCapabilities?.supportsFirstFrame) {
 		throw error(400, `${videoModel} does not support first-frame video input.`);
+	}
+	if (
+		provider === 'openrouter' &&
+		openRouterCapabilities?.supportedAspectRatios?.length &&
+		!openRouterCapabilities.supportedAspectRatios.includes(aspectRatio)
+	) {
+		throw error(
+			400,
+			`${videoModel} does not support ${aspectRatio} video. Supported aspect ratios: ${openRouterCapabilities.supportedAspectRatios.join(', ')}.`
+		);
 	}
 	const startFrameImage = body.startFrameImage ?? dataUrlToInlineImage(startFrameDataUrl);
 	const endFrameImage =
