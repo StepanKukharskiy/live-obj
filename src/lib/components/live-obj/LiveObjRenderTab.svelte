@@ -60,6 +60,9 @@
 		screenshotDataUrl = $bindable(''),
 		generatedImageDataUrl = $bindable(''),
 		frameAssets = $bindable<FrameAsset[]>([]),
+		videoShot = $bindable<VideoShot>({ clips: [] }),
+		videoBusy = $bindable(false),
+		generatedDirectionJson = $bindable(''),
 		busy = $bindable(false),
 		errorLine = $bindable<string | null>(null)
 	}: {
@@ -83,6 +86,9 @@
 		screenshotDataUrl?: string;
 		generatedImageDataUrl?: string;
 		frameAssets?: FrameAsset[];
+		videoShot?: VideoShot;
+		videoBusy?: boolean;
+		generatedDirectionJson?: string;
 		busy?: boolean;
 		errorLine?: string | null;
 	} = $props();
@@ -90,9 +96,6 @@
 	let fullscreenImageDataUrl = $state('');
 	let fullscreenDialog: HTMLDialogElement | null = $state(null);
 	let promptBusy = $state(false);
-	let generatedDirectionJson = $state('');
-	let videoBusy = $state(false);
-	let videoShot = $state<VideoShot>(createEmptyShot());
 
 	let videoProviderReady = $derived(
 		(providerSettings.provider === 'google' || providerSettings.provider === 'openrouter') &&
@@ -113,12 +116,6 @@
 	let selectedVideoSupportsEndFrame = $derived(
 		modelSupportsEndFrame(providerSettings.provider, providerSettings.videoModel ?? '')
 	);
-
-	function createEmptyShot(): VideoShot {
-		return {
-			clips: []
-		};
-	}
 
 	function modelSupportsEndFrame(provider: string, model: string): boolean {
 		const normalizedProvider = provider.trim().toLowerCase();
@@ -561,87 +558,59 @@
 </script>
 
 <div class="live-obj-render-tab">
-	<label class="planner-context-field planner-render-field">
-		<span class="planner-label-inline">Prompt</span>
-		<textarea
-			class="planner-text-input planner-render-prompt"
-			rows="4"
-			placeholder="Describe the final rendered image style and mood..."
-			bind:value={prompt}
-			disabled={busy || promptBusy}
-		></textarea>
-	</label>
-	<div class="planner-render-actions">
-		<button
-			type="button"
-			class="send-button planner-render-secondary-button"
-			onclick={generatePrompt}
-			disabled={busy || promptBusy || !liveObjText.trim()}
-		>
-			{promptBusy ? 'Directing…' : 'Generate prompt'}
-		</button>
-		<button
-			type="button"
-			class="send-button planner-render-secondary-button"
-			onclick={takeScreenshot}
-			disabled={busy || promptBusy}>Take screenshot</button
-		>
-		<button
-			type="button"
-			class="send-button"
-			onclick={generateImage}
-			disabled={busy || promptBusy || !prompt.trim()}
-		>
-			{busy ? 'Generating…' : 'Generate image'}
-		</button>
-	</div>
-
-	<section class="planner-video-sequence" aria-label="Video sequence">
-		<div class="planner-video-head">
+	<section class="planner-render-card" aria-label="Image frame">
+		<div class="planner-render-card-head">
 			<div>
-				<div class="planner-render-title">Video shot</div>
-				<div class="planner-video-note">
-					Start frame, optional end frame, {videoAspectRatio} clip.
-				</div>
-			</div>
-			<span class="planner-video-provider-pill">{videoProviderLabel}</span>
-		</div>
-
-		<div class="planner-video-timeline" aria-label="Video timeline">
-			<div class="planner-video-slot" class:filled={!!videoShot.start}>
-				<div class="planner-video-slot-head">
-					<span>Start</span>
-					{#if videoShot.start}
-						<button type="button" onclick={() => clearTimelineFrame('start')} disabled={videoBusy}
-							>Clear</button
-						>
-					{/if}
-				</div>
-				{#if videoShot.start}
-					<img src={videoShot.start.imageDataUrl} alt="Video start frame" />
-				{:else}
-					<div class="planner-video-slot-empty">Add first frame</div>
-				{/if}
-			</div>
-			<div class="planner-video-slot" class:filled={!!videoShot.end} class:disabled={!selectedVideoSupportsEndFrame}>
-				<div class="planner-video-slot-head">
-					<span>End</span>
-					{#if videoShot.end}
-						<button type="button" onclick={() => clearTimelineFrame('end')} disabled={videoBusy}
-							>Clear</button
-						>
-					{/if}
-				</div>
-				{#if videoShot.end}
-					<img src={videoShot.end.imageDataUrl} alt="Video end frame" />
-				{:else}
-					<div class="planner-video-slot-empty">
-						{selectedVideoSupportsEndFrame ? 'Add optional end frame' : 'Not used by model'}
-					</div>
-				{/if}
+				<div class="planner-render-title">Image frame</div>
+				<div class="planner-video-note">Capture the current scene or generate a polished frame.</div>
 			</div>
 		</div>
+		<label class="planner-context-field planner-render-field">
+			<span class="planner-label-inline">Image prompt</span>
+			<textarea
+				class="planner-text-input planner-render-prompt"
+				rows="3"
+				placeholder="Describe the final rendered image style and mood..."
+				bind:value={prompt}
+				disabled={busy || promptBusy}
+			></textarea>
+		</label>
+		<div class="planner-render-actions">
+			<button
+				type="button"
+				class="send-button planner-render-secondary-button"
+				onclick={generatePrompt}
+				disabled={busy || promptBusy || !liveObjText.trim()}
+			>
+				{promptBusy ? 'Directing…' : 'Generate prompt'}
+			</button>
+			<button
+				type="button"
+				class="send-button planner-render-secondary-button"
+				onclick={takeScreenshot}
+				disabled={busy || promptBusy || videoBusy}>Take screenshot</button
+			>
+			<button
+				type="button"
+				class="send-button"
+				onclick={generateImage}
+				disabled={busy || promptBusy || videoBusy || !prompt.trim()}
+			>
+				{busy ? 'Generating…' : 'Generate image'}
+			</button>
+		</div>
+	</section>
 
+	<section class="planner-render-card" aria-label="Gallery">
+		<div class="planner-render-card-head">
+			<div>
+				<div class="planner-render-title">Gallery</div>
+				<div class="planner-video-note">Frames available for the video timeline.</div>
+			</div>
+			<span class="planner-video-provider-pill">
+				{frameAssets.length ? `${frameAssets.length} frame${frameAssets.length === 1 ? '' : 's'}` : 'Empty'}
+			</span>
+		</div>
 		{#if frameAssets.length}
 			<div class="planner-frame-gallery" aria-label="Frame gallery">
 				{#each frameAssets as asset (asset.id)}
@@ -713,18 +682,69 @@
 				{/each}
 			</div>
 		{:else}
-			<div class="planner-video-note">
-				Take a screenshot or generate an image to add frames here.
-			</div>
+			<div class="planner-video-note">Take a screenshot or generate an image to add frames here.</div>
 		{/if}
+	</section>
+
+	<section class="planner-video-sequence" aria-label="Video sequence">
+		<div class="planner-video-head">
+			<div>
+				<div class="planner-render-title">Video shot</div>
+				<div class="planner-video-note">
+					Add gallery frames to the timeline, then generate a {videoAspectRatio} clip.
+				</div>
+			</div>
+			<span class="planner-video-provider-pill">{videoProviderLabel}</span>
+		</div>
+
+		<section class="planner-render-subsection" aria-label="Timeline">
+			<div class="planner-render-subhead">
+				<span>Timeline</span>
+				<span>Start + optional end</span>
+			</div>
+			<div class="planner-video-timeline" aria-label="Video timeline">
+				<div class="planner-video-slot" class:filled={!!videoShot.start}>
+					<div class="planner-video-slot-head">
+						<span>Start</span>
+						{#if videoShot.start}
+							<button type="button" onclick={() => clearTimelineFrame('start')} disabled={videoBusy}
+								>Clear</button
+							>
+						{/if}
+					</div>
+					{#if videoShot.start}
+						<img src={videoShot.start.imageDataUrl} alt="Video start frame" />
+					{:else}
+						<div class="planner-video-slot-empty">Add first frame</div>
+					{/if}
+				</div>
+				<div class="planner-video-slot" class:filled={!!videoShot.end} class:disabled={!selectedVideoSupportsEndFrame}>
+					<div class="planner-video-slot-head">
+						<span>End</span>
+						{#if videoShot.end}
+							<button type="button" onclick={() => clearTimelineFrame('end')} disabled={videoBusy}
+								>Clear</button
+							>
+						{/if}
+					</div>
+					{#if videoShot.end}
+						<img src={videoShot.end.imageDataUrl} alt="Video end frame" />
+					{:else}
+						<div class="planner-video-slot-empty">
+							{selectedVideoSupportsEndFrame ? 'Add optional end frame' : 'Not used by model'}
+						</div>
+					{/if}
+				</div>
+			</div>
+		</section>
 
 		<div class="planner-video-controls">
 			<label>
-				<span class="planner-label-inline">Video prompt</span>
+				<span class="planner-label-inline">Motion prompt</span>
 				<textarea
 					class="planner-text-input planner-render-prompt planner-video-prompt"
 					rows="3"
-					placeholder="Describe the camera move and motion for the clip..."
+					placeholder="Describe the motion or transformation for the clip..."
 					bind:value={videoPrompt}
 					disabled={videoBusy || promptBusy}
 				></textarea>
@@ -846,6 +866,21 @@
 		gap: 10px;
 		flex-wrap: wrap;
 	}
+	.planner-render-card {
+		display: flex;
+		flex-direction: column;
+		gap: 9px;
+		border: 1px solid var(--spell-border-soft);
+		border-radius: var(--spell-radius-md);
+		background: var(--spell-surface-faint);
+		padding: 12px;
+	}
+	.planner-render-card-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+	}
 	.planner-render-secondary-button {
 		border: 1px solid rgba(0, 0, 235, 0.48);
 		background: transparent;
@@ -926,6 +961,25 @@
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
 		gap: 8px;
+	}
+	.planner-render-subsection {
+		display: flex;
+		flex-direction: column;
+		gap: 7px;
+	}
+	.planner-render-subhead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		font-size: 11px;
+		font-weight: 750;
+		color: #475569;
+	}
+	.planner-render-subhead span:last-child {
+		font-size: 10px;
+		font-weight: 650;
+		color: #94a3b8;
 	}
 	.planner-video-timeline {
 		display: grid;

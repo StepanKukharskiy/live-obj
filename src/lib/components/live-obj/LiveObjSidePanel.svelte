@@ -60,6 +60,23 @@
 		camera: CameraSnapshot;
 		capturedAt: number;
 	};
+	type ShotFrame = {
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
+	type GeneratedClip = {
+		id: string;
+		status: string;
+		videoUrl?: string;
+		jobId?: string;
+		error?: string;
+	};
+	type VideoShot = {
+		start?: ShotFrame;
+		end?: ShotFrame;
+		clips: GeneratedClip[];
+	};
 
 	let {
 		showPanel = $bindable(true),
@@ -191,6 +208,9 @@
 	let renderScreenshotDataUrl = $state('');
 	let renderGeneratedImageDataUrl = $state('');
 	let renderFrameAssets = $state<FrameAsset[]>([]);
+	let renderVideoShot = $state<VideoShot>({ clips: [] });
+	let renderVideoBusy = $state(false);
+	let renderGeneratedDirectionJson = $state('');
 	let renderBusy = $state(false);
 	let renderErrorLine = $state<string | null>(null);
 </script>
@@ -311,7 +331,7 @@
 					{liveObjText}
 					{onOpenLiveObj}
 				/>
-			{:else}
+			{:else if activeTab === 'render'}
 				<LiveObjRenderTab
 					{liveObjText}
 					{providerSettings}
@@ -323,6 +343,9 @@
 					bind:screenshotDataUrl={renderScreenshotDataUrl}
 					bind:generatedImageDataUrl={renderGeneratedImageDataUrl}
 					bind:frameAssets={renderFrameAssets}
+					bind:videoShot={renderVideoShot}
+					bind:videoBusy={renderVideoBusy}
+					bind:generatedDirectionJson={renderGeneratedDirectionJson}
 					bind:busy={renderBusy}
 					bind:errorLine={renderErrorLine}
 				/>
