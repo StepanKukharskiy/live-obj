@@ -188,6 +188,13 @@
 		return videoPrompt.trim();
 	}
 
+	function dataUrlToBlob(dataUrl: string): Blob {
+		const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
+		if (!match) throw new Error('Invalid image data URL');
+		const bytes = Uint8Array.from(atob(match[2]), (char) => char.charCodeAt(0));
+		return new Blob([bytes], { type: match[1] });
+	}
+
 	function wait(ms: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
@@ -321,6 +328,8 @@
 
 		videoBusy = true;
 		const shot = videoShot;
+		const startFrameDataUrl = shot.start?.imageDataUrl ?? '';
+		const endFrameDataUrl = shot.end?.imageDataUrl ?? '';
 		let clips: GeneratedClip[] = [];
 		updateActiveVideoShot({ clips: [] });
 		for (let take = 1; take <= 1; take += 1) {
@@ -332,19 +341,20 @@
 			clips = [...clips, runningClip];
 			updateActiveVideoShot({ clips });
 			try {
+				const formData = new FormData();
+				formData.set('prompt', videoPrompt);
+				formData.set('liveObjText', liveObjText);
+				formData.set('provider', providerSettings.provider);
+				formData.set('apiKey', providerSettings.apiKey?.trim() || '');
+				formData.set('videoModel', providerSettings.videoModel ?? '');
+				formData.set('aspectRatio', videoAspectRatio);
+				formData.set('startFrame', dataUrlToBlob(startFrameDataUrl), 'start-frame.png');
+				if (endFrameDataUrl) {
+					formData.set('endFrame', dataUrlToBlob(endFrameDataUrl), 'end-frame.png');
+				}
 				const response = await fetch('/api/render-video', {
 					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						prompt: videoPrompt,
-						liveObjText,
-						provider: providerSettings.provider,
-						apiKey: providerSettings.apiKey?.trim() || undefined,
-						videoModel: providerSettings.videoModel,
-						startFrameDataUrl: shot.start?.imageDataUrl,
-						endFrameDataUrl: shot.end?.imageDataUrl,
-						aspectRatio: videoAspectRatio
-					})
+					body: formData
 				});
 				const payload = (await response.json().catch(() => ({}))) as {
 					message?: string;

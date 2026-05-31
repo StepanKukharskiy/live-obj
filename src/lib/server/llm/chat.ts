@@ -173,10 +173,15 @@ function isTogetherApiUrl(apiUrl: string): boolean {
 	return apiUrl.includes('api.together.xyz');
 }
 
+function sanitizeHeaderValue(value: string): string {
+	return value.replace(/[^\t\x20-\xff]/g, '').trim();
+}
+
 function buildCompletionRequestHeaders(apiUrl: string, apiKey: string): Record<string, string> {
+	const safeApiKey = sanitizeHeaderValue(apiKey);
 	return {
 		'Content-Type': 'application/json',
-		Authorization: `Bearer ${apiKey}`,
+		Authorization: `Bearer ${safeApiKey}`,
 		...(isOpenRouterApiUrl(apiUrl) ? { 'X-OpenRouter-Title': 'Spellshape' } : {})
 	};
 }

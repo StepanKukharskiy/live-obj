@@ -47,6 +47,11 @@ type RenderVideoBody = {
 	durationSeconds?: number;
 	aspectRatio?: string;
 };
+type InlineImage = { mimeType: string; data: string };
+type ParsedRenderVideoBody = RenderVideoBody & {
+	startFrameImage?: InlineImage;
+	endFrameImage?: InlineImage;
+};
 
 function metadataFromLiveObj(liveObjText: string): string {
 	return liveObjText
@@ -69,10 +74,46 @@ function normalizeOpenRouterUrl(url: string): string {
 	return new URL(url, 'https://openrouter.ai').toString();
 }
 
-function dataUrlToInlineImage(dataUrl: string): { mimeType: string; data: string } {
+function dataUrlToInlineImage(dataUrl: string): InlineImage {
 	const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
 	if (!match) throw error(400, 'Invalid image data URL');
 	return { mimeType: match[1], data: match[2] };
+}
+
+async function blobToInlineImage(value: FormDataEntryValue | null, label: string): Promise<InlineImage | undefined> {
+	if (!(value instanceof Blob) || value.size === 0) return undefined;
+	const mimeType = value.type || 'image/png';
+	if (!mimeType.startsWith('image/')) throw error(400, `${label} must be an image file`);
+	const arrayBuffer = await value.arrayBuffer();
+	return { mimeType, data: Buffer.from(arrayBuffer).toString('base64') };
+}
+
+function formString(form: FormData, key: string): string | undefined {
+	const value = form.get(key);
+	return typeof value === 'string' ? value : undefined;
+}
+
+async function parseRenderVideoRequest(request: Request): Promise<ParsedRenderVideoBody> {
+	const contentType = request.headers.get('content-type') ?? '';
+	if (contentType.includes('multipart/form-data')) {
+		const form = await request.formData();
+		return {
+			prompt: formString(form, 'prompt'),
+			liveObjText: formString(form, 'liveObjText'),
+			provider: formString(form, 'provider'),
+			apiKey: formString(form, 'apiKey'),
+			videoUrl: formString(form, 'videoUrl'),
+			videoModel: formString(form, 'videoModel'),
+			aspectRatio: formString(form, 'aspectRatio'),
+			startFrameImage: await blobToInlineImage(form.get('startFrame'), 'startFrame'),
+			endFrameImage: await blobToInlineImage(form.get('endFrame'), 'endFrame')
+		};
+	}
+	try {
+		return (await request.json()) as RenderVideoBody;
+	} catch {
+		throw error(400, 'Invalid JSON');
+	}
 }
 
 function googleImagePayload(image: { mimeType: string; data: string }) {
@@ -252,12 +293,7 @@ async function submitGoogleVideo(
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	let body: RenderVideoBody;
-	try {
-		body = (await request.json()) as RenderVideoBody;
-	} catch {
-		throw error(400, 'Invalid JSON');
-	}
+	const body = await parseRenderVideoRequest(request);
 
 	const provider = body.provider?.trim().toLowerCase() ?? '';
 	if (provider !== 'openrouter' && provider !== 'google') {
@@ -282,26 +318,31 @@ export const POST: RequestHandler = async ({ request }) => {
 		);
 	}
 	if (!prompt) throw error(400, 'prompt is required');
-	if (!startFrameDataUrl) throw error(400, 'startFrameDataUrl is required');
-	assertImageDataUrl(startFrameDataUrl, 'startFrameDataUrl');
+	if (!startFrameDataUrl && !body.startFrameImage) throw error(400, 'startFrame is required');
+	if (startFrameDataUrl) assertImageDataUrl(startFrameDataUrl, 'startFrameDataUrl');
 	if (requestedEndFrameDataUrl) assertImageDataUrl(requestedEndFrameDataUrl, 'endFrameDataUrl');
 	const supportsEndFrame =
 		provider === 'openrouter'
 			? await openRouterModelSupportsEndFrame(body.videoUrl, apiKey, videoModel)
 			: knownModelSupportsEndFrame(provider, videoModel);
-	const endFrameDataUrl = supportsEndFrame ? requestedEndFrameDataUrl : '';
+	const startFrameImage = body.startFrameImage ?? dataUrlToInlineImage(startFrameDataUrl);
+	const endFrameImage =
+		supportsEndFrame && (body.endFrameImage || requestedEndFrameDataUrl)
+			? (body.endFrameImage ?? dataUrlToInlineImage(requestedEndFrameDataUrl))
+			: undefined;
+	const endFrameDataUrl = endFrameImage ? requestedEndFrameDataUrl : '';
 
 	const sceneMetadata = metadataFromLiveObj(body.liveObjText ?? '');
 	const fullPrompt = `${prompt}
 
-Preserve the scene layout, object count, relative positions, silhouette, and camera intent from the supplied frame image${endFrameDataUrl ? 's' : ''}. Use hard continuity over invention.
+Preserve the scene layout, object count, relative positions, silhouette, and camera intent from the supplied frame image${endFrameImage ? 's' : ''}. Use hard continuity over invention.
 
 Live OBJ metadata:
 ${sceneMetadata || '(no #@ metadata found)'}`;
 
 	if (provider === 'google') {
-		const firstImage = dataUrlToInlineImage(startFrameDataUrl);
-		const lastImage = endFrameDataUrl ? dataUrlToInlineImage(endFrameDataUrl) : undefined;
+		const firstImage = startFrameImage;
+		const lastImage = endFrameImage;
 		const googleDuration = lastImage ? 8 : 4;
 		const submitUrl = googleSubmitUrl(undefined, videoModel);
 		const buildPayload = () => ({

@@ -66,6 +66,11 @@ function truncateForPrompt(value: string): string {
 	return `${value.slice(0, MAX_METADATA_CHARS)}\n...[truncated]`;
 }
 
+function cleanProviderField(value: string | undefined): string | undefined {
+	const cleaned = value?.replace(/[^\t\x20-\xff]/g, '').trim();
+	return cleaned || undefined;
+}
+
 function normalizeDirection(direction: VisualDirection): VisualDirection {
 	const refs = direction.primary_direction?.supporting_references;
 	if (Array.isArray(refs) && refs.length > 3) {
@@ -212,9 +217,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	const liveObjText = stripCodeFences(body.liveObjText ?? '');
 	if (!liveObjText.trim()) throw error(400, 'liveObjText is required');
 
-	const model = body.model?.trim() || DEFAULT_MODEL;
-	const reqApiKey = body.apiKey?.trim() || undefined;
-	const reqApiUrl = body.apiUrl?.trim() || undefined;
+	const model = cleanProviderField(body.model) || DEFAULT_MODEL;
+	const reqApiKey = cleanProviderField(body.apiKey);
+	const reqApiUrl = cleanProviderField(body.apiUrl);
 	const sceneMetadata = truncateForPrompt(
 		metadataFromLiveObj(liveObjText) || '(no #@ metadata found)'
 	);
