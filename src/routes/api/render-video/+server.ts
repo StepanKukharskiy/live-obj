@@ -51,6 +51,7 @@ type OpenRouterVideoCapabilities = {
 	supportsLastFrame: boolean;
 	supportedDurations?: number[];
 	supportedAspectRatios?: string[];
+	supportedSizes?: string[];
 	aspectRatio?: string;
 	resolution?: string;
 	size?: string;
@@ -273,6 +274,7 @@ function openRouterFallbackCapabilities(model: string, requestedAspectRatio: str
 		supportsLastFrame,
 		supportedDurations,
 		supportedAspectRatios: undefined,
+		supportedSizes: undefined,
 		aspectRatio: requestedAspectRatio,
 		resolution: '720p'
 	};
@@ -308,6 +310,34 @@ function chooseOpenRouterResolution(
 	return supportedResolutions[0];
 }
 
+function ratioFromAspectRatio(aspectRatio: string): number | null {
+	const [width, height] = aspectRatio.split(':').map((part) => Number(part));
+	if (!Number.isFinite(width) || !Number.isFinite(height) || height <= 0) return null;
+	return width / height;
+}
+
+function ratioFromSize(size: string): number | null {
+	const match = size.match(/(\d+)\s*x\s*(\d+)/i);
+	if (!match) return null;
+	const width = Number(match[1]);
+	const height = Number(match[2]);
+	if (!Number.isFinite(width) || !Number.isFinite(height) || height <= 0) return null;
+	return width / height;
+}
+
+function chooseOpenRouterSize(
+	supportedSizes: string[] | null | undefined,
+	requestedAspectRatio: string
+): string | undefined {
+	if (!supportedSizes?.length) return undefined;
+	const targetRatio = ratioFromAspectRatio(requestedAspectRatio);
+	if (!targetRatio) return undefined;
+	return supportedSizes.find((size) => {
+		const sizeRatio = ratioFromSize(size);
+		return sizeRatio ? Math.abs(Math.log(sizeRatio / targetRatio)) < 0.04 : false;
+	});
+}
+
 async function openRouterVideoCapabilities(
 	videoUrl: string | undefined,
 	apiKey: string,
@@ -335,9 +365,10 @@ async function openRouterVideoCapabilities(
 			supportsLastFrame,
 			supportedDurations: match.supported_durations ?? undefined,
 			supportedAspectRatios: match.supported_aspect_ratios ?? undefined,
+			supportedSizes: match.supported_sizes ?? undefined,
 			aspectRatio: chooseOpenRouterAspectRatio(match.supported_aspect_ratios, requestedAspectRatio),
 			resolution: chooseOpenRouterResolution(match.supported_resolutions),
-			size: match.supported_sizes?.[0]
+			size: chooseOpenRouterSize(match.supported_sizes, requestedAspectRatio)
 		};
 	} catch {
 		return openRouterFallbackCapabilities(model, requestedAspectRatio);
@@ -459,6 +490,17 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		throw error(
 			400,
 			`${videoModel} does not support ${aspectRatio} video. Supported aspect ratios: ${openRouterCapabilities.supportedAspectRatios.join(', ')}.`
+		);
+	}
+	if (
+		provider === 'openrouter' &&
+		openRouterCapabilities?.supportedSizes?.length &&
+		!openRouterCapabilities.supportedAspectRatios?.length &&
+		!openRouterCapabilities.size
+	) {
+		throw error(
+			400,
+			`${videoModel} does not support ${aspectRatio} video. Supported sizes: ${openRouterCapabilities.supportedSizes.join(', ')}.`
 		);
 	}
 	const startFrameImage = body.startFrameImage ?? dataUrlToInlineImage(startFrameDataUrl);
