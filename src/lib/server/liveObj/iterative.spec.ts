@@ -150,6 +150,26 @@ describe('iterative Live OBJ helpers', () => {
 		expect(parsed.parts[0].id).toBe('deck');
 	});
 
+	it('parses JSON embedded in extra model text', () => {
+		const parsed = parseJsonObject<{ parts: Array<{ id: string }> }>(
+			'Here is the plan:\n{"parts":[{"id":"tower_core"}]}\nDone.'
+		);
+
+		expect(parsed.parts[0].id).toBe('tower_core');
+	});
+
+	it('explains likely truncated JSON responses', () => {
+		expect(() =>
+			parseJsonObject('{"parts":[{"id":"fluid_tower_shell","prompt":"build a flowing')
+		).toThrow(/incomplete JSON.*output\/completion token cap/i);
+	});
+
+	it('explains non-JSON model responses', () => {
+		expect(() => parseJsonObject('I cannot create that plan.')).toThrow(
+			/Model did not return a JSON object/
+		);
+	});
+
 	it('allows visible raw OBJ objects without controls', () => {
 		const source = [
 			'o body',

@@ -60,17 +60,121 @@ type ObjectSummary = {
 
 const DEFAULT_HEADER = ['#@scene', '#@units: meters', '#@up: y', '#@live_obj_version: 0.1'];
 
+function extractBalancedJsonSlice(content: string): string | null {
+	const start = [...content].findIndex((char) => char === '{' || char === '[');
+	if (start < 0) return null;
+	const stack: string[] = [];
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < content.length; index += 1) {
+		const char = content[index];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (char === '\\') {
+				escaped = true;
+				continue;
+			}
+			if (char === '"') inString = false;
+			continue;
+		}
+		if (char === '"') {
+			inString = true;
+			continue;
+		}
+		if (char === '{') stack.push('}');
+		else if (char === '[') stack.push(']');
+		else if (char === '}' || char === ']') {
+			if (stack.at(-1) !== char) break;
+			stack.pop();
+			if (stack.length === 0) return content.slice(start, index + 1);
+		}
+	}
+	return null;
+}
+
+function analyzeJsonTail(content: string): {
+	hasStart: boolean;
+	inString: boolean;
+	stack: string[];
+} {
+	const start = [...content].findIndex((char) => char === '{' || char === '[');
+	if (start < 0) return { hasStart: false, inString: false, stack: [] };
+	const stack: string[] = [];
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < content.length; index += 1) {
+		const char = content[index];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (char === '\\') {
+				escaped = true;
+				continue;
+			}
+			if (char === '"') inString = false;
+			continue;
+		}
+		if (char === '"') {
+			inString = true;
+			continue;
+		}
+		if (char === '{') stack.push('}');
+		else if (char === '[') stack.push(']');
+		else if (char === '}' || char === ']') {
+			if (stack.at(-1) !== char) break;
+			stack.pop();
+		}
+	}
+	return { hasStart: true, inString, stack };
+}
+
+function jsonPreview(text: string, fromEnd = false): string {
+	const compact = text.replace(/\s+/g, ' ').trim();
+	const preview = fromEnd ? compact.slice(-180) : compact.slice(0, 180);
+	return preview || '(empty)';
+}
+
+function jsonParseMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function describeJsonParseFailure(content: string, error: unknown): string {
+	const analysis = analyzeJsonTail(content);
+	if (!analysis.hasStart) {
+		return `Model did not return a JSON object (response length ${content.length} chars; preview: ${JSON.stringify(jsonPreview(content))})`;
+	}
+	if (analysis.inString || analysis.stack.length > 0) {
+		const unclosed = [
+			analysis.inString ? 'string' : '',
+			...analysis.stack
+				.slice()
+				.reverse()
+				.map((closer) => (closer === '}' ? 'object' : 'array'))
+		].filter(Boolean);
+		return `Model returned incomplete JSON; likely cut off before the closing ${analysis.stack.at(-1) ?? 'quote'} (response length ${content.length} chars; unclosed ${unclosed.join(', ')}; tail: ${JSON.stringify(jsonPreview(content, true))}). This usually means the plan response hit its output/completion token cap or the provider stream ended early.`;
+	}
+	return `Model returned invalid JSON: ${jsonParseMessage(error)} (response length ${content.length} chars; tail: ${JSON.stringify(jsonPreview(content, true))})`;
+}
+
 export function parseJsonObject<T = unknown>(raw: string): T {
 	const clean = stripCodeFences(raw).trim();
 	try {
 		return JSON.parse(clean) as T;
-	} catch {
-		const start = clean.indexOf('{');
-		const end = clean.lastIndexOf('}');
-		if (start >= 0 && end > start) {
-			return JSON.parse(clean.slice(start, end + 1)) as T;
+	} catch (error) {
+		const extracted = extractBalancedJsonSlice(clean);
+		if (extracted) {
+			try {
+				return JSON.parse(extracted) as T;
+			} catch {
+				// Fall through to a diagnostic based on the original response.
+			}
 		}
-		throw new Error('Model did not return a JSON object');
+		throw new Error(describeJsonParseFailure(clean, error));
 	}
 }
 
