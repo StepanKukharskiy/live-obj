@@ -17,6 +17,15 @@ class RawObjPostExecutorTest(unittest.TestCase):
             path.write_text(source, encoding="utf-8")
             return parse_obj(path)
 
+    def boundary_edge_count(self, faces):
+        edges = {}
+        for face in faces:
+            for i, a in enumerate(face):
+                b = face[(i + 1) % len(face)]
+                key = tuple(sorted((a, b)))
+                edges[key] = edges.get(key, 0) + 1
+        return sum(1 for count in edges.values() if count == 1)
+
     def test_transform_post_op_can_reference_params(self):
         source = """#@live_obj_version: 0.1
 #@up: y
@@ -103,6 +112,187 @@ f 1 2 3
         self.assertEqual(mesh.vertices[0], (0.0, 2.0, 0.0))
         self.assertEqual(mesh.vertices[1], (1.0, 2.0, 0.0))
         self.assertEqual(mesh.vertices[2], (0.0, 3.0, 0.0))
+
+    def test_skin_edges_replaces_base_mesh_with_closed_surface(self):
+        source = """#@live_obj_version: 0.1
+#@up: y
+o cube_cage
+#@source: llm_mesh
+#@params: exo_radius=0.12, exo_resolution=18
+#@post:
+#@ - skin_edges radius=exo_radius resolution=exo_resolution edges=feature angle=20 mode=replace
+v -0.5 -0.5 -0.5
+v 0.5 -0.5 -0.5
+v 0.5 0.5 -0.5
+v -0.5 0.5 -0.5
+v -0.5 -0.5 0.5
+v 0.5 -0.5 0.5
+v 0.5 0.5 0.5
+v -0.5 0.5 0.5
+f 1 2 3 4
+f 5 8 7 6
+f 1 5 6 2
+f 2 6 7 3
+f 3 7 8 4
+f 4 8 5 1
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertGreater(len(mesh.vertices), 8)
+        self.assertGreater(len(mesh.faces), 6)
+        self.assertEqual(self.boundary_edge_count(mesh.faces), 0)
+
+    def test_skin_edges_append_keeps_base_mesh(self):
+        source = """#@live_obj_version: 0.1
+#@up: y
+o pyramid_cage
+#@source: llm_mesh
+#@post:
+#@ - skin_edges radius=0.1 resolution=14 edges=all mode=append
+v 0 1 0
+v -0.5 0 -0.5
+v 0.5 0 -0.5
+v 0.5 0 0.5
+v -0.5 0 0.5
+f 1 2 3
+f 1 3 4
+f 1 4 5
+f 1 5 2
+f 2 5 4 3
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertGreater(len(mesh.vertices), 5)
+        self.assertGreater(len(mesh.faces), 5)
+        self.assertEqual(mesh.vertices[:5], [
+            (0.0, 1.0, 0.0),
+            (-0.5, 0.0, -0.5),
+            (0.5, 0.0, -0.5),
+            (0.5, 0.0, 0.5),
+            (-0.5, 0.0, 0.5),
+        ])
+
+    def test_face_lattice_replaces_single_face_with_closed_frame(self):
+        source = """#@live_obj_version: 0.1
+#@up: z
+o panel
+#@source: llm_mesh
+#@params: frame_inset=0.35, frame_thickness=0.2
+#@post:
+#@ - face_lattice inset=frame_inset thickness=frame_thickness weld=0.001 mode=replace
+v -1 -1 0
+v 1 -1 0
+v 1 1 0
+v -1 1 0
+f 1 2 3 4
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+        zs = [v[2] for v in mesh.vertices]
+
+        self.assertGreater(len(mesh.vertices), 4)
+        self.assertGreater(len(mesh.faces), 1)
+        self.assertAlmostEqual(min(zs), -0.1)
+        self.assertAlmostEqual(max(zs), 0.1)
+        self.assertEqual(self.boundary_edge_count(mesh.faces), 0)
+
+    def test_face_lattice_append_keeps_guide_mesh(self):
+        source = """#@live_obj_version: 0.1
+#@up: z
+o panel
+#@source: llm_mesh
+#@post:
+#@ - face_lattice inset=0.3 thickness=0.1 mode=append
+v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+f 1 2 3 4
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertGreater(len(mesh.vertices), 4)
+        self.assertGreater(len(mesh.faces), 1)
+        self.assertEqual(mesh.vertices[:4], [
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+        ])
+
+    def test_face_lattice_welds_source_before_offsetting_shared_vertices(self):
+        source = """#@live_obj_version: 0.1
+#@up: z
+o bent_panel
+#@source: llm_mesh
+#@post:
+#@ - face_lattice inset=0.3 thickness=0.1 weld=0.001 mode=replace
+v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+v 1 0 0
+v 1 0 1
+v 1 1 1
+v 1 1 0
+f 1 2 3 4
+f 5 6 7 8
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertEqual(len(mesh.vertices), 28)
+        self.assertEqual(len(mesh.faces), 32)
+        self.assertEqual(self.boundary_edge_count(mesh.faces), 0)
+
+    def test_face_lattice_can_catmull_clark_subdivide(self):
+        source = """#@live_obj_version: 0.1
+#@up: z
+o panel
+#@source: llm_mesh
+#@post:
+#@ - face_lattice inset=0.35 thickness=0.2 weld=0.001 subdivide=1 mode=replace
+v -1 -1 0
+v 1 -1 0
+v 1 1 0
+v -1 1 0
+f 1 2 3 4
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertGreater(len(mesh.vertices), 16)
+        self.assertGreater(len(mesh.faces), 16)
+        self.assertEqual(self.boundary_edge_count(mesh.faces), 0)
+
+    def test_face_lattice_can_prefair_guide_before_lattice(self):
+        source = """#@live_obj_version: 0.1
+#@up: z
+o uneven_panel
+#@source: llm_mesh
+#@post:
+#@ - face_lattice inset=0.25 thickness=0.08 weld=0.001 guide_subdivide=1 guide_smooth=1 mode=replace
+v 0 0 0
+v 3 0 0
+v 3 0.4 0
+v 0 0.4 0
+f 1 2 3 4
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertGreater(len(mesh.faces), 16)
+        self.assertEqual(self.boundary_edge_count(mesh.faces), 0)
 
 
 if __name__ == "__main__":
