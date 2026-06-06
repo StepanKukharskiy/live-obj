@@ -20,6 +20,18 @@ function resolveRawPostExecutorScript(): string {
 	return path.join(process.cwd(), 'src/routes/api/executor/raw_obj_post_executor.py');
 }
 
+function resolveDreamRebuildExecutorScript(): string {
+	const env = process.env.DREAM_REBUILD_EXECUTOR_PATH;
+	if (env) return env;
+	return path.join(process.cwd(), 'src/routes/api/executor/dream_rebuild_reconstruct.py');
+}
+
+function resolveUvDreamEnhanceScript(): string {
+	const env = process.env.UV_DREAM_ENHANCE_SCRIPT;
+	if (env) return env;
+	return path.join(process.cwd(), 'scripts/uv_dream_enhance.py');
+}
+
 /** Interpreters to try, in order. GUI-launched Node often has no PATH entry for python3 — use absolute fallbacks. */
 function pythonInterpreterCandidates(): string[] {
 	const fromEnv = process.env.LIVE_OBJ_PYTHON?.trim();
@@ -71,12 +83,15 @@ async function runPythonOnFile(
 	inputPath: string,
 	outputPath: string
 ): Promise<string> {
-	const args = [script, inputPath, '-o', outputPath];
+	return runPythonArgs(script, [inputPath, '-o', outputPath]);
+}
+
+async function runPythonArgs(script: string, args: string[]): Promise<string> {
 	const tried = pythonInterpreterCandidates();
 	let lastEnoent: unknown;
 	for (const cmd of tried) {
 		try {
-			const { stderr } = await execFileAsync(cmd, args, {
+			const { stderr } = await execFileAsync(cmd, [script, ...args], {
 				timeout: 120_000,
 				maxBuffer: 32 * 1024 * 1024
 			});
@@ -146,6 +161,141 @@ export async function expandRawObjWithPostExecutor(rawObjText: string): Promise<
 		const stderr = await runPythonOnFile(script, inputPath, outputPath);
 		const executedObj = await readFile(outputPath, 'utf-8');
 		return { executedObj, warnings: parseExecutorWarnings(stderr) };
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+export type DreamRebuildExecutorInput = {
+	liveObj: string;
+	targetObjectId: string;
+	resolution?: number;
+	profile?: string;
+	mode?: string;
+	viewMasks: Record<string, { width: number; height: number; rows: string[] }>;
+	viewDepthMaps?: Record<string, { width: number; height: number; rows: string[] }>;
+};
+
+export async function reconstructDreamRebuildWithExecutor(
+	input: DreamRebuildExecutorInput
+): Promise<ExecutorResult> {
+	const script = resolveDreamRebuildExecutorScript();
+	const dir = await mkdtemp(path.join(tmpdir(), 'dream-rebuild-'));
+	const inputPath = path.join(dir, 'dream.json');
+	const outputPath = path.join(dir, 'scene.dream.obj');
+	try {
+		await writeFile(inputPath, JSON.stringify(input), 'utf-8');
+		const stderr = await runPythonOnFile(script, inputPath, outputPath);
+		const executedObj = await readFile(outputPath, 'utf-8');
+		return { executedObj, warnings: parseExecutorWarnings(stderr) };
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+export type UvDreamUnwrapResult = {
+	sourceUvPng: Uint8Array;
+	warnings: string[];
+};
+
+export async function unwrapUvDreamSource(input: {
+	liveObj: string;
+	targetObjectId: string;
+}): Promise<UvDreamUnwrapResult> {
+	const script = resolveUvDreamEnhanceScript();
+	const dir = await mkdtemp(path.join(tmpdir(), 'uv-dream-unwrap-'));
+	const inputPath = path.join(dir, 'scene.obj');
+	const sourceUvPath = path.join(dir, 'source-uv.png');
+	try {
+		await writeFile(inputPath, input.liveObj, 'utf-8');
+		const stderr = await runPythonArgs(script, [
+			inputPath,
+			'--target',
+			input.targetObjectId,
+			'--debug-source-uv-out',
+			sourceUvPath
+		]);
+		return {
+			sourceUvPng: new Uint8Array(await readFile(sourceUvPath)),
+			warnings: parseExecutorWarnings(stderr)
+		};
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+export type UvDreamEnhanceResult = ExecutorResult & {
+	artifacts: {
+		sourceUvPng: Uint8Array;
+		finalUvPng: Uint8Array;
+		heightPng: Uint8Array;
+		diffusePng: Uint8Array;
+		manifestJson: string;
+	};
+};
+
+export async function enhanceUvDreamWithExecutor(input: {
+	liveObj: string;
+	targetObjectId: string;
+	heightBmp: Uint8Array;
+	diffuseBmp?: Uint8Array;
+	amount?: number;
+	shade?: 'smooth' | 'flat';
+	mode?: 'displace' | 'map-remesh';
+}): Promise<UvDreamEnhanceResult> {
+	const script = resolveUvDreamEnhanceScript();
+	const dir = await mkdtemp(path.join(tmpdir(), 'uv-dream-enhance-'));
+	const inputPath = path.join(dir, 'scene.obj');
+	const heightPath = path.join(dir, 'height.bmp');
+	const inputDiffusePath = path.join(dir, 'generated-diffuse.bmp');
+	const outputPath = path.join(dir, 'scene.uv-dream.obj');
+	const sourceUvPath = path.join(dir, 'source-uv.png');
+	const finalUvPath = path.join(dir, 'final-uv.png');
+	const processedHeightPath = path.join(dir, 'height-tile.png');
+	const diffusePath = path.join(dir, 'diffuse.png');
+	const manifestPath = path.join(dir, 'manifest.json');
+	try {
+		await writeFile(inputPath, input.liveObj, 'utf-8');
+		await writeFile(heightPath, input.heightBmp);
+		if (input.diffuseBmp) await writeFile(inputDiffusePath, input.diffuseBmp);
+		const args = [
+			inputPath,
+			'--target',
+			input.targetObjectId,
+			'--height-bmp',
+			heightPath,
+			'--out',
+			outputPath,
+			'--debug-source-uv-out',
+			sourceUvPath,
+			'--debug-final-uv-out',
+			finalUvPath,
+			'--processed-height-out',
+			processedHeightPath,
+			'--diffuse-out',
+			diffusePath,
+			'--manifest-out',
+			manifestPath,
+			'--mode',
+			input.mode ?? 'displace',
+			'--amount',
+			String(input.amount ?? 1),
+			'--shade',
+			input.shade ?? 'smooth'
+		];
+		if (input.diffuseBmp) args.push('--input-diffuse-bmp', inputDiffusePath);
+		const stderr = await runPythonArgs(script, args);
+		return {
+			executedObj: await readFile(outputPath, 'utf-8'),
+			warnings: parseExecutorWarnings(stderr),
+			artifacts: {
+				sourceUvPng: new Uint8Array(await readFile(sourceUvPath)),
+				finalUvPng: new Uint8Array(await readFile(finalUvPath)),
+				heightPng: new Uint8Array(await readFile(processedHeightPath)),
+				diffusePng: new Uint8Array(await readFile(diffusePath)),
+				manifestJson: await readFile(manifestPath, 'utf-8')
+			}
+		};
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

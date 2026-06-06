@@ -17,6 +17,7 @@ export function stripLiveObjMeshLines(text: string): string {
 		}
 		lastBlankRun = false;
 		if (t.startsWith('#')) {
+			if (/^#@dream_(?:base|delta)_v\b/i.test(t)) continue;
 			kept.push(line);
 			continue;
 		}

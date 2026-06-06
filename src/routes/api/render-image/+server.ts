@@ -4,13 +4,17 @@ import type { RequestHandler } from './$types';
 const DEFAULT_OPENAI_IMAGES_API_URL = 'https://api.openai.com/v1/images/edits';
 const OPENAI_IMAGE_MODEL = 'gpt-image-1.5';
 const OPENAI_IMAGES_TIMEOUT_MS = 90_000;
+const MAX_SCENE_METADATA_CHARS = 12_000;
 
 function metadataFromLiveObj(liveObjText: string): string {
-	return liveObjText
+	const metadata = liveObjText
 		.split(/\r?\n/)
 		.map((line) => line.trim())
 		.filter((line) => line.startsWith('#@'))
+		.filter((line) => !/^#@dream_(?:base|delta)_v\b/i.test(line))
 		.join('\n');
+	if (metadata.length <= MAX_SCENE_METADATA_CHARS) return metadata;
+	return `${metadata.slice(0, MAX_SCENE_METADATA_CHARS)}\n#@note: scene metadata truncated for image prompt`;
 }
 
 function dataUrlToBlob(dataUrl: string): Blob {
