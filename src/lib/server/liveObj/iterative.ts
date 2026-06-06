@@ -6,10 +6,20 @@ export type IterativePartSpec = {
 	prompt?: string;
 	dependencies?: string[];
 	method?: string;
+	postProcess?: IterativePartPostProcess;
 	priority?: number;
 	validationHints?: string[];
+	cameraFocus?: string[];
 	controls?: IterativeControlSpec[];
 	controlPostOps?: string[];
+};
+
+export type IterativePartPostProcess = {
+	type?: string;
+	targetObjectId?: string;
+	prompt?: string;
+	mode?: string;
+	amount?: number;
 };
 
 export type IterativeControlSpec = {
@@ -27,6 +37,16 @@ export type IterativeScenePlan = {
 	scene?: string;
 	units?: string;
 	up?: 'x' | 'y' | 'z' | string;
+	visual?: {
+		backgroundColor?: string;
+		ambientLightIntensity?: number;
+		directionalLightIntensity?: number;
+		cameraFov?: number;
+		toneMappingExposure?: number;
+		canvasAspectRatio?: string;
+		cameraView?: string;
+		cameraFocus?: string[];
+	};
 	materials?: Array<{
 		id: string;
 		color?: string;
@@ -60,17 +80,121 @@ type ObjectSummary = {
 
 const DEFAULT_HEADER = ['#@scene', '#@units: meters', '#@up: y', '#@live_obj_version: 0.1'];
 
+function extractBalancedJsonSlice(content: string): string | null {
+	const start = [...content].findIndex((char) => char === '{' || char === '[');
+	if (start < 0) return null;
+	const stack: string[] = [];
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < content.length; index += 1) {
+		const char = content[index];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (char === '\\') {
+				escaped = true;
+				continue;
+			}
+			if (char === '"') inString = false;
+			continue;
+		}
+		if (char === '"') {
+			inString = true;
+			continue;
+		}
+		if (char === '{') stack.push('}');
+		else if (char === '[') stack.push(']');
+		else if (char === '}' || char === ']') {
+			if (stack.at(-1) !== char) break;
+			stack.pop();
+			if (stack.length === 0) return content.slice(start, index + 1);
+		}
+	}
+	return null;
+}
+
+function analyzeJsonTail(content: string): {
+	hasStart: boolean;
+	inString: boolean;
+	stack: string[];
+} {
+	const start = [...content].findIndex((char) => char === '{' || char === '[');
+	if (start < 0) return { hasStart: false, inString: false, stack: [] };
+	const stack: string[] = [];
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < content.length; index += 1) {
+		const char = content[index];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (char === '\\') {
+				escaped = true;
+				continue;
+			}
+			if (char === '"') inString = false;
+			continue;
+		}
+		if (char === '"') {
+			inString = true;
+			continue;
+		}
+		if (char === '{') stack.push('}');
+		else if (char === '[') stack.push(']');
+		else if (char === '}' || char === ']') {
+			if (stack.at(-1) !== char) break;
+			stack.pop();
+		}
+	}
+	return { hasStart: true, inString, stack };
+}
+
+function jsonPreview(text: string, fromEnd = false): string {
+	const compact = text.replace(/\s+/g, ' ').trim();
+	const preview = fromEnd ? compact.slice(-180) : compact.slice(0, 180);
+	return preview || '(empty)';
+}
+
+function jsonParseMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function describeJsonParseFailure(content: string, error: unknown): string {
+	const analysis = analyzeJsonTail(content);
+	if (!analysis.hasStart) {
+		return `Model did not return a JSON object (response length ${content.length} chars; preview: ${JSON.stringify(jsonPreview(content))})`;
+	}
+	if (analysis.inString || analysis.stack.length > 0) {
+		const unclosed = [
+			analysis.inString ? 'string' : '',
+			...analysis.stack
+				.slice()
+				.reverse()
+				.map((closer) => (closer === '}' ? 'object' : 'array'))
+		].filter(Boolean);
+		return `Model returned incomplete JSON; likely cut off before the closing ${analysis.stack.at(-1) ?? 'quote'} (response length ${content.length} chars; unclosed ${unclosed.join(', ')}; tail: ${JSON.stringify(jsonPreview(content, true))}). This usually means the plan response hit its output/completion token cap or the provider stream ended early.`;
+	}
+	return `Model returned invalid JSON: ${jsonParseMessage(error)} (response length ${content.length} chars; tail: ${JSON.stringify(jsonPreview(content, true))})`;
+}
+
 export function parseJsonObject<T = unknown>(raw: string): T {
 	const clean = stripCodeFences(raw).trim();
 	try {
 		return JSON.parse(clean) as T;
-	} catch {
-		const start = clean.indexOf('{');
-		const end = clean.lastIndexOf('}');
-		if (start >= 0 && end > start) {
-			return JSON.parse(clean.slice(start, end + 1)) as T;
+	} catch (error) {
+		const extracted = extractBalancedJsonSlice(clean);
+		if (extracted) {
+			try {
+				return JSON.parse(extracted) as T;
+			} catch {
+				// Fall through to a diagnostic based on the original response.
+			}
 		}
-		throw new Error('Model did not return a JSON object');
+		throw new Error(describeJsonParseFailure(clean, error));
 	}
 }
 
@@ -184,6 +308,43 @@ function objectGeometryCoverage(sourceText: string): Array<{
 	return out;
 }
 
+function objectAllowsOpenBoundary(block: string): boolean {
+	return /\b(open|opening|hollow|rim|window|door|doorway|shade|diffuser|frame|lattice|truss|tube|pipe|cord|wire|curve|ring|loop|vessel|bowl|cup|shell|membrane|panel|canopy|roof|fabric|cloth)\b/i.test(
+		block
+	);
+}
+
+function objectBoundaryWarnings(sourceText: string): string[] {
+	const warnings: string[] = [];
+	const blocks = sourceText.split(/(?=^\s*o\s+)/gm).filter((block) => /^\s*o\s+/.test(block));
+	for (const block of blocks) {
+		if (objectAllowsOpenBoundary(block)) continue;
+		const name = block.match(/^\s*o\s+([^\s#]+)/m)?.[1] ?? 'unnamed';
+		const edgeCounts = new Map<string, number>();
+		let faceCount = 0;
+		for (const line of block.split('\n')) {
+			if (!/^\s*f\s+/.test(line)) continue;
+			const refs = elementVertexRefs(line);
+			if (refs.length < 3) continue;
+			faceCount += 1;
+			for (let i = 0; i < refs.length; i += 1) {
+				const a = refs[i];
+				const b = refs[(i + 1) % refs.length];
+				const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+				edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+			}
+		}
+		if (faceCount < 6) continue;
+		const boundaryEdges = [...edgeCounts.values()].filter((count) => count === 1).length;
+		if (boundaryEdges >= Math.max(8, Math.round(faceCount * 0.35))) {
+			warnings.push(
+				`Object '${name}' has ${boundaryEdges} open boundary edges; check for accidental missing faces unless this part is intentionally open.`
+			);
+		}
+	}
+	return warnings;
+}
+
 function bboxFromText(sourceText: string): LiveObjValidationResult['bbox'] {
 	const vertices = sourceText
 		.split('\n')
@@ -233,6 +394,18 @@ function normalizeMaterialPostLine(rawLine: string): string[] | undefined {
 		return [`${blockMaterial[1]}#@ - material name=${materialName}`];
 	}
 
+	const objectMaterial = rawLine.match(/^(\s*)#@material\b:?\s*(.*)$/i);
+	if (objectMaterial) {
+		const rawBody = objectMaterial[2]?.trim() ?? '';
+		const materialName =
+			firstPostAttributeValue(rawBody, ['name', 'id']) ?? rawBody.split(/\s+/)[0]?.trim();
+		if (!materialName) return undefined;
+		return [
+			`${objectMaterial[1]}#@post:`,
+			`${objectMaterial[1]}#@ - material name=${materialName}`
+		];
+	}
+
 	const inlineMaterial = rawLine.match(/^(\s*)#@post\s+material\b(.*)$/i);
 	if (inlineMaterial) {
 		const materialName = firstPostAttributeValue(inlineMaterial[2] ?? '', ['name', 'id']);
@@ -241,6 +414,34 @@ function normalizeMaterialPostLine(rawLine: string): string[] | undefined {
 			`${inlineMaterial[1]}#@post:`,
 			`${inlineMaterial[1]}#@ - material name=${materialName}`
 		];
+	}
+
+	return undefined;
+}
+
+function normalizePostOpBody(rawBody: string): string {
+	const [rawOp = '', ...restParts] = rawBody.trim().split(/\s+/);
+	const op = rawOp.toLowerCase();
+	let rest = restParts.join(' ').trim();
+	if (op === 'subdivide') {
+		rest = rest.replace(/\blevels\s*=/gi, 'level=');
+	}
+	return [op || rawOp, rest].filter(Boolean).join(' ');
+}
+
+function normalizeGenericPostLine(rawLine: string): string[] | undefined {
+	const blockPost = rawLine.match(/^(\s*)#@\s*-\s*(\w+\b.*)$/i);
+	if (blockPost) {
+		const normalized = normalizePostOpBody(blockPost[2] ?? '');
+		return normalized ? [`${blockPost[1]}#@ - ${normalized}`] : undefined;
+	}
+
+	const inlinePost = rawLine.match(/^(\s*)#@post\s+(\w+\b.*)$/i);
+	if (inlinePost) {
+		const normalized = normalizePostOpBody(inlinePost[2] ?? '');
+		return normalized
+			? [`${inlinePost[1]}#@post:`, `${inlinePost[1]}#@ - ${normalized}`]
+			: undefined;
 	}
 
 	return undefined;
@@ -264,11 +465,40 @@ function normalizeTagPostLine(rawLine: string): string[] | undefined {
 	return undefined;
 }
 
+function readableObjectName(name: string): string {
+	return name.replace(/[_-]+/g, ' ').trim() || 'generated raw mesh part';
+}
+
+function ensureGeneratedObjectMetadata(sourceText: string): string {
+	return sourceText
+		.split(/(?=^\s*o\s+)/gm)
+		.map((block) => {
+			if (!/^\s*o\s+/m.test(block) || !/^\s*v\s+/m.test(block)) return block;
+			const lines = block.split('\n');
+			const objectName = lines[0]?.match(/^\s*o\s+([^\s#]+)/)?.[1] ?? '';
+			const additions: string[] = [];
+			if (!/^\s*#@source:\s*\S+/m.test(block)) additions.push('#@source: llm_mesh');
+			if (!/^\s*#@semantic:\s*\S+/m.test(block)) {
+				additions.push(`#@semantic: ${readableObjectName(objectName)}`);
+			}
+			if (additions.length === 0) return block;
+			lines.splice(1, 0, ...additions);
+			return lines.join('\n');
+		})
+		.join('');
+}
+
 export function normalizeGeneratedPartMetadata(rawPart: string): string {
-	return stripCodeFences(rawPart)
+	const normalized = stripCodeFences(rawPart)
 		.split('\n')
-		.flatMap((line) => normalizeMaterialPostLine(line) ?? normalizeTagPostLine(line) ?? [line])
+		.flatMap(
+			(line) =>
+				normalizeMaterialPostLine(line) ??
+				normalizeTagPostLine(line) ??
+				normalizeGenericPostLine(line) ?? [line]
+		)
 		.join('\n');
+	return ensureGeneratedObjectMetadata(normalized);
 }
 
 function remapFaceToken(token: string, vertexOffset: number, localIndexOffset = 0): string {
@@ -383,6 +613,7 @@ export function validateLiveObj(liveObj: string, previousLiveObj = ''): LiveObjV
 			);
 		}
 	}
+	warnings.push(...objectBoundaryWarnings(liveObj));
 
 	for (const [i, line] of liveObj.split('\n').entries()) {
 		if (!/^\s*f\s+/.test(line)) continue;

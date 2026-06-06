@@ -17,9 +17,10 @@ import {
 	applyLiveObjSurgicalPatch,
 	parseLiveObjSurgicalPatch
 } from '$lib/server/liveObj/surgicalPatch';
-import { rawObjControlIssues } from '$lib/server/liveObj/iterative';
+import { normalizeGeneratedPartMetadata, rawObjControlIssues } from '$lib/server/liveObj/iterative';
 import { normalizeRawPostHeader } from '$lib/liveObj/rawPostHeader';
 import { rawPostValidationIssues, validateRawPostSource } from '$lib/liveObj/rawPostValidation';
+import { stripLiveObjMeshLines } from '$lib/liveObj/stripLiveObjMeshLines';
 
 type WireHistoryItem = {
 	role: string;
@@ -53,6 +54,51 @@ type TokenUsageSummary = {
 	reasoningTokens?: number;
 	cachedTokens?: number;
 };
+
+function stripDreamVertexCacheLines(text: string): string {
+	return text
+		.split(/\r?\n/)
+		.filter((line) => !/^#@dream_(?:base|delta)_v\b/i.test(line.trim()))
+		.join('\n');
+}
+
+const MAX_SURGICAL_MODEL_SCENE_CHARS = 120_000;
+
+function stripMeshLinesExceptObject(text: string, preserveObjectId?: string): string {
+	const keepObject = preserveObjectId?.trim();
+	if (!keepObject) return stripLiveObjMeshLines(text);
+	const kept: string[] = [];
+	let currentObject = '';
+	for (const line of text.split(/\r?\n/)) {
+		const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
+		if (objectMatch) currentObject = objectMatch[1];
+		const token = /^(\S+)/.exec(line.trim())?.[1]?.toLowerCase() ?? '';
+		if (
+			currentObject !== keepObject &&
+			(token === 'v' ||
+				token === 'vn' ||
+				token === 'vt' ||
+				token === 'vp' ||
+				token === 'f' ||
+				token === 'fo' ||
+				token === 'l')
+		) {
+			continue;
+		}
+		kept.push(line);
+	}
+	return kept.join('\n');
+}
+
+function compactLiveObjForModel(text: string, preserveObjectId?: string): string {
+	const withoutDreamCache = stripDreamVertexCacheLines(text);
+	if (withoutDreamCache.length <= MAX_SURGICAL_MODEL_SCENE_CHARS) return withoutDreamCache;
+	const withoutMeshCache = stripMeshLinesExceptObject(withoutDreamCache, preserveObjectId);
+	if (withoutMeshCache.length <= MAX_SURGICAL_MODEL_SCENE_CHARS) {
+		return `${withoutMeshCache}\n#@note: dense v/f mesh cache omitted from model prompt for token budget`;
+	}
+	return `${withoutMeshCache.slice(0, MAX_SURGICAL_MODEL_SCENE_CHARS)}\n#@note: scene prompt truncated for token budget`;
+}
 
 const KNOWN_OPS = new Set([
 	'transform',
@@ -373,7 +419,7 @@ function wireHistoryToMessages(items: WireHistoryItem[]): ChatCompletionMessage[
 		.filter((m) => m.role === 'user' || m.role === 'assistant')
 		.map((m) => {
 			if (m.role === 'assistant') {
-				return { role: 'assistant', content: m.content };
+				return { role: 'assistant', content: compactLiveObjForModel(m.content) };
 			}
 			const imgs = normalizeImageUrls(m.imageUrls, m.imageUrl);
 			if (imgs.length > 0) {
@@ -490,7 +536,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			rawLlm = patchResult.rawPatch;
 			correctedLiveObj = useProcedural
 				? patchResult.liveObj
-				: normalizeRawPostHeader(patchResult.liveObj);
+				: normalizeRawPostScene(patchResult.liveObj);
 			surgicalEditSummary = patchResult.summary;
 			surgicalEditCount = patchResult.appliedEdits;
 			recordUsages(patchResult.usages);
@@ -508,7 +554,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			correctedLiveObj = stripCodeFences(rawLlm);
 			correctedLiveObj = useProcedural
 				? applyKernelDefaultHeader(correctedLiveObj, kernelDefault)
-				: normalizeRawPostHeader(correctedLiveObj, { sourcePrompt: userMessage });
+				: normalizeRawPostScene(correctedLiveObj, { sourcePrompt: userMessage });
 		}
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
@@ -559,7 +605,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				recordUsages(correctionPatch.usages);
 				let correctionLiveObj = useProcedural
 					? correctionPatch.liveObj
-					: normalizeRawPostHeader(correctionPatch.liveObj);
+					: normalizeRawPostScene(correctionPatch.liveObj);
 				let correctionRawPatch = correctionPatch.rawPatch;
 				let correctionSummary = correctionPatch.summary ?? surgicalEditSummary;
 				let correctionAppliedEdits = correctionPatch.appliedEdits;
@@ -587,7 +633,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					recordUsages(correctionRepairPatch.usages);
 					correctionLiveObj = useProcedural
 						? correctionRepairPatch.liveObj
-						: normalizeRawPostHeader(correctionRepairPatch.liveObj);
+						: normalizeRawPostScene(correctionRepairPatch.liveObj);
 					correctionRawPatch = [
 						correctionRawPatch,
 						'# --- validation repair patch ---',
@@ -643,7 +689,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				recordUsage(correctedResult.usage);
 				let retryLiveObj = useProcedural
 					? stripCodeFences(correctedResult.content)
-					: normalizeRawPostHeader(stripCodeFences(correctedResult.content), {
+					: normalizeRawPostScene(stripCodeFences(correctedResult.content), {
 							sourcePrompt: userMessage
 						});
 				try {
@@ -675,7 +721,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						recordUsage(secondCorrectionResult.usage);
 						retryLiveObj = useProcedural
 							? stripCodeFences(secondCorrectionResult.content)
-							: normalizeRawPostHeader(stripCodeFences(secondCorrectionResult.content), {
+							: normalizeRawPostScene(stripCodeFences(secondCorrectionResult.content), {
 									sourcePrompt: userMessage
 								});
 						retryResult = await validateAndExpandCleanLiveObj(retryLiveObj, useProcedural);
@@ -787,9 +833,12 @@ async function requestAndApplySurgicalPatch(args: {
 	usages: TokenUsage[];
 }> {
 	const imageUrls = normalizeImageUrls(args.imageUrls, args.imageUrl);
+	const dreamStrippedBaseLiveObj = stripDreamVertexCacheLines(args.baseLiveObj);
+	const modelBaseLiveObj = compactLiveObjForModel(args.baseLiveObj, args.targetObjectId);
+	const canUseModelBaseAsResult = modelBaseLiveObj === dreamStrippedBaseLiveObj;
 	const userMessage = withTargetObjectContext(
 		args.userMessage,
-		args.baseLiveObj,
+		modelBaseLiveObj,
 		args.targetObjectId
 	);
 	const patchResult = await withLlmRequestOverrides(
@@ -797,7 +846,7 @@ async function requestAndApplySurgicalPatch(args: {
 			? { apiKey: args.reqApiKey, apiUrl: args.reqApiUrl }
 			: undefined,
 		() =>
-			requestLiveObjSurgicalPatchFromLlm(userMessage, args.baseLiveObj, args.history, args.model, {
+			requestLiveObjSurgicalPatchFromLlm(userMessage, modelBaseLiveObj, args.history, args.model, {
 				imageDataUrls: imageUrls,
 				currentSceneMode: args.currentSceneMode
 			})
@@ -805,10 +854,14 @@ async function requestAndApplySurgicalPatch(args: {
 	const rawPatch = patchResult.content;
 	const usages = patchResult.usage ? [patchResult.usage] : [];
 	try {
-		const applied = applyLiveObjSurgicalPatch(
-			args.baseLiveObj,
-			parseLiveObjSurgicalPatch(rawPatch)
-		);
+		const parsedPatch = parseLiveObjSurgicalPatch(rawPatch);
+		let applied: ReturnType<typeof applyLiveObjSurgicalPatch>;
+		try {
+			applied = applyLiveObjSurgicalPatch(args.baseLiveObj, parsedPatch);
+		} catch (fullBaseError) {
+			if (!canUseModelBaseAsResult) throw fullBaseError;
+			applied = applyLiveObjSurgicalPatch(modelBaseLiveObj, parsedPatch);
+		}
 		assertSurgicalPatchPreservesExistingObjects(userMessage, args.baseLiveObj, applied.liveObj);
 		return {
 			liveObj: applied.liveObj,
@@ -826,7 +879,7 @@ async function requestAndApplySurgicalPatch(args: {
 			() =>
 				requestLiveObjSurgicalPatchFromLlm(
 					repairPrompt,
-					args.baseLiveObj,
+					modelBaseLiveObj,
 					args.history,
 					args.model,
 					{
@@ -837,10 +890,14 @@ async function requestAndApplySurgicalPatch(args: {
 		);
 		const repairedRawPatch = repairedPatchResult.content;
 		if (repairedPatchResult.usage) usages.push(repairedPatchResult.usage);
-		const repaired = applyLiveObjSurgicalPatch(
-			args.baseLiveObj,
-			parseLiveObjSurgicalPatch(repairedRawPatch)
-		);
+		const parsedRepairedPatch = parseLiveObjSurgicalPatch(repairedRawPatch);
+		let repaired: ReturnType<typeof applyLiveObjSurgicalPatch>;
+		try {
+			repaired = applyLiveObjSurgicalPatch(args.baseLiveObj, parsedRepairedPatch);
+		} catch (fullBaseError) {
+			if (!canUseModelBaseAsResult) throw fullBaseError;
+			repaired = applyLiveObjSurgicalPatch(modelBaseLiveObj, parsedRepairedPatch);
+		}
 		assertSurgicalPatchPreservesExistingObjects(userMessage, args.baseLiveObj, repaired.liveObj);
 		return {
 			liveObj: repaired.liveObj,
@@ -904,6 +961,10 @@ function applyKernelDefaultHeader(sceneText: string, kernelDefault: 'auto' | 'ca
 	if (headerIdx >= 0) lines.splice(headerIdx + 1, 0, '#@kernel_default: cadquery');
 	else lines.unshift('#@kernel_default: cadquery');
 	return `${lines.join('\n')}\n`;
+}
+
+function normalizeRawPostScene(sceneText: string, options: { sourcePrompt?: string } = {}): string {
+	return normalizeRawPostHeader(normalizeGeneratedPartMetadata(sceneText), options);
 }
 
 function collectSceneIssues(args: {
