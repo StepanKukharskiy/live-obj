@@ -80,12 +80,17 @@ type FormFileLike = {
 	arrayBuffer: () => Promise<ArrayBuffer>;
 };
 
+const MAX_SCENE_METADATA_CHARS = 12_000;
+
 function metadataFromLiveObj(liveObjText: string): string {
-	return liveObjText
+	const metadata = liveObjText
 		.split(/\r?\n/)
 		.map((line) => line.trim())
 		.filter((line) => line.startsWith('#@'))
+		.filter((line) => !/^#@dream_(?:base|delta)_v\b/i.test(line))
 		.join('\n');
+	if (metadata.length <= MAX_SCENE_METADATA_CHARS) return metadata;
+	return `${metadata.slice(0, MAX_SCENE_METADATA_CHARS)}\n#@note: scene metadata truncated for video prompt`;
 }
 
 function networkErrorMessage(err: unknown): string {

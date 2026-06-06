@@ -104,6 +104,29 @@ describe('iterative Live OBJ helpers', () => {
 		expect(validateRawPostSource(normalized).valid).toBe(true);
 	});
 
+	it('repairs common generated raw-post metadata omissions', () => {
+		const part = [
+			'o fabric_roof',
+			'#@material white_fabric',
+			'#@post subdivide levels=2',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 1 1 0',
+			'v 0 1 0',
+			'f 1 2 3 4'
+		].join('\n');
+
+		const normalized = normalizeGeneratedPartMetadata(part);
+		const validation = validateRawPostSource(normalized);
+
+		expect(normalized).toContain('#@source: llm_mesh');
+		expect(normalized).toContain('#@semantic: fabric roof');
+		expect(normalized).toContain('#@post:\n#@ - material name=white_fabric');
+		expect(normalized).toContain('#@post:\n#@ - subdivide level=2');
+		expect(validation.valid).toBe(true);
+		expect(validation.warnings).toEqual([]);
+	});
+
 	it('normalizes raw-post tag name aliases to value syntax', () => {
 		const part = [
 			'o glazing',

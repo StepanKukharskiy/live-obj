@@ -23,6 +23,7 @@
 		meta?: string;
 		tokenUsage?: TokenUsageSummary;
 		transient?: boolean;
+		excludeFromHistory?: boolean;
 	};
 	type SendPayload = {
 		text: string;
@@ -201,7 +202,6 @@
 	let activeTab = $state<PanelTab>('chat');
 	let chatInput = $state('');
 	let chatFeedbackLoop = $state(false);
-	let chatFeedbackPasses = $state(3);
 	let chatAttachedDataUrl = $state<string | undefined>(undefined);
 	let renderPrompt = $state('');
 	let renderVideoPrompt = $state('');
@@ -282,7 +282,6 @@
 					bind:targetObjectId={selectedTargetObjectId}
 					{targetObjectOptions}
 					bind:feedbackLoop={chatFeedbackLoop}
-					bind:feedbackPasses={chatFeedbackPasses}
 					bind:attachedDataUrl={chatAttachedDataUrl}
 				/>
 			{:else if activeTab === 'provider'}

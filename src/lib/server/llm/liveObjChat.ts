@@ -94,6 +94,16 @@ Return only JSON with this shape:
   "scene": "short scene description",
   "units": "meters",
   "up": "y",
+  "visual": {
+    "backgroundColor": "#202124",
+    "ambientLightIntensity": 0.9,
+    "directionalLightIntensity": 1.8,
+    "cameraFov": 45,
+    "toneMappingExposure": 1.05,
+    "canvasAspectRatio": "16:9",
+    "cameraView": "front_left_high",
+    "cameraFocus": ["primary_object_id"]
+  },
   "materials": [
     { "id": "material_id", "color": "#RRGGBB", "roughness": 0.7, "metalness": 0, "role": "short role" }
   ],
@@ -102,7 +112,14 @@ Return only JSON with this shape:
       "id": "stable_object_or_group_id",
       "role": "what this part contributes",
       "method": "llm_mesh",
+      "postProcess": {
+        "type": "none|uv_dream",
+        "prompt": "surface detail intent for this part only",
+        "mode": "displace|map-remesh",
+        "amount": 1
+      },
       "dependencies": ["prior_part_id"],
+      "cameraFocus": ["this_part_id", "supporting_part_id"],
       "prompt": "specific instructions for generating only this part",
       "controls": [
         { "key": "part_width", "label": "Part width", "kind": "slider", "default": 1, "min": 0.5, "max": 1.8, "step": 0.05 }
@@ -124,16 +141,23 @@ Planning rules:
 - Do not plan separate first-pass parts for seams, fasteners, bolts, handles, bollards, expansion joints, connection plates, tiny context objects, or micro facade details unless the user explicitly asks for them.
 - Make dependencies explicit so later parts can align to earlier geometry.
 - Use y as the vertical/up axis unless the user explicitly asks otherwise.
+- Use "visual" for scene-level render direction when the request implies a mood, product shot, video, cinematic framing, or social format. Omit visual fields you are not confident about.
+- Allowed canvasAspectRatio values: "fill", "1:1", "4:3", "16:9", "9:16", "4:5", "3:2", "2:3", "21:9".
+- Allowed cameraView values: "front_left_high", "front_right_high", "low_front", "side", "top", "isometric". Choose a view that supports the requested shot direction.
+- Use cameraFocus on visual or parts when a shot/screenshot should frame specific objects. Values must be existing/planned object ids from parts/dependencies, not prose.
 - Plan raw mesh parts. Each part method must be "llm_mesh".
 - Do not use method values "procedural", "recipe", or "hybrid" in this iterative raw OBJ planner.
 - Do not invent executor operations. The default generation method is llm_mesh with semantic metadata and optional generic post notes.
+- Decide per part whether it needs an AI dreamed surface post-process. If the base mesh should remain simple but the final part needs hallucinated surface relief, ornamental flow, fabric-like folds, cloud/smoke/water/petal detail, or other image-imagined micro/mid-scale geometry, set postProcess.type to "uv_dream" for that part. Otherwise set type to "none" or omit postProcess.
+- Use uv_dream sparingly: usually only the primary shell/body/roof/skin/surface part, not supports, context, lights, cords, fasteners, or already-small details.
+- For uv_dream postProcess, write a part-specific prompt that describes only the surface relief to generate while preserving the base mesh volume and silhouette. Use mode "displace" unless the user explicitly needs map-derived topology; use "map-remesh" only for clean topology experiments.
 - If the user asks for controls, sliders, parameters, adjustable dimensions, or editability, preserve that requirement in the relevant part prompts. Do not treat metadata controls as forbidden UI objects.
 - In raw-first generation, controls are optional but useful when they preserve the authored shape. Add at most 1-2 structured "controls" and "controlPostOps" for a part when the requested edit is safely expressible as a post operation without distorting fitted raw mesh details.
 - Prefer neutral multiplier controls with default 1, such as part_scale, relief_amount, smoothing, count, spacing, or placement offsets. Do not use final authored dimensions directly as scale values.
 - Do not describe controls in prose inside "prompt". Put all control keys, ranges, defaults, and post ops in the structured fields.
 - Every emitted control key should be referenced by at least one executable controlPostOps entry.
 - controlPostOps entries must be #@post op bodies without "#@ -" prefixes, such as "transform scale=[part_width,part_height,part_depth] pivot=[0,0,0]", "smooth iterations=smooth_iterations strength=0.35", or "array count=module_count offset=[module_spacing,0,0] centered=true".
-- Use only supported raw #@post ops in controlPostOps: transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- Use only supported raw #@post ops in controlPostOps: transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, snap_to_ground, center_origin, material, and tag.
 - Use stable snake_case ids.`;
 
 const LIVE_OBJ_ITERATIVE_PART_SYSTEM_PROMPT = `You generate one Live OBJ part for an iterative scene builder.
@@ -185,7 +209,9 @@ Raw-first part rules:
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
 - Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
 - For materials, prefer #@post material for whole-object assignment. If one object needs multiple materials, put each usemtl immediately before the face block it should color; do not list several usemtl directives before vertices or before a single shared face block.
-- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, snap_to_ground, center_origin, material, and tag.
+- Use #@post face_lattice when the user asks for cleaner panel or product-like lattice surfaces from a sculpted mesh. It welds the guide mesh first, can pre-fair it with guide_subdivide=n and guide_smooth=n for more even panel sizes and fewer inherited edge valleys, insets each face, extrudes the frame thickness using shared outer offset vertices, omits internal partition walls along source edges shared by adjacent faces, can Catmull-Clark subdivide the result with subdivide=n, and replaces the guide mesh by default.
+- Use #@post skin_edges when the user asks for a single continuous printable exoskeleton/wireframe skin around mesh edges. Prefer edges=feature angle=25 to avoid triangulation diagonals, with radius and resolution exposed as params only when useful. Use mode=replace unless the original sculpt should remain visible.
 - For repeated modules, #@post array supports per-copy expressions in scale, position, and pivot using i, index, step, count, t, sin(), cos(), min(), max(), abs(), sqrt(), pi, and tau.
 - For per-vertex edits, #@post deform supports position=[x,y,z] expressions with x/y/z, normalized u/v/w bbox coordinates, i/index, t, vertex_count, params, and the same math functions.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
@@ -460,7 +486,7 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 					'Current scene mode: raw OBJ / raw-post output.',
 					'Important: existing v/f mesh blocks are source base geometry, not disposable cache. Preserve existing mesh object blocks unless the user asks to replace them.',
 					'For cleanup, symmetry, repetition, material, or tag edits on raw OBJ scenes, prefer adding or editing #@post blocks. Do not add #@ops and do not convert the whole scene to procedural metadata.',
-					'Supported #@post ops include transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.',
+					'Supported #@post ops include transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, snap_to_ground, center_origin, material, and tag.',
 					'When adding tunable #@post values, expose them with #@params and #@controls, and make the #@post expressions reference those params.',
 					'Use #@post only when the requested visible change is fully expressible with supported executable #@post syntax. Otherwise update the affected raw mesh block or add real geometry; object names, #@semantic, #@tag, material names, and unsupported #@post attributes do not count as implementing visible geometry.'
 				].join('\n')
@@ -606,6 +632,16 @@ export async function requestLiveObjPartFromLlm(
 					'Every emitted control key should be referenced by executable #@post syntax. Prefer neutral multiplier controls with default 1 for scale, or direct controls for position, array count/offset, deform amount, smooth iterations/strength, simplify ratio, or center_origin.',
 					'Do not use final object dimensions such as body_width/body_height/body_length directly as transform scale values on raw meshes that are already authored at those dimensions.',
 					'Do not emit unsupported #@post attributes such as target=, origin=, translate=, rotate_y=, axis= for array spacing, or mode=.'
+				].join('\n')
+			: '',
+		JSON.stringify(input.part).includes('"uv_dream"')
+			? [
+					'UV dream post-process preparation:',
+					'The planner marked this part for uv_dream postProcess. Generate a clean low-poly source mesh that preserves the intended base volume and silhouette.',
+					'Add #@uv_hint to the object and #@uv_island markers before related face blocks so the later UV unwrap can group surfaces by modelling logic.',
+					'For hollow or vessel-like bodies such as vases, cups, lampshades, shells, melted containers, bottles, bowls, and sleeves, use #@uv_hint: strategy=radial seam=back groups=side,top,bottom and group faces as top, bottom, and side rather than front/back/left/right shards.',
+					'For vessel/shell/body-like parts, use roles such as side/top/bottom/opening/inner/outer. For architecture skins, use roles such as roof/facade/soffit/edge. For product shells, use semantic roles that match the part.',
+					'Do not bake tiny relief into vertices; leave fine folds/flow/texture-like surface detail to the uv_dream post-process.'
 				].join('\n')
 			: '',
 		'',

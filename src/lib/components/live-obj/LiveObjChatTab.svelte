@@ -16,6 +16,7 @@
 		meta?: string;
 		tokenUsage?: TokenUsageSummary;
 		transient?: boolean;
+		excludeFromHistory?: boolean;
 	};
 	type SendPayload = {
 		text: string;
@@ -220,7 +221,6 @@ f 20 24 21 17`
 		targetObjectId = $bindable(''),
 		targetObjectOptions = [],
 		feedbackLoop = $bindable(false),
-		feedbackPasses = $bindable(3),
 		attachedDataUrl = $bindable<string | undefined>(undefined)
 	}: {
 		msgs?: ChatMsg[];
@@ -233,7 +233,6 @@ f 20 24 21 17`
 		targetObjectId?: string;
 		targetObjectOptions?: string[];
 		feedbackLoop?: boolean;
-		feedbackPasses?: number;
 		attachedDataUrl?: string | undefined;
 	} = $props();
 
@@ -327,8 +326,7 @@ f 20 24 21 17`
 			useProcedural: false,
 			...(targetObjectId ? { targetObjectId } : {}),
 			imageDataUrl: img,
-			feedbackLoop,
-			feedbackPasses
+			feedbackLoop
 		});
 		input = '';
 		clearAttachment();
@@ -508,18 +506,6 @@ f 20 24 21 17`
 					/>
 					<span class="planner-chat-procedural-text">Vision loop</span>
 				</label>
-				{#if feedbackLoop}
-					<label class="planner-chat-loop-count" title="Feedback loop generations">
-						<span>×</span>
-						<select bind:value={feedbackPasses} disabled={busy}>
-							<option value={1}>1</option>
-							<option value={2}>2</option>
-							<option value={3}>3</option>
-							<option value={4}>4</option>
-							<option value={5}>5</option>
-						</select>
-					</label>
-				{/if}
 				<input
 					bind:this={fileInputEl}
 					type="file"
@@ -732,36 +718,6 @@ f 20 24 21 17`
 
 	.planner-chat-procedural-text {
 		line-height: 1;
-	}
-
-	.planner-chat-loop-count {
-		margin: 0;
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		font-size: 12px;
-		font-weight: 600;
-		color: #333;
-		white-space: nowrap;
-	}
-
-	.planner-chat-loop-count select {
-		box-sizing: border-box;
-		height: 28px;
-		font-family: inherit;
-		font-size: 12px;
-		font-weight: 600;
-		color: #333;
-		border: 1px solid rgba(0, 0, 0, 0.12);
-		border-radius: 999px;
-		padding: 0 8px;
-		background: rgba(255, 255, 255, 0.95);
-		cursor: pointer;
-	}
-
-	.planner-chat-loop-count select:disabled {
-		opacity: 0.65;
-		cursor: not-allowed;
 	}
 
 	.planner-chat-attach-label {

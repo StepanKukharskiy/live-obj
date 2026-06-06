@@ -12,7 +12,9 @@ export function normalizeRawPostHeader(
 	sourceText: string,
 	options: { sourcePrompt?: string } = {}
 ): string {
-	const text = String(sourceText ?? '').trim();
+	const text = String(sourceText ?? '')
+		.trim()
+		.replace(/^(\s*#@workflow:\s*)raw_poast\b/im, '$1raw_post');
 	if (!text || hasProceduralLiveSources(text)) return sourceText;
 
 	const additions: string[] = [];

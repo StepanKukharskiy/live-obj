@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { strToU8, zipSync } from 'fflate';
+
 	type RenderingMode = 'standard' | 'outline' | 'toon';
 	type CanvasAspectRatio =
 		| 'fill'
@@ -60,18 +62,197 @@
 	} = $props();
 
 	let openFileInput: HTMLInputElement | undefined = $state();
+	let downloadError = $state<string | null>(null);
 
-	function downloadObj() {
-		if (!liveObjText.trim()) return;
-		const blob = new Blob([liveObjText], { type: 'text/plain' });
+	type ObjTextureRef = {
+		objectName: string;
+		path: string;
+		filename: string;
+		materialName: string;
+	};
+
+	function sanitizeFilename(value: string, fallback: string): string {
+		const clean = value
+			.trim()
+			.split(/[\\/]/)
+			.pop()
+			?.replace(/[^A-Za-z0-9_.-]+/g, '-')
+			.replace(/^-+|-+$/g, '');
+		return clean || fallback;
+	}
+
+	function ensureImageExtension(filename: string, ext: string): string {
+		if (/\.(png|jpe?g|webp)$/i.test(filename)) return filename;
+		return `${filename}.${ext}`;
+	}
+
+	function metadataToken(raw: string, key: string): string | undefined {
+		return raw.match(new RegExp(`(?:^|\\s)${key}=("[^"]+"|'[^']+'|\\S+)`))?.[1]?.replace(/^['"]|['"]$/g, '');
+	}
+
+	function resolveDownloadTextureUrl(path: string): string {
+		const trimmed = path.trim();
+		if (/^(data:|blob:|https?:\/\/)/i.test(trimmed)) return trimmed;
+		if (/^\/api\//i.test(trimmed)) return trimmed;
+		const projectFileMatch = trimmed.match(/(?:^|[/\\])(project_live_obj_files[/\\].+)$/);
+		if (projectFileMatch) {
+			return `/api/project-file?path=${encodeURIComponent(projectFileMatch[1].replace(/\\/g, '/'))}`;
+		}
+		return `/api/project-file?path=${encodeURIComponent(trimmed)}`;
+	}
+
+	function parseDiffuseTextures(sourceText: string): ObjTextureRef[] {
+		const refs: ObjTextureRef[] = [];
+		let currentObject = 'object';
+		for (const line of sourceText.split(/\r?\n/)) {
+			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
+			if (objectMatch) {
+				currentObject = objectMatch[1];
+				continue;
+			}
+			const textureMatch = line.match(/^\s*#@texture:\s*(.+)$/);
+			if (!textureMatch) continue;
+			const rest = textureMatch[1];
+			const kind = (metadataToken(rest, 'kind') ?? 'diffuse').toLowerCase();
+			if (!['diffuse', 'albedo', 'color'].includes(kind)) continue;
+			const path = metadataToken(rest, 'path') ?? metadataToken(rest, 'src');
+			if (!path) continue;
+			const index = refs.length + 1;
+			const ext = path.match(/\.(png|jpe?g|webp)(?:$|[?#])/i)?.[1] ?? 'png';
+			refs.push({
+				objectName: currentObject,
+				path,
+				filename: ensureImageExtension(sanitizeFilename(path, `texture-${index}`), ext),
+				materialName: sanitizeFilename(`${currentObject}_mat`, `material_${index}`)
+			});
+		}
+		return refs;
+	}
+
+	function stripVolatileTempAssetMetadata(sourceText: string, keepPaths = new Set<string>()): string {
+		return sourceText
+			.split(/\r?\n/)
+			.filter((line) => {
+				const assetMatch = line.match(
+					/^\s*#@(?:texture|debug_image):\s*.*\bpath=(\/api\/temp-assets\/[^\s]+)/
+				);
+				return !assetMatch || keepPaths.has(assetMatch[1]);
+			})
+			.join('\n');
+	}
+
+	function objWithStandardMaterials(sourceText: string, refs: ObjTextureRef[]): string {
+		if (refs.length === 0) return sourceText;
+		const byObject = new Map(refs.map((ref) => [ref.objectName, ref]));
+		const lines = sourceText.split(/\r?\n/);
+		const out: string[] = [];
+		if (!lines.some((line) => /^\s*mtllib\s+spellshape-live\.mtl\s*$/i.test(line))) {
+			out.push('mtllib spellshape-live.mtl');
+		}
+		let currentRef: ObjTextureRef | undefined;
+		let emittedUsemtl = false;
+		for (const line of lines) {
+			const textureMatch = line.match(/^(\s*#@texture:\s*.*\bpath=)([^\s]+)(.*)$/);
+			if (textureMatch) {
+				const matchingRef = refs.find((ref) => line.includes(ref.path));
+				out.push(matchingRef ? `${textureMatch[1]}${matchingRef.filename}${textureMatch[3]}` : line);
+				continue;
+			}
+			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
+			if (objectMatch) {
+				currentRef = byObject.get(objectMatch[1]);
+				emittedUsemtl = false;
+				out.push(line);
+				if (currentRef) {
+					out.push(`usemtl ${currentRef.materialName}`);
+					emittedUsemtl = true;
+				}
+				continue;
+			}
+			if (currentRef && !emittedUsemtl && /^\s*f\s+/.test(line)) {
+				out.push(`usemtl ${currentRef.materialName}`);
+				emittedUsemtl = true;
+			}
+			out.push(line);
+		}
+		return out.join('\n');
+	}
+
+	function mtlForTextures(refs: ObjTextureRef[]): string {
+		return refs
+			.map(
+				(ref) => `newmtl ${ref.materialName}
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.040 0.040 0.040
+Ns 24.000
+illum 2
+map_Kd ${ref.filename}`
+			)
+			.join('\n\n');
+	}
+
+	function triggerDownload(blob: Blob, filename: string) {
 		const url = URL.createObjectURL(blob);
 		const link = document.createElement('a');
 		link.href = url;
-		link.download = 'spellshape-live.obj';
+		link.download = filename;
 		document.body.appendChild(link);
 		link.click();
 		document.body.removeChild(link);
 		URL.revokeObjectURL(url);
+	}
+
+	async function downloadObj() {
+		downloadError = null;
+		if (!liveObjText.trim()) return;
+		const textureRefs = parseDiffuseTextures(liveObjText);
+		if (textureRefs.length === 0) {
+			triggerDownload(new Blob([liveObjText], { type: 'text/plain' }), 'spellshape-live.obj');
+			return;
+		}
+		const files: Record<string, Uint8Array> = {
+			'spellshape-live.obj': new Uint8Array(),
+			'spellshape-live.mtl': new Uint8Array()
+		};
+		const availableTextureRefs: ObjTextureRef[] = [];
+		const missingTextureRefs: ObjTextureRef[] = [];
+		for (const ref of textureRefs) {
+			const response = await fetch(resolveDownloadTextureUrl(ref.path));
+			if (!response.ok) {
+				missingTextureRefs.push(ref);
+				continue;
+			}
+			files[ref.filename] = new Uint8Array(await response.arrayBuffer());
+			availableTextureRefs.push(ref);
+		}
+		if (availableTextureRefs.length === 0) {
+			const portableObj = stripVolatileTempAssetMetadata(liveObjText);
+			triggerDownload(new Blob([portableObj], { type: 'text/plain' }), 'spellshape-live.obj');
+			if (missingTextureRefs.length > 0) {
+				downloadError = 'Texture assets expired; downloaded OBJ without texture references.';
+			}
+			return;
+		}
+		const availablePaths = new Set(availableTextureRefs.map((ref) => ref.path));
+		const portableObj = stripVolatileTempAssetMetadata(liveObjText, availablePaths);
+		files['spellshape-live.obj'] = strToU8(objWithStandardMaterials(portableObj, availableTextureRefs));
+		files['spellshape-live.mtl'] = strToU8(mtlForTextures(availableTextureRefs));
+		const zipped = zipSync(files);
+		const zipBytes = new Uint8Array(zipped.byteLength);
+		zipBytes.set(zipped);
+		triggerDownload(new Blob([zipBytes.buffer], { type: 'application/zip' }), 'spellshape-live-obj.zip');
+		if (missingTextureRefs.length > 0) {
+			downloadError = `Downloaded OBJ with ${availableTextureRefs.length}/${textureRefs.length} texture file${availableTextureRefs.length === 1 ? '' : 's'}; expired textures were skipped.`;
+		}
+	}
+
+	async function downloadObjSafely() {
+		try {
+			await downloadObj();
+		} catch (err) {
+			downloadError = err instanceof Error ? err.message : String(err);
+		}
 	}
 
 	async function openObjFile(event: Event) {
@@ -93,7 +274,7 @@
 		>
 			Open Live OBJ
 		</button>
-		<button type="button" class="send-button" onclick={downloadObj} disabled={!liveObjText.trim()}>
+		<button type="button" class="send-button" onclick={downloadObjSafely} disabled={!liveObjText.trim()}>
 			Save Live OBJ
 		</button>
 		<input
@@ -108,6 +289,9 @@
 		A standard OBJ with Spellshape metadata. Opens in any 3D app; reopen in Spellshape for editable
 		parts and parameters.
 	</p>
+	{#if downloadError}
+		<p class="live-obj-save-helper live-obj-save-error">{downloadError}</p>
+	{/if}
 	<div class="planner-chain">
 		<label class="planner-context-field rendering-mode">
 			<span class="planner-label-inline">Canvas</span>
@@ -301,6 +485,10 @@
 		color: rgba(15, 23, 42, 0.68);
 		font-size: 0.82rem;
 		line-height: 1.35;
+	}
+
+	.live-obj-save-error {
+		color: #b42318;
 	}
 
 	.rendering-mode select,
