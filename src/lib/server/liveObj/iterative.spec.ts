@@ -104,6 +104,29 @@ describe('iterative Live OBJ helpers', () => {
 		expect(validateRawPostSource(normalized).valid).toBe(true);
 	});
 
+	it('repairs common generated raw-post metadata omissions', () => {
+		const part = [
+			'o fabric_roof',
+			'#@material white_fabric',
+			'#@post subdivide levels=2',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 1 1 0',
+			'v 0 1 0',
+			'f 1 2 3 4'
+		].join('\n');
+
+		const normalized = normalizeGeneratedPartMetadata(part);
+		const validation = validateRawPostSource(normalized);
+
+		expect(normalized).toContain('#@source: llm_mesh');
+		expect(normalized).toContain('#@semantic: fabric roof');
+		expect(normalized).toContain('#@post:\n#@ - material name=white_fabric');
+		expect(normalized).toContain('#@post:\n#@ - subdivide level=2');
+		expect(validation.valid).toBe(true);
+		expect(validation.warnings).toEqual([]);
+	});
+
 	it('normalizes raw-post tag name aliases to value syntax', () => {
 		const part = [
 			'o glazing',
@@ -148,6 +171,26 @@ describe('iterative Live OBJ helpers', () => {
 			'```json\n{"parts":[{"id":"deck"}]}\n```'
 		);
 		expect(parsed.parts[0].id).toBe('deck');
+	});
+
+	it('parses JSON embedded in extra model text', () => {
+		const parsed = parseJsonObject<{ parts: Array<{ id: string }> }>(
+			'Here is the plan:\n{"parts":[{"id":"tower_core"}]}\nDone.'
+		);
+
+		expect(parsed.parts[0].id).toBe('tower_core');
+	});
+
+	it('explains likely truncated JSON responses', () => {
+		expect(() =>
+			parseJsonObject('{"parts":[{"id":"fluid_tower_shell","prompt":"build a flowing')
+		).toThrow(/incomplete JSON.*output\/completion token cap/i);
+	});
+
+	it('explains non-JSON model responses', () => {
+		expect(() => parseJsonObject('I cannot create that plan.')).toThrow(
+			/Model did not return a JSON object/
+		);
 	});
 
 	it('allows visible raw OBJ objects without controls', () => {

@@ -43,6 +43,37 @@ type VisualDirection = {
 		animation_prompt?: string;
 		still_image_prompt_addition?: string;
 	};
+	reel_copy?: {
+		story_mode?: string;
+		title?: string;
+		opening_label?: string;
+		opening_line?: string;
+		concept?: string;
+		references_title?: string;
+		reference_line?: string;
+		references?: string[];
+		process_title?: string;
+		process_steps?: string[];
+		structure_title?: string;
+		ending_label?: string;
+		ending?: string;
+	};
+	shot_plan?: {
+		aspect_ratio?: string;
+		frames?: Array<{
+			label?: string;
+			purpose?: string;
+			view?: string;
+			camera_direction?: number[];
+			focus_objects?: string[];
+			framing?: string;
+		}>;
+		pair_prompts?: Array<{
+			from?: number;
+			to?: number;
+			prompt?: string;
+		}>;
+	};
 };
 
 type Body = {
@@ -77,6 +108,36 @@ function normalizeDirection(direction: VisualDirection): VisualDirection {
 		direction.primary_direction = {
 			...direction.primary_direction,
 			supporting_references: refs.slice(0, 3)
+		};
+	}
+	if (Array.isArray(direction.shot_plan?.frames) && direction.shot_plan.frames.length > 3) {
+		direction.shot_plan = {
+			...direction.shot_plan,
+			frames: direction.shot_plan.frames.slice(0, 3)
+		};
+	}
+	if (
+		Array.isArray(direction.shot_plan?.pair_prompts) &&
+		direction.shot_plan.pair_prompts.length > 2
+	) {
+		direction.shot_plan = {
+			...direction.shot_plan,
+			pair_prompts: direction.shot_plan.pair_prompts.slice(0, 2)
+		};
+	}
+	if (Array.isArray(direction.reel_copy?.references) && direction.reel_copy.references.length > 3) {
+		direction.reel_copy = {
+			...direction.reel_copy,
+			references: direction.reel_copy.references.slice(0, 3)
+		};
+	}
+	if (
+		Array.isArray(direction.reel_copy?.process_steps) &&
+		direction.reel_copy.process_steps.length > 8
+	) {
+		direction.reel_copy = {
+			...direction.reel_copy,
+			process_steps: direction.reel_copy.process_steps.slice(0, 8)
 		};
 	}
 	return direction;
@@ -192,6 +253,54 @@ Output format:
     "loop_potential": "",
     "animation_prompt": "",
     "still_image_prompt_addition": ""
+  },
+  "reel_copy": {
+    "story_mode": "reference_recipe",
+    "title": "",
+    "opening_label": "Project reveal",
+    "opening_line": "",
+    "concept": "",
+    "references_title": "Visual recipe",
+    "reference_line": "",
+    "references": [],
+    "process_title": "Agent build",
+    "process_steps": [],
+    "structure_title": "Generated scene",
+    "ending_label": "Final output",
+    "ending": ""
+  },
+  "shot_plan": {
+    "aspect_ratio": "16:9",
+    "frames": [
+      {
+        "label": "Hero reveal",
+        "purpose": "Establish the geometry and the selected visual direction",
+        "view": "low_front_3q",
+        "camera_direction": [-1, 0.55, -1],
+        "focus_objects": [],
+        "framing": "full object with breathing room"
+      },
+      {
+        "label": "Material detail",
+        "purpose": "Show the most important material or assembly detail",
+        "view": "side_detail",
+        "camera_direction": [1, 0.35, -0.75],
+        "focus_objects": [],
+        "framing": "closer view, still readable as the same object"
+      },
+      {
+        "label": "Final silhouette",
+        "purpose": "Create the strongest end frame for a short clip",
+        "view": "high_back_3q",
+        "camera_direction": [-0.45, 1.1, 0.65],
+        "focus_objects": [],
+        "framing": "final reveal silhouette"
+      }
+    ],
+    "pair_prompts": [
+      { "from": 0, "to": 1, "prompt": "" },
+      { "from": 1, "to": 2, "prompt": "" }
+    ]
   }
 }
 
@@ -205,6 +314,21 @@ Rules:
 - The story must be readable in a still image and expandable into a 3-second animation.
 - The animation must have one bold visual change, not a complex sequence.
 - The animation_prompt must describe a specific transformation event, not just camera movement.
+- The shot_plan must contain exactly 3 frames designed for this specific geometry and visual direction.
+- reel_copy is for a 9:16 or 16:9 short-form project reel. It must tell a mini educational story about this exact project, not a generic Spellshape ad.
+- reel_copy.story_mode must be one of: reference_recipe, process_breakdown, cinematic_breakdown, design_critique, before_after, same_scene_variations, user_workflow.
+- reel_copy.opening_label should be specific, such as "Project reveal", "Motion test", or "Scene payoff". Do not use "Final animation".
+- reel_copy.title, opening_line, concept, and ending must be short enough for Instagram or YouTube reels. Use one crisp sentence, 90 characters maximum.
+- reel_copy.reference_line is the Visual recipe subheading. Make it one complete sentence, 70 characters maximum, with no ellipsis or list syntax.
+- reel_copy.references must list up to 3 short references with a reason for selection, such as "TRON arena - luminous edges" or "brutalist console - heavy silhouette". Each line should teach the viewer what that reference contributes: form, motion, light, material, or mood.
+- reel_copy.process_steps must list up to 8 short concrete build beats that can label process screenshots and show the amount of work produced by the agent. Do not mention internal files unless the file structure scene needs it.
+- reel_copy should repeat scene roles across projects, not fixed sentences. Avoid reusable marketing slogans.
+- reel_copy should feel like a mini design or art note for an educational and entertaining making-of reel: concept first, references second, build logic third, final payoff last.
+- reel_copy may mention Spellshape agent only when natural. It must not say Live OBJ, OBJ, metadata, prompt, API, or any internal technical detail.
+- Shot views should not be generic defaults. Choose camera directions that fit the object: tall objects can use low/high vertical emphasis, flat objects can use plan/oblique views, products can use hero/detail/reveal, and scenes can use establishing/detail/final reveal.
+- camera_direction is an approximate normalized world-space vector [x,y,z] from the object center toward the camera. Use positive y for elevated views and lower y values for eye-level/low views.
+- focus_objects may be empty, but if metadata names important objects, use at most 3 exact object ids that should drive framing.
+- pair_prompts should describe motion from frame 0 to 1 and frame 1 to 2, aligned with the story and shot purposes.
 - Make the animation more dynamic and surprising than a normal architectural flythrough.
 - Keep the surprise aligned with the primary direction. For example: a Memphis style hotel suddenly swallows the sun, turns on bright neon signs, and snaps into night time.
 - The geometry must remain the protagonist.

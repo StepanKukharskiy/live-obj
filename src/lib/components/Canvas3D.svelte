@@ -239,11 +239,11 @@
 				uniform float uDepthFar;
 				${compiledShader.fragmentShader}
 			`.replace(
-				'#include <color_fragment>',
+				'#include <normal_fragment_maps>',
 				`
-				#include <color_fragment>
+				#include <normal_fragment_maps>
 				float spellshapeDepth = smoothstep(uDepthNear, uDepthFar, -vViewPosition.z);
-				vec3 spellshapeNormal = normalize(vNormal);
+				vec3 spellshapeNormal = normalize(normal);
 				vec3 spellshapeViewDir = normalize(-vViewPosition);
 				float spellshapeRimBase = 1.0 - max(dot(spellshapeNormal, spellshapeViewDir), 0.0);
 				float spellshapeFresnel = spellshapeRimBase * spellshapeRimBase;
@@ -255,7 +255,8 @@
 				`
 			);
 		};
-		shader.customProgramCacheKey = () => 'spellshape-depth-standard-v2';
+		shader.customProgramCacheKey = () =>
+			`spellshape-depth-standard-v3-${shader.flatShading ? 'flat' : 'smooth'}`;
 		depthNormalShaderCache.set(key, shader);
 		return shader;
 	}
@@ -297,6 +298,57 @@
 		}
 	}
 
+	function makeXrayMaterial(color: string, opacity: number, depthWrite: boolean) {
+		return new THREE.MeshBasicMaterial({
+			color,
+			transparent: opacity < 1,
+			opacity,
+			depthWrite,
+			depthTest: true,
+			side: THREE.DoubleSide
+		});
+	}
+
+	function withXrayMaterials<T>(
+		focusObjectNames: string[] | undefined,
+		supportObjectNames: string[] | undefined,
+		renderFn: () => T
+	): T {
+		if (!scene) return renderFn();
+		const focusSet = new Set((focusObjectNames ?? []).map((name) => name.trim()).filter(Boolean));
+		if (focusSet.size === 0) return renderFn();
+		const supportSet = new Set(
+			(supportObjectNames ?? []).map((name) => name.trim()).filter(Boolean)
+		);
+		const focusMaterial = makeXrayMaterial('#7dd3fc', 1, true);
+		focusMaterial.wireframe = true;
+		const supportMaterial = makeXrayMaterial('#fbbf24', 0.55, false);
+		const contextMaterial = makeXrayMaterial('#7f8792', 0.16, false);
+		const swapped: Array<{ mesh: any; original: any }> = [];
+		scene.traverse((child: any) => {
+			if (isShadowGroundPlane(child)) return;
+			if (!child?.isMesh || !child.material || child.visible === false) return;
+			swapped.push({ mesh: child, original: child.material });
+			if (focusSet.has(child.name)) {
+				child.material = focusMaterial;
+			} else if (supportSet.has(child.name)) {
+				child.material = supportMaterial;
+			} else {
+				child.material = contextMaterial;
+			}
+		});
+		try {
+			return renderFn();
+		} finally {
+			for (const { mesh, original } of swapped) {
+				mesh.material = original;
+			}
+			focusMaterial.dispose();
+			supportMaterial.dispose();
+			contextMaterial.dispose();
+		}
+	}
+
 	type ScreenshotOptions = {
 		maxWidth?: number;
 		format?: 'image/png' | 'image/jpeg';
@@ -304,6 +356,10 @@
 		maxBytes?: number;
 		autoFrame?: boolean;
 		framePadding?: number;
+		viewDirection?: [number, number, number];
+		focusObjectNames?: string[];
+		xrayFocusObjectNames?: string[];
+		xraySupportObjectNames?: string[];
 	};
 
 	const estimateDataUrlBytes = (dataUrl: string): number => {
@@ -311,16 +367,46 @@
 		return Math.floor((base64Payload.length * 3) / 4);
 	};
 
-	function frameMountedRenderObject(padding = 1.05): boolean {
+	function normalizedViewDirection(viewDirection?: [number, number, number]) {
+		const fallback = new THREE.Vector3(-1, 0.65, -1);
+		if (!viewDirection) return fallback.normalize();
+		const next = new THREE.Vector3(viewDirection[0], viewDirection[1], viewDirection[2]);
+		if (next.lengthSq() < 1e-6) return fallback.normalize();
+		return next.normalize();
+	}
+
+	function boundsForFocusObjects(focusObjectNames?: string[]): THREE.Box3 | null {
+		if (!mountedRenderObject || !focusObjectNames?.length) return null;
+		const focusSet = new Set(focusObjectNames.map((name) => name.trim()).filter(Boolean));
+		if (focusSet.size === 0) return null;
+		const bounds = new THREE.Box3();
+		let matched = false;
+		mountedRenderObject.traverse((object: any) => {
+			if (!object?.isMesh || !object.name || !focusSet.has(object.name)) return;
+			const objectBounds = new THREE.Box3().setFromObject(object);
+			if (objectBounds.isEmpty()) return;
+			bounds.union(objectBounds);
+			matched = true;
+		});
+		return matched ? bounds : null;
+	}
+
+	function frameMountedRenderObject(
+		padding = 1.05,
+		viewDirectionInput?: [number, number, number],
+		focusObjectNames?: string[]
+	): boolean {
 		if (!mountedRenderObject || !camera || !controls) return false;
-		const bounds = new THREE.Box3().setFromObject(mountedRenderObject);
+		const bounds =
+			boundsForFocusObjects(focusObjectNames) ??
+			new THREE.Box3().setFromObject(mountedRenderObject);
 		if (bounds.isEmpty()) return false;
 
 		const center = bounds.getCenter(new THREE.Vector3());
 		const size = bounds.getSize(new THREE.Vector3());
 		const sphere = bounds.getBoundingSphere(new THREE.Sphere());
 		const radius = Math.max(sphere.radius, Math.max(size.x, size.y, size.z, 1) * 0.5);
-		const viewDirection = new THREE.Vector3(-1, 0.65, -1).normalize();
+		const viewDirection = normalizedViewDirection(viewDirectionInput);
 
 		if (camera.isPerspectiveCamera) {
 			const fovRad = THREE.MathUtils.degToRad(camera.fov || cameraFov || 50);
@@ -343,8 +429,12 @@
 		return true;
 	}
 
-	export function frameScene(padding = 1.05) {
-		const framed = frameMountedRenderObject(padding);
+	export function frameScene(
+		padding = 1.05,
+		viewDirection?: [number, number, number],
+		focusObjectNames?: string[]
+	) {
+		const framed = frameMountedRenderObject(padding, viewDirection, focusObjectNames);
 		if (framed) renderFrame();
 		return framed;
 	}
@@ -357,10 +447,20 @@
 			quality: requestedQuality = 0.9,
 			maxBytes,
 			autoFrame = false,
-			framePadding = 1.05
+			framePadding = 1.05,
+			viewDirection,
+			focusObjectNames,
+			xrayFocusObjectNames,
+			xraySupportObjectNames
 		} = options;
-		if (autoFrame) frameScene(framePadding);
-		renderFrame();
+		if (autoFrame) frameScene(framePadding, viewDirection, focusObjectNames);
+		if (xrayFocusObjectNames?.length) {
+			withXrayMaterials(xrayFocusObjectNames, xraySupportObjectNames, () => {
+				renderer.render(scene, camera);
+			});
+		} else {
+			renderFrame();
+		}
 
 		const sourceCanvas = document.createElement('canvas');
 		sourceCanvas.width = renderer.domElement.width;
@@ -382,6 +482,7 @@
 			}
 			sourceContext.drawImage(renderer.domElement, 0, 0, sourceCanvas.width, sourceCanvas.height);
 		}
+		if (xrayFocusObjectNames?.length) renderFrame();
 
 		const initialScale =
 			typeof maxWidth === 'number' && maxWidth > 0 && sourceCanvas.width > maxWidth
@@ -426,9 +527,49 @@
 			projection: cameraProjection,
 			position: camera.position.toArray(),
 			target: controls.target?.toArray?.() ?? [0, 0, 0],
+			up: camera.up.toArray(),
 			fov: camera.fov ?? null,
 			zoom: camera.zoom ?? null
 		};
+	}
+
+	export function restoreCameraSnapshot(
+		snapshot: {
+			position?: number[];
+			target?: number[];
+			fov?: number | null;
+			zoom?: number | null;
+		} | null
+	) {
+		if (!snapshot || !camera || !controls) return false;
+		const [px, py, pz] = snapshot.position ?? [];
+		const [tx, ty, tz] = snapshot.target ?? [];
+		if (
+			[px, py, pz, tx, ty, tz].some((value) => typeof value !== 'number' || !Number.isFinite(value))
+		) {
+			return false;
+		}
+		camera.position.set(px, py, pz);
+		controls.target.set(tx, ty, tz);
+		if (
+			camera.isPerspectiveCamera &&
+			typeof snapshot.fov === 'number' &&
+			Number.isFinite(snapshot.fov)
+		) {
+			camera.fov = snapshot.fov;
+		}
+		if (
+			camera.isOrthographicCamera &&
+			typeof snapshot.zoom === 'number' &&
+			Number.isFinite(snapshot.zoom)
+		) {
+			camera.zoom = snapshot.zoom;
+		}
+		camera.lookAt(controls.target);
+		camera.updateProjectionMatrix();
+		controls.update();
+		renderFrame();
+		return true;
 	}
 
 	export async function exportToGLB(): Promise<Blob> {

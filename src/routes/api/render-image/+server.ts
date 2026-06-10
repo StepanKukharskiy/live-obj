@@ -4,13 +4,26 @@ import type { RequestHandler } from './$types';
 const DEFAULT_OPENAI_IMAGES_API_URL = 'https://api.openai.com/v1/images/edits';
 const OPENAI_IMAGE_MODEL = 'gpt-image-1.5';
 const OPENAI_IMAGES_TIMEOUT_MS = 90_000;
+const MAX_SCENE_METADATA_CHARS = 12_000;
+
+type CameraSnapshot = {
+	projection?: string;
+	position?: number[];
+	target?: number[];
+	up?: number[];
+	fov?: number | null;
+	zoom?: number | null;
+} | null;
 
 function metadataFromLiveObj(liveObjText: string): string {
-	return liveObjText
+	const metadata = liveObjText
 		.split(/\r?\n/)
 		.map((line) => line.trim())
 		.filter((line) => line.startsWith('#@'))
+		.filter((line) => !/^#@dream_(?:base|delta)_v\b/i.test(line))
 		.join('\n');
+	if (metadata.length <= MAX_SCENE_METADATA_CHARS) return metadata;
+	return `${metadata.slice(0, MAX_SCENE_METADATA_CHARS)}\n#@note: scene metadata truncated for image prompt`;
 }
 
 function dataUrlToBlob(dataUrl: string): Blob {
@@ -83,10 +96,38 @@ async function imageUrlToDataUrl(imageUrl: string): Promise<string> {
 	return urlToDataUrl(imageUrl);
 }
 
+function numberList(value: unknown): string | null {
+	if (!Array.isArray(value)) return null;
+	const numbers = value.filter(
+		(item): item is number => typeof item === 'number' && Number.isFinite(item)
+	);
+	if (numbers.length !== value.length || numbers.length === 0) return null;
+	return `[${numbers.map((item) => Number(item.toFixed(4))).join(', ')}]`;
+}
+
+function cameraSnapshotPrompt(snapshot: CameraSnapshot): string {
+	if (!snapshot) return '';
+	const lines = [
+		`projection=${typeof snapshot.projection === 'string' ? snapshot.projection : 'unknown'}`,
+		numberList(snapshot.position) ? `position=${numberList(snapshot.position)}` : '',
+		numberList(snapshot.target) ? `target=${numberList(snapshot.target)}` : '',
+		numberList(snapshot.up) ? `up=${numberList(snapshot.up)}` : '',
+		typeof snapshot.fov === 'number' && Number.isFinite(snapshot.fov)
+			? `fov=${Number(snapshot.fov.toFixed(3))}`
+			: '',
+		typeof snapshot.zoom === 'number' && Number.isFinite(snapshot.zoom)
+			? `zoom=${Number(snapshot.zoom.toFixed(3))}`
+			: ''
+	].filter(Boolean);
+	if (!lines.length) return '';
+	return `\n\nCamera used for the reference screenshot:\n${lines.join('\n')}`;
+}
+
 export const POST: RequestHandler = async ({ request }) => {
 	let body: {
 		prompt?: string;
 		screenshotDataUrl?: string;
+		cameraSnapshot?: CameraSnapshot;
 		liveObjText?: string;
 		provider?: string;
 		apiKey?: string;
@@ -98,6 +139,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		body = (await request.json()) as {
 			prompt?: string;
 			screenshotDataUrl?: string;
+			cameraSnapshot?: CameraSnapshot;
 			liveObjText?: string;
 			provider?: string;
 			apiKey?: string;
@@ -111,6 +153,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const prompt = body.prompt?.trim() ?? '';
 	const screenshotDataUrl = body.screenshotDataUrl?.trim() ?? '';
+	const cameraPrompt = cameraSnapshotPrompt(body.cameraSnapshot ?? null);
 	const liveObjText = body.liveObjText ?? '';
 
 	if (!prompt) throw error(400, 'prompt is required');
@@ -129,6 +172,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const fullPrompt = `${prompt}
 
 Do not redesign the object. Preserve exact silhouette, object count, relative position, camera angle, major outlines, and block proportions.
+${cameraPrompt}
 
 Use this scene metadata as a hard constraint for objects, materials, and structure:
 ${sceneMetadata || '(no #@ metadata found)'}`;

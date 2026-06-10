@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { strToU8, zipSync } from 'fflate';
+
 	type RenderingMode = 'standard' | 'outline' | 'toon';
 	type CanvasAspectRatio =
 		| 'fill'
@@ -10,6 +12,46 @@
 		| '3:2'
 		| '2:3'
 		| '21:9';
+	type CameraSnapshot = {
+		projection?: string;
+		position?: number[];
+		target?: number[];
+		up?: number[];
+		fov?: number | null;
+		zoom?: number | null;
+	} | null;
+	type FrameAsset = {
+		id: string;
+		label: string;
+		source: 'screenshot' | 'generated';
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
+	type ShotFrame = {
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
+	type GeneratedClip = {
+		id: string;
+		status: string;
+		label?: string;
+		videoUrl?: string;
+		jobId?: string;
+		error?: string;
+	};
+	type VideoShot = {
+		start?: ShotFrame;
+		middle?: ShotFrame;
+		end?: ShotFrame;
+		clips: GeneratedClip[];
+	};
+	type ProcessImageAsset = {
+		label: string;
+		meta?: string;
+		imageDataUrl: string;
+	};
 
 	let {
 		backgroundColor = $bindable('#3a3a36'),
@@ -33,6 +75,10 @@
 		toonSteps = $bindable<2 | 3 | 4 | 5>(3),
 		toonOutline = $bindable(true),
 		liveObjText = '',
+		frameAssets = [],
+		videoShot = { clips: [] },
+		generatedDirectionJson = '',
+		processImages = [],
 		onOpenLiveObj
 	}: {
 		backgroundColor?: string;
@@ -56,22 +102,375 @@
 		toonSteps?: 2 | 3 | 4 | 5;
 		toonOutline?: boolean;
 		liveObjText?: string;
+		frameAssets?: FrameAsset[];
+		videoShot?: VideoShot;
+		generatedDirectionJson?: string;
+		processImages?: ProcessImageAsset[];
 		onOpenLiveObj?: (sourceText: string) => void | Promise<void>;
 	} = $props();
 
 	let openFileInput: HTMLInputElement | undefined = $state();
+	let downloadError = $state<string | null>(null);
 
-	function downloadObj() {
-		if (!liveObjText.trim()) return;
-		const blob = new Blob([liveObjText], { type: 'text/plain' });
+	type ObjTextureRef = {
+		objectName: string;
+		path: string;
+		filename: string;
+		materialName: string;
+	};
+
+	function sanitizeFilename(value: string, fallback: string): string {
+		const clean = value
+			.trim()
+			.split(/[\\/]/)
+			.pop()
+			?.replace(/[^A-Za-z0-9_.-]+/g, '-')
+			.replace(/^-+|-+$/g, '');
+		return clean || fallback;
+	}
+
+	function ensureImageExtension(filename: string, ext: string): string {
+		if (/\.(png|jpe?g|webp)$/i.test(filename)) return filename;
+		return `${filename}.${ext}`;
+	}
+
+	function dataUrlToBytes(
+		dataUrl: string
+	): { bytes: Uint8Array; mimeType: string; ext: string } | null {
+		const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+		if (!match) return null;
+		const mimeType = match[1];
+		const ext =
+			mimeType === 'image/jpeg'
+				? 'jpg'
+				: mimeType === 'image/webp'
+					? 'webp'
+					: mimeType === 'image/png'
+						? 'png'
+						: 'bin';
+		return {
+			bytes: new Uint8Array(
+				atob(match[2])
+					.split('')
+					.map((char) => char.charCodeAt(0))
+			),
+			mimeType,
+			ext
+		};
+	}
+
+	function shotFrameKey(frame: ShotFrame | undefined): string {
+		return frame ? `${frame.capturedAt}:${frame.imageDataUrl.slice(0, 80)}` : '';
+	}
+
+	function addProjectMediaFiles(files: Record<string, Uint8Array>) {
+		const manifestFrames: Array<{
+			path: string;
+			label: string;
+			source: FrameAsset['source'];
+			capturedAt: number;
+			camera: CameraSnapshot;
+		}> = [];
+		const manifestProcessImages: Array<{
+			path: string;
+			label: string;
+			meta?: string;
+		}> = [];
+		const manifestTimeline: Array<{
+			slot: string;
+			path: string;
+			capturedAt: number;
+			camera: CameraSnapshot;
+		}> = [];
+		const usedPaths = new Set<string>();
+		const putImage = (path: string, dataUrl: string): string | null => {
+			const payload = dataUrlToBytes(dataUrl);
+			if (!payload || payload.ext === 'bin') return null;
+			const normalizedPath = path.replace(/\.[^.]+$/, `.${payload.ext}`);
+			if (usedPaths.has(normalizedPath)) return normalizedPath;
+			files[normalizedPath] = payload.bytes;
+			usedPaths.add(normalizedPath);
+			return normalizedPath;
+		};
+
+		for (const [index, asset] of frameAssets.entries()) {
+			const safeLabel = sanitizeFilename(asset.label.toLowerCase(), `frame-${index + 1}`);
+			const path = putImage(
+				`screenshots/gallery/${String(index + 1).padStart(3, '0')}-${safeLabel}.png`,
+				asset.imageDataUrl
+			);
+			if (!path) continue;
+			manifestFrames.push({
+				path,
+				label: asset.label,
+				source: asset.source,
+				capturedAt: asset.capturedAt,
+				camera: asset.camera
+			});
+		}
+
+		for (const [index, image] of processImages.entries()) {
+			const safeLabel = sanitizeFilename(image.label.toLowerCase(), `process-${index + 1}`);
+			const path = putImage(
+				`screenshots/process/${String(index + 1).padStart(3, '0')}-${safeLabel}.png`,
+				image.imageDataUrl
+			);
+			if (!path) continue;
+			manifestProcessImages.push({
+				path,
+				label: image.label,
+				meta: image.meta
+			});
+		}
+
+		const timelineSlots: Array<[string, ShotFrame | undefined]> = [
+			['start', videoShot.start],
+			['middle', videoShot.middle],
+			['end', videoShot.end]
+		];
+		const galleryByKey = new Map(
+			manifestFrames.map((entry, index) => [shotFrameKey(frameAssets[index]), entry.path])
+		);
+		for (const [slot, frame] of timelineSlots) {
+			if (!frame) continue;
+			const galleryPath = galleryByKey.get(shotFrameKey(frame));
+			const path =
+				galleryPath ??
+				putImage(`screenshots/timeline/${slot}.png`, frame.imageDataUrl) ??
+				`screenshots/timeline/${slot}.png`;
+			manifestTimeline.push({
+				slot,
+				path,
+				capturedAt: frame.capturedAt,
+				camera: frame.camera
+			});
+		}
+
+		let creativeDirection: unknown = null;
+		if (generatedDirectionJson.trim()) {
+			try {
+				creativeDirection = JSON.parse(generatedDirectionJson);
+			} catch {
+				creativeDirection = generatedDirectionJson;
+			}
+		}
+
+		files['manifest.json'] = strToU8(
+			JSON.stringify(
+				{
+					createdAt: new Date().toISOString(),
+					source: 'spellshape-live-obj',
+					files: {
+						liveObj: 'spellshape-live.obj',
+						materialLibrary: 'spellshape-live.mtl'
+					},
+					media: {
+						gallery: manifestFrames,
+						process: manifestProcessImages,
+						timeline: manifestTimeline,
+						videoClips: videoShot.clips.map((clip) => ({
+							id: clip.id,
+							label: clip.label,
+							status: clip.status,
+							hasVideoUrl: Boolean(clip.videoUrl),
+							jobId: clip.jobId
+						}))
+					},
+					creativeDirection
+				},
+				null,
+				2
+			)
+		);
+	}
+
+	function metadataToken(raw: string, key: string): string | undefined {
+		return raw
+			.match(new RegExp(`(?:^|\\s)${key}=("[^"]+"|'[^']+'|\\S+)`))?.[1]
+			?.replace(/^['"]|['"]$/g, '');
+	}
+
+	function resolveDownloadTextureUrl(path: string): string {
+		const trimmed = path.trim();
+		if (/^(data:|blob:|https?:\/\/)/i.test(trimmed)) return trimmed;
+		if (/^\/api\//i.test(trimmed)) return trimmed;
+		const projectFileMatch = trimmed.match(/(?:^|[/\\])(project_live_obj_files[/\\].+)$/);
+		if (projectFileMatch) {
+			return `/api/project-file?path=${encodeURIComponent(projectFileMatch[1].replace(/\\/g, '/'))}`;
+		}
+		return `/api/project-file?path=${encodeURIComponent(trimmed)}`;
+	}
+
+	function parseDiffuseTextures(sourceText: string): ObjTextureRef[] {
+		const refs: ObjTextureRef[] = [];
+		let currentObject = 'object';
+		for (const line of sourceText.split(/\r?\n/)) {
+			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
+			if (objectMatch) {
+				currentObject = objectMatch[1];
+				continue;
+			}
+			const textureMatch = line.match(/^\s*#@texture:\s*(.+)$/);
+			if (!textureMatch) continue;
+			const rest = textureMatch[1];
+			const kind = (metadataToken(rest, 'kind') ?? 'diffuse').toLowerCase();
+			if (!['diffuse', 'albedo', 'color'].includes(kind)) continue;
+			const path = metadataToken(rest, 'path') ?? metadataToken(rest, 'src');
+			if (!path) continue;
+			const index = refs.length + 1;
+			const ext = path.match(/\.(png|jpe?g|webp)(?:$|[?#])/i)?.[1] ?? 'png';
+			refs.push({
+				objectName: currentObject,
+				path,
+				filename: ensureImageExtension(sanitizeFilename(path, `texture-${index}`), ext),
+				materialName: sanitizeFilename(`${currentObject}_mat`, `material_${index}`)
+			});
+		}
+		return refs;
+	}
+
+	function stripVolatileTempAssetMetadata(
+		sourceText: string,
+		keepPaths = new Set<string>()
+	): string {
+		return sourceText
+			.split(/\r?\n/)
+			.filter((line) => {
+				const assetMatch = line.match(
+					/^\s*#@(?:texture|debug_image):\s*.*\bpath=(\/api\/temp-assets\/[^\s]+)/
+				);
+				return !assetMatch || keepPaths.has(assetMatch[1]);
+			})
+			.join('\n');
+	}
+
+	function objWithStandardMaterials(sourceText: string, refs: ObjTextureRef[]): string {
+		if (refs.length === 0) return sourceText;
+		const byObject = new Map(refs.map((ref) => [ref.objectName, ref]));
+		const lines = sourceText.split(/\r?\n/);
+		const out: string[] = [];
+		if (!lines.some((line) => /^\s*mtllib\s+spellshape-live\.mtl\s*$/i.test(line))) {
+			out.push('mtllib spellshape-live.mtl');
+		}
+		let currentRef: ObjTextureRef | undefined;
+		let emittedUsemtl = false;
+		for (const line of lines) {
+			const textureMatch = line.match(/^(\s*#@texture:\s*.*\bpath=)([^\s]+)(.*)$/);
+			if (textureMatch) {
+				const matchingRef = refs.find((ref) => line.includes(ref.path));
+				out.push(
+					matchingRef ? `${textureMatch[1]}${matchingRef.filename}${textureMatch[3]}` : line
+				);
+				continue;
+			}
+			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
+			if (objectMatch) {
+				currentRef = byObject.get(objectMatch[1]);
+				emittedUsemtl = false;
+				out.push(line);
+				if (currentRef) {
+					out.push(`usemtl ${currentRef.materialName}`);
+					emittedUsemtl = true;
+				}
+				continue;
+			}
+			if (currentRef && !emittedUsemtl && /^\s*f\s+/.test(line)) {
+				out.push(`usemtl ${currentRef.materialName}`);
+				emittedUsemtl = true;
+			}
+			out.push(line);
+		}
+		return out.join('\n');
+	}
+
+	function mtlForTextures(refs: ObjTextureRef[]): string {
+		return refs
+			.map(
+				(ref) => `newmtl ${ref.materialName}
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.040 0.040 0.040
+Ns 24.000
+illum 2
+map_Kd ${ref.filename}`
+			)
+			.join('\n\n');
+	}
+
+	function triggerDownload(blob: Blob, filename: string) {
 		const url = URL.createObjectURL(blob);
 		const link = document.createElement('a');
 		link.href = url;
-		link.download = 'spellshape-live.obj';
+		link.download = filename;
 		document.body.appendChild(link);
 		link.click();
 		document.body.removeChild(link);
 		URL.revokeObjectURL(url);
+	}
+
+	async function downloadObj() {
+		downloadError = null;
+		if (!liveObjText.trim()) return;
+		const hasProjectMedia =
+			frameAssets.length > 0 ||
+			processImages.length > 0 ||
+			videoShot.start ||
+			videoShot.middle ||
+			videoShot.end ||
+			videoShot.clips.length > 0;
+		const textureRefs = parseDiffuseTextures(liveObjText);
+		if (textureRefs.length === 0 && !hasProjectMedia) {
+			triggerDownload(new Blob([liveObjText], { type: 'text/plain' }), 'spellshape-live.obj');
+			return;
+		}
+		const files: Record<string, Uint8Array> = {
+			'spellshape-live.obj': new Uint8Array(),
+			'spellshape-live.mtl': new Uint8Array()
+		};
+		const availableTextureRefs: ObjTextureRef[] = [];
+		const missingTextureRefs: ObjTextureRef[] = [];
+		for (const ref of textureRefs) {
+			const response = await fetch(resolveDownloadTextureUrl(ref.path));
+			if (!response.ok) {
+				missingTextureRefs.push(ref);
+				continue;
+			}
+			files[ref.filename] = new Uint8Array(await response.arrayBuffer());
+			availableTextureRefs.push(ref);
+		}
+		if (availableTextureRefs.length === 0 && !hasProjectMedia) {
+			const portableObj = stripVolatileTempAssetMetadata(liveObjText);
+			triggerDownload(new Blob([portableObj], { type: 'text/plain' }), 'spellshape-live.obj');
+			if (missingTextureRefs.length > 0) {
+				downloadError = 'Texture assets expired; downloaded OBJ without texture references.';
+			}
+			return;
+		}
+		const availablePaths = new Set(availableTextureRefs.map((ref) => ref.path));
+		const portableObj = stripVolatileTempAssetMetadata(liveObjText, availablePaths);
+		files['spellshape-live.obj'] = strToU8(
+			objWithStandardMaterials(portableObj, availableTextureRefs)
+		);
+		files['spellshape-live.mtl'] = strToU8(mtlForTextures(availableTextureRefs));
+		addProjectMediaFiles(files);
+		const zipped = zipSync(files);
+		const zipBytes = new Uint8Array(zipped.byteLength);
+		zipBytes.set(zipped);
+		triggerDownload(
+			new Blob([zipBytes.buffer], { type: 'application/zip' }),
+			'spellshape-live-obj.zip'
+		);
+		if (missingTextureRefs.length > 0) {
+			downloadError = `Downloaded OBJ with ${availableTextureRefs.length}/${textureRefs.length} texture file${availableTextureRefs.length === 1 ? '' : 's'}; expired textures were skipped.`;
+		}
+	}
+
+	async function downloadObjSafely() {
+		try {
+			await downloadObj();
+		} catch (err) {
+			downloadError = err instanceof Error ? err.message : String(err);
+		}
 	}
 
 	async function openObjFile(event: Event) {
@@ -93,7 +492,12 @@
 		>
 			Open Live OBJ
 		</button>
-		<button type="button" class="send-button" onclick={downloadObj} disabled={!liveObjText.trim()}>
+		<button
+			type="button"
+			class="send-button"
+			onclick={downloadObjSafely}
+			disabled={!liveObjText.trim()}
+		>
 			Save Live OBJ
 		</button>
 		<input
@@ -108,6 +512,9 @@
 		A standard OBJ with Spellshape metadata. Opens in any 3D app; reopen in Spellshape for editable
 		parts and parameters.
 	</p>
+	{#if downloadError}
+		<p class="live-obj-save-helper live-obj-save-error">{downloadError}</p>
+	{/if}
 	<div class="planner-chain">
 		<label class="planner-context-field rendering-mode">
 			<span class="planner-label-inline">Canvas</span>
@@ -301,6 +708,10 @@
 		color: rgba(15, 23, 42, 0.68);
 		font-size: 0.82rem;
 		line-height: 1.35;
+	}
+
+	.live-obj-save-error {
+		color: #b42318;
 	}
 
 	.rendering-mode select,
