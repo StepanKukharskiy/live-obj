@@ -50,6 +50,7 @@
 		projection?: string;
 		position?: number[];
 		target?: number[];
+		up?: number[];
 		fov?: number | null;
 		zoom?: number | null;
 	} | null;
@@ -69,14 +70,40 @@
 	type GeneratedClip = {
 		id: string;
 		status: string;
+		label?: string;
 		videoUrl?: string;
 		jobId?: string;
 		error?: string;
 	};
 	type VideoShot = {
 		start?: ShotFrame;
+		middle?: ShotFrame;
 		end?: ShotFrame;
 		clips: GeneratedClip[];
+	};
+	type ProcessImageAsset = {
+		label: string;
+		meta?: string;
+		imageDataUrl: string;
+	};
+	type AgentMetrics = {
+		processCaptures?: number;
+		galleryFrames?: number;
+		animationClips?: number;
+		buildEvents?: number;
+		elapsedMs?: number;
+		totalTokens?: number;
+		reasoningTokens?: number;
+		promptTokens?: number;
+		completionTokens?: number;
+	};
+	type CaptureSceneScreenshotOptions = {
+		frameObjectIds?: string[];
+		xrayFocusObjectIds?: string[];
+		xraySupportObjectIds?: string[];
+		viewDirection?: [number, number, number];
+		autoFrame?: boolean;
+		framePadding?: number;
 	};
 
 	let {
@@ -135,6 +162,9 @@
 		onStopGeneration,
 		onCaptureSceneScreenshot,
 		onCaptureSceneCameraSnapshot,
+		renderFrameAssets = $bindable<FrameAsset[]>([]),
+		renderVideoShot = $bindable<VideoShot>({ clips: [] }),
+		projectProcessImages = [],
 		onLaunchObjExample,
 		onOpenLiveObj,
 		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery')
@@ -192,8 +222,11 @@
 		};
 		onSend?: (payload: SendPayload) => void;
 		onStopGeneration?: () => void;
-		onCaptureSceneScreenshot?: () => string;
+		onCaptureSceneScreenshot?: (options?: CaptureSceneScreenshotOptions | string[]) => string;
 		onCaptureSceneCameraSnapshot?: () => CameraSnapshot;
+		renderFrameAssets?: FrameAsset[];
+		renderVideoShot?: VideoShot;
+		projectProcessImages?: ProcessImageAsset[];
 		onLaunchObjExample?: (liveObj: string) => void;
 		onOpenLiveObj?: (sourceText: string) => void | Promise<void>;
 		kernelDefault?: 'auto' | 'cadquery';
@@ -207,12 +240,64 @@
 	let renderVideoPrompt = $state('');
 	let renderScreenshotDataUrl = $state('');
 	let renderGeneratedImageDataUrl = $state('');
-	let renderFrameAssets = $state<FrameAsset[]>([]);
-	let renderVideoShot = $state<VideoShot>({ clips: [] });
 	let renderVideoBusy = $state(false);
 	let renderGeneratedDirectionJson = $state('');
 	let renderBusy = $state(false);
 	let renderErrorLine = $state<string | null>(null);
+
+	let chatProcessImageAssets = $derived.by(() => {
+		const assets: ProcessImageAsset[] = [];
+		for (const message of msgs) {
+			if (!message.imageDataUrl) continue;
+			assets.push({
+				label: message.content || message.meta || 'Process image',
+				...(message.meta ? { meta: message.meta } : {}),
+				imageDataUrl: message.imageDataUrl
+			});
+		}
+		return assets;
+	});
+	let packageProcessImages = $derived(
+		projectProcessImages.length ? projectProcessImages : chatProcessImageAssets
+	);
+
+	function durationMetaMs(meta: string | undefined): number {
+		const label = meta?.match(/\btime\s+(.+)$/i)?.[1]?.trim();
+		if (!label) return 0;
+		const minutes = Number(label.match(/(\d+(?:\.\d+)?)\s*m/i)?.[1] ?? 0);
+		const seconds = Number(label.match(/(\d+(?:\.\d+)?)\s*s/i)?.[1] ?? 0);
+		return Math.round((minutes * 60 + seconds) * 1000);
+	}
+
+	let agentMetrics = $derived.by(() => {
+		const lastUserIndex = msgs.map((message) => message.role).lastIndexOf('user');
+		const currentRunMessages = lastUserIndex >= 0 ? msgs.slice(lastUserIndex + 1) : msgs;
+		const tokenMessages = currentRunMessages
+			.map((message) => message.tokenUsage)
+			.filter((usage): usage is TokenUsageSummary => !!usage);
+		const sumTokenField = (field: keyof TokenUsageSummary) =>
+			tokenMessages.reduce((sum, usage) => sum + (usage[field] ?? 0), 0);
+		const elapsedMs = currentRunMessages.reduce(
+			(sum, message) => sum + durationMetaMs(message.meta),
+			0
+		);
+		const metrics: AgentMetrics = {
+			processCaptures: packageProcessImages.length,
+			galleryFrames: renderFrameAssets.length,
+			animationClips: renderVideoShot.clips.filter((clip) => !!clip.videoUrl).length,
+			buildEvents: currentRunMessages.filter((message) =>
+				/\b(Built|Added|Plan ready|Model pass finished|UV dream)\b/i.test(message.content)
+			).length,
+			elapsedMs,
+			totalTokens: sumTokenField('totalTokens'),
+			reasoningTokens: sumTokenField('reasoningTokens'),
+			promptTokens: sumTokenField('promptTokens'),
+			completionTokens: sumTokenField('completionTokens')
+		};
+		return Object.fromEntries(
+			Object.entries(metrics).filter(([, value]) => typeof value === 'number' && value > 0)
+		) as AgentMetrics;
+	});
 </script>
 
 {#if showPanel}
@@ -328,6 +413,10 @@
 					bind:toonSteps
 					bind:toonOutline
 					{liveObjText}
+					frameAssets={renderFrameAssets}
+					videoShot={renderVideoShot}
+					generatedDirectionJson={renderGeneratedDirectionJson}
+					processImages={packageProcessImages}
 					{onOpenLiveObj}
 				/>
 			{:else if activeTab === 'render'}
@@ -343,6 +432,8 @@
 					bind:generatedImageDataUrl={renderGeneratedImageDataUrl}
 					bind:frameAssets={renderFrameAssets}
 					bind:videoShot={renderVideoShot}
+					processImages={packageProcessImages}
+					{agentMetrics}
 					bind:videoBusy={renderVideoBusy}
 					bind:generatedDirectionJson={renderGeneratedDirectionJson}
 					bind:busy={renderBusy}
