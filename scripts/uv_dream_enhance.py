@@ -479,7 +479,7 @@ def pack_rects(sizes: List[Tuple[int, int]]) -> List[Tuple[int, int, int, int]]:
         scale *= 0.88
 
 
-def expand_rects_to_atlas(rects: List[Tuple[int, int, int, int]]) -> List[Tuple[int, int, int, int]]:
+def fit_rects_to_square_atlas(rects: List[Tuple[int, int, int, int]]) -> List[Tuple[int, int, int, int]]:
     if not rects:
         return rects
     min_x = min(x for x, _, _, _ in rects)
@@ -488,14 +488,20 @@ def expand_rects_to_atlas(rects: List[Tuple[int, int, int, int]]) -> List[Tuple[
     max_y = max(y + h for _, y, _, h in rects)
     span_x = max(max_x - min_x, 1)
     span_y = max(max_y - min_y, 1)
-    expanded: List[Tuple[int, int, int, int]] = []
+    margin = 12
+    available_w = max(1, ATLAS_W - margin * 2)
+    available_h = max(1, ATLAS_H - margin * 2)
+    scale = min(available_w / span_x, available_h / span_y)
+    origin_x = margin + (available_w - span_x * scale) * 0.5
+    origin_y = margin + (available_h - span_y * scale) * 0.5
+    fitted: List[Tuple[int, int, int, int]] = []
     for x, y, w, h in rects:
-        x0 = int(round((x - min_x) / span_x * ATLAS_W))
-        y0 = int(round((y - min_y) / span_y * ATLAS_H))
-        x1 = int(round((x + w - min_x) / span_x * ATLAS_W))
-        y1 = int(round((y + h - min_y) / span_y * ATLAS_H))
-        expanded.append((x0, y0, max(1, x1 - x0), max(1, y1 - y0)))
-    return expanded
+        x0 = int(round(origin_x + (x - min_x) * scale))
+        y0 = int(round(origin_y + (y - min_y) * scale))
+        x1 = int(round(origin_x + (x + w - min_x) * scale))
+        y1 = int(round(origin_y + (y + h - min_y) * scale))
+        fitted.append((x0, y0, max(1, x1 - x0), max(1, y1 - y0)))
+    return fitted
 
 
 def build_uv_layout(
@@ -590,7 +596,7 @@ def build_uv_layout(
             for role, _ in groups
         ]
         if radial
-        else expand_rects_to_atlas(pack_rects(provisional_sizes))
+        else fit_rects_to_square_atlas(pack_rects(provisional_sizes))
     )
     islands: List[UvIsland] = []
     face_island_indices = [-1] * len(faces)
