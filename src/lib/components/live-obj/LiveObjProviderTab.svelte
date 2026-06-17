@@ -17,6 +17,10 @@
 			text: ['gpt-5.5', 'gpt-4o'],
 			image: ['gpt-image-2', 'gpt-image-1.5']
 		},
+		claude: {
+			text: ['claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+			image: []
+		},
 		openrouter: {
 			text: [
 				'openai/gpt-5.5',
@@ -54,10 +58,7 @@
 				'gemini-2.5-flash'
 			],
 			image: ['gemini-3.1-flash-image-preview'],
-			video: [
-				'veo-3.1-generate-preview',
-				'veo-3.1-fast-generate-preview'
-			]
+			video: ['veo-3.1-generate-preview', 'veo-3.1-fast-generate-preview']
 		},
 		together: {
 			text: [
@@ -76,6 +77,10 @@
 		openai: {
 			text: 'https://api.openai.com/v1/chat/completions',
 			image: 'https://api.openai.com/v1/images/edits'
+		},
+		claude: {
+			text: 'https://api.anthropic.com/v1/messages',
+			image: ''
 		},
 		openrouter: {
 			text: 'https://openrouter.ai/api/v1/chat/completions',
@@ -125,7 +130,11 @@
 	let videoModels = $derived(
 		PROVIDER_MODELS[settings.provider as keyof typeof PROVIDER_MODELS]?.video || []
 	);
+	let providerSupportsImage = $derived(imageModels.length > 0);
 	let providerSupportsVideo = $derived(videoModels.length > 0);
+	let providerImageUnavailableMessage = $derived(
+		'Image generation is not available for this provider yet.'
+	);
 	let providerVideoUnavailableMessage = $derived(
 		'Video generation is not available for this provider yet.'
 	);
@@ -212,6 +221,7 @@
 		>Provider
 		<select bind:value={settings.provider} disabled={busy}>
 			<option value="openai">OpenAI</option>
+			<option value="claude">Claude</option>
 			<option value="openrouter">OpenRouter</option>
 			<option value="google">Google</option>
 			<option value="together">Together</option>
@@ -257,29 +267,33 @@
 		</label>
 	{/if}
 
-	<label
-		>Image Model
-		<select
-			value={imageModelChoice}
-			onchange={(e) => chooseImageModel((e.currentTarget as HTMLSelectElement).value)}
-			disabled={busy}
-		>
-			{#each imageModels as model (model)}
-				<option value={model}>{model}</option>
-			{/each}
-			<option value={CUSTOM}>Custom…</option>
-		</select>
-	</label>
-	{#if imageModelChoice === CUSTOM}
+	{#if providerSupportsImage}
 		<label
-			>Custom Image Model
-			<input
-				type="text"
-				bind:value={settings.imageModel}
-				placeholder="enter model id"
+			>Image Model
+			<select
+				value={imageModelChoice}
+				onchange={(e) => chooseImageModel((e.currentTarget as HTMLSelectElement).value)}
 				disabled={busy}
-			/>
+			>
+				{#each imageModels as model (model)}
+					<option value={model}>{model}</option>
+				{/each}
+				<option value={CUSTOM}>Custom…</option>
+			</select>
 		</label>
+		{#if imageModelChoice === CUSTOM}
+			<label
+				>Custom Image Model
+				<input
+					type="text"
+					bind:value={settings.imageModel}
+					placeholder="enter model id"
+					disabled={busy}
+				/>
+			</label>
+		{/if}
+	{:else}
+		<div class="provider-capability-note">{providerImageUnavailableMessage}</div>
 	{/if}
 	{#if providerSupportsVideo}
 		<label
