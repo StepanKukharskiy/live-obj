@@ -60,6 +60,17 @@ type CompletionPayload = {
 	output?: Array<{ content?: Array<{ text?: string | null }> }>;
 	output_text?: string | null;
 	candidates?: Array<{ content?: { parts?: Array<{ text?: string | null }> } }>;
+	content?: Array<{ text?: string | null }>;
+};
+
+type AnthropicContentBlock =
+	| { type: 'text'; text: string }
+	| { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+	| { type: 'image'; source: { type: 'url'; url: string } };
+
+type AnthropicMessage = {
+	role: 'user' | 'assistant';
+	content: AnthropicContentBlock[];
 };
 
 const REQUEST_TIMEOUT_MS = 120000;
@@ -169,6 +180,10 @@ function isOpenRouterApiUrl(apiUrl: string): boolean {
 	return apiUrl.includes('openrouter.ai');
 }
 
+function isAnthropicApiUrl(apiUrl: string): boolean {
+	return apiUrl.includes('api.anthropic.com');
+}
+
 function isTogetherApiUrl(apiUrl: string): boolean {
 	return apiUrl.includes('api.together.xyz');
 }
@@ -179,6 +194,13 @@ function sanitizeHeaderValue(value: string): string {
 
 function buildCompletionRequestHeaders(apiUrl: string, apiKey: string): Record<string, string> {
 	const safeApiKey = sanitizeHeaderValue(apiKey);
+	if (isAnthropicApiUrl(apiUrl)) {
+		return {
+			'Content-Type': 'application/json',
+			'x-api-key': safeApiKey,
+			'anthropic-version': '2023-06-01'
+		};
+	}
 	return {
 		'Content-Type': 'application/json',
 		Authorization: `Bearer ${safeApiKey}`,
@@ -198,6 +220,92 @@ function openAiModelRequiresDefaultTemperatureOnly(model: string): boolean {
 	return false;
 }
 
+function anthropicImageBlockFromUrl(url: string): AnthropicContentBlock | null {
+	const dataUrlMatch = url.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+	if (dataUrlMatch) {
+		return {
+			type: 'image',
+			source: {
+				type: 'base64',
+				media_type: dataUrlMatch[1],
+				data: dataUrlMatch[2]
+			}
+		};
+	}
+	if (/^https?:\/\//i.test(url)) {
+		return {
+			type: 'image',
+			source: {
+				type: 'url',
+				url
+			}
+		};
+	}
+	return null;
+}
+
+function anthropicContentBlocks(content: ChatMessageContent): AnthropicContentBlock[] {
+	if (typeof content === 'string') {
+		const text = content.trim();
+		return text ? [{ type: 'text', text }] : [];
+	}
+	return content
+		.map((part): AnthropicContentBlock | null => {
+			if (part.type === 'text') {
+				const text = part.text.trim();
+				return text ? { type: 'text', text } : null;
+			}
+			if (part.type === 'image_url') return anthropicImageBlockFromUrl(part.image_url.url);
+			return null;
+		})
+		.filter((part): part is AnthropicContentBlock => part != null);
+}
+
+function mergeAnthropicMessages(messages: AnthropicMessage[]): AnthropicMessage[] {
+	const merged: AnthropicMessage[] = [];
+	for (const message of messages) {
+		const previous = merged.at(-1);
+		if (previous?.role === message.role) {
+			previous.content.push(...message.content);
+		} else {
+			merged.push({ role: message.role, content: [...message.content] });
+		}
+	}
+	return merged;
+}
+
+function buildAnthropicRequestPayload(input: {
+	model: string;
+	messages: ChatCompletionMessage[];
+	maxTokens: number;
+	temperature: number;
+}): Record<string, unknown> {
+	const systemBlocks: string[] = [];
+	const anthropicMessages: AnthropicMessage[] = [];
+	for (const message of input.messages) {
+		const content = anthropicContentBlocks(message.content);
+		if (message.role === 'system') {
+			const systemText = content
+				.filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+				.map((block) => block.text)
+				.join('\n\n')
+				.trim();
+			if (systemText) systemBlocks.push(systemText);
+			continue;
+		}
+		if (content.length === 0) continue;
+		anthropicMessages.push({ role: message.role, content });
+	}
+
+	return {
+		model: input.model,
+		max_tokens: input.maxTokens,
+		temperature: input.temperature,
+		...(systemBlocks.length ? { system: systemBlocks.join('\n\n') } : {}),
+		messages: mergeAnthropicMessages(anthropicMessages)
+	};
+}
+
 function buildCompletionRequestPayload(input: {
 	apiUrl: string;
 	model: string;
@@ -208,6 +316,14 @@ function buildCompletionRequestPayload(input: {
 	const { apiUrl, model, messages, maxTokens, temperature: requested } = input;
 	const temperature =
 		isOpenAiApiUrl(apiUrl) && openAiModelRequiresDefaultTemperatureOnly(model) ? 1 : requested;
+	if (isAnthropicApiUrl(apiUrl)) {
+		return buildAnthropicRequestPayload({
+			model,
+			messages,
+			maxTokens,
+			temperature
+		});
+	}
 	if (isOpenAiApiUrl(apiUrl)) {
 		return {
 			model,
@@ -234,6 +350,10 @@ function extractStreamingDelta(data: unknown): string {
 	const payload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
 	const directDelta = payload.delta;
 	if (typeof directDelta === 'string') return directDelta;
+	if (directDelta && typeof directDelta === 'object') {
+		const anthropicDelta = directDelta as Record<string, unknown>;
+		if (typeof anthropicDelta.text === 'string') return anthropicDelta.text;
+	}
 	const choices = Array.isArray(payload.choices) ? payload.choices : [];
 	const choice =
 		choices[0] && typeof choices[0] === 'object' ? (choices[0] as Record<string, unknown>) : {};
@@ -244,6 +364,15 @@ function extractStreamingDelta(data: unknown): string {
 	if (typeof delta.content === 'string') return delta.content;
 	if (typeof choice.text === 'string') return choice.text;
 	return '';
+}
+
+function mergeTokenUsage(
+	previous: TokenUsage | undefined,
+	next: TokenUsage | undefined
+): TokenUsage | undefined {
+	if (!previous) return next;
+	if (!next) return previous;
+	return { ...previous, ...next };
 }
 
 /**
@@ -566,7 +695,7 @@ export async function streamChatCompletion({
 				if (!dataLine || dataLine === '[DONE]') continue;
 				try {
 					const parsed = JSON.parse(dataLine);
-					usage = extractTokenUsage(parsed, currentModel, label, 1) ?? usage;
+					usage = mergeTokenUsage(usage, extractTokenUsage(parsed, currentModel, label, 1));
 					const delta = extractStreamingDelta(parsed);
 					if (!delta) continue;
 					content += delta;
@@ -581,7 +710,7 @@ export async function streamChatCompletion({
 			if (dataLine && dataLine !== '[DONE]') {
 				try {
 					const parsed = JSON.parse(dataLine);
-					usage = extractTokenUsage(parsed, currentModel, label, 1) ?? usage;
+					usage = mergeTokenUsage(usage, extractTokenUsage(parsed, currentModel, label, 1));
 					const delta = extractStreamingDelta(parsed);
 					if (delta) {
 						content += delta;
@@ -650,6 +779,7 @@ export function extractCompletionContent(data: unknown): string {
 		extractTextFromContentValue(payload?.output?.[0]?.content) ||
 		payload?.output_text?.trim() ||
 		extractTextFromContentValue(payload?.candidates?.[0]?.content?.parts) ||
+		extractTextFromContentValue(payload?.content) ||
 		''
 	);
 }
@@ -678,18 +808,26 @@ function extractTokenUsage(
 	const payload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
 	const usage = objectFromRecord(payload, 'usage');
 	const usageMetadata = objectFromRecord(payload, 'usageMetadata');
-	if (Object.keys(usage).length === 0 && Object.keys(usageMetadata).length === 0) return undefined;
-	const promptDetails = objectFromRecord(usage, 'prompt_tokens_details');
-	const completionDetails = objectFromRecord(usage, 'completion_tokens_details');
-	const outputDetails = objectFromRecord(usage, 'output_tokens_details');
+	const message = objectFromRecord(payload, 'message');
+	const messageUsage = objectFromRecord(message, 'usage');
+	const resolvedUsage = Object.keys(usage).length ? usage : messageUsage;
+	if (Object.keys(resolvedUsage).length === 0 && Object.keys(usageMetadata).length === 0) {
+		return undefined;
+	}
+	const promptDetails = objectFromRecord(resolvedUsage, 'prompt_tokens_details');
+	const completionDetails = objectFromRecord(resolvedUsage, 'completion_tokens_details');
+	const outputDetails = objectFromRecord(resolvedUsage, 'output_tokens_details');
 	const promptTokens =
-		numberFromRecord(usage, ['prompt_tokens', 'input_tokens']) ??
+		numberFromRecord(resolvedUsage, ['prompt_tokens', 'input_tokens']) ??
 		numberFromRecord(usageMetadata, ['promptTokenCount']);
 	const completionTokens =
-		numberFromRecord(usage, ['completion_tokens', 'output_tokens']) ??
+		numberFromRecord(resolvedUsage, ['completion_tokens', 'output_tokens']) ??
 		numberFromRecord(usageMetadata, ['candidatesTokenCount']);
 	const totalTokens =
-		numberFromRecord(usage, ['total_tokens']) ??
+		numberFromRecord(resolvedUsage, ['total_tokens']) ??
+		(promptTokens != null && completionTokens != null
+			? promptTokens + completionTokens
+			: undefined) ??
 		numberFromRecord(usageMetadata, ['totalTokenCount']);
 	const reasoningTokens =
 		numberFromRecord(completionDetails, ['reasoning_tokens']) ??
