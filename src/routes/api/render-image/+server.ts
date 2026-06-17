@@ -128,6 +128,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	const apiKey = requestApiKey;
 	const imagesApiUrl = requestImageUrl || DEFAULT_OPENAI_IMAGES_API_URL;
 	if (!apiKey) throw error(500, 'API key is required');
+	if (provider === 'claude' || imagesApiUrl.includes('api.anthropic.com')) {
+		throw error(400, 'Claude API supports text and vision input, but not image generation.');
+	}
 
 	const sceneMetadata = metadataFromLiveObj(liveObjText);
 	const fullPrompt = `${prompt}
