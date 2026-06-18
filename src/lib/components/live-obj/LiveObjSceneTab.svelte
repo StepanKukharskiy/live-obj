@@ -12,6 +12,47 @@
 		| '3:2'
 		| '2:3'
 		| '21:9';
+	type CameraSnapshot = {
+		projection?: string;
+		position?: number[];
+		target?: number[];
+		up?: number[];
+		fov?: number | null;
+		zoom?: number | null;
+	} | null;
+	type FrameAsset = {
+		id: string;
+		label: string;
+		source: 'screenshot' | 'generated';
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
+	type ShotFrame = {
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
+	type GeneratedClip = {
+		id: string;
+		status: string;
+		label?: string;
+		videoUrl?: string;
+		jobId?: string;
+		error?: string;
+	};
+	type VideoShot = {
+		start?: ShotFrame;
+		middle?: ShotFrame;
+		end?: ShotFrame;
+		transitionPrompts?: Partial<Record<'startToMiddle' | 'middleToEnd', string>>;
+		clips: GeneratedClip[];
+	};
+	type ProcessImageAsset = {
+		label: string;
+		meta?: string;
+		imageDataUrl: string;
+	};
 
 	let {
 		backgroundColor = $bindable('#3a3a36'),
@@ -87,7 +128,9 @@
 	}
 
 	function metadataToken(raw: string, key: string): string | undefined {
-		return raw.match(new RegExp(`(?:^|\\s)${key}=("[^"]+"|'[^']+'|\\S+)`))?.[1]?.replace(/^['"]|['"]$/g, '');
+		return raw
+			.match(new RegExp(`(?:^|\\s)${key}=("[^"]+"|'[^']+'|\\S+)`))?.[1]
+			?.replace(/^['"]|['"]$/g, '');
 	}
 
 	function resolveDownloadTextureUrl(path: string): string {
@@ -129,7 +172,10 @@
 		return refs;
 	}
 
-	function stripVolatileTempAssetMetadata(sourceText: string, keepPaths = new Set<string>()): string {
+	function stripVolatileTempAssetMetadata(
+		sourceText: string,
+		keepPaths = new Set<string>()
+	): string {
 		return sourceText
 			.split(/\r?\n/)
 			.filter((line) => {
@@ -155,7 +201,9 @@
 			const textureMatch = line.match(/^(\s*#@texture:\s*.*\bpath=)([^\s]+)(.*)$/);
 			if (textureMatch) {
 				const matchingRef = refs.find((ref) => line.includes(ref.path));
-				out.push(matchingRef ? `${textureMatch[1]}${matchingRef.filename}${textureMatch[3]}` : line);
+				out.push(
+					matchingRef ? `${textureMatch[1]}${matchingRef.filename}${textureMatch[3]}` : line
+				);
 				continue;
 			}
 			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
@@ -236,12 +284,17 @@ map_Kd ${ref.filename}`
 		}
 		const availablePaths = new Set(availableTextureRefs.map((ref) => ref.path));
 		const portableObj = stripVolatileTempAssetMetadata(liveObjText, availablePaths);
-		files['spellshape-live.obj'] = strToU8(objWithStandardMaterials(portableObj, availableTextureRefs));
+		files['spellshape-live.obj'] = strToU8(
+			objWithStandardMaterials(portableObj, availableTextureRefs)
+		);
 		files['spellshape-live.mtl'] = strToU8(mtlForTextures(availableTextureRefs));
 		const zipped = zipSync(files);
 		const zipBytes = new Uint8Array(zipped.byteLength);
 		zipBytes.set(zipped);
-		triggerDownload(new Blob([zipBytes.buffer], { type: 'application/zip' }), 'spellshape-live-obj.zip');
+		triggerDownload(
+			new Blob([zipBytes.buffer], { type: 'application/zip' }),
+			'spellshape-live-obj.zip'
+		);
 		if (missingTextureRefs.length > 0) {
 			downloadError = `Downloaded OBJ with ${availableTextureRefs.length}/${textureRefs.length} texture file${availableTextureRefs.length === 1 ? '' : 's'}; expired textures were skipped.`;
 		}
@@ -274,7 +327,12 @@ map_Kd ${ref.filename}`
 		>
 			Open Live OBJ
 		</button>
-		<button type="button" class="send-button" onclick={downloadObjSafely} disabled={!liveObjText.trim()}>
+		<button
+			type="button"
+			class="send-button"
+			onclick={downloadObjSafely}
+			disabled={!liveObjText.trim()}
+		>
 			Save Live OBJ
 		</button>
 		<input

@@ -66,9 +66,19 @@ type RenderVideoBody = {
 	videoModel?: string;
 	startFrameDataUrl?: string;
 	endFrameDataUrl?: string;
+	startCamera?: CameraSnapshot;
+	endCamera?: CameraSnapshot;
 	durationSeconds?: number;
 	aspectRatio?: string;
 };
+type CameraSnapshot = {
+	projection?: string;
+	position?: number[];
+	target?: number[];
+	up?: number[];
+	fov?: number | null;
+	zoom?: number | null;
+} | null;
 type InlineImage = { mimeType: string; data: string };
 type ParsedRenderVideoBody = RenderVideoBody & {
 	startFrameImage?: InlineImage;
@@ -117,7 +127,9 @@ function cleanProviderField(value: string | undefined): string | undefined {
 	return cleaned || undefined;
 }
 
-function isFormFileLike(value: FormDataEntryValue | null): value is FormDataEntryValue & FormFileLike {
+function isFormFileLike(
+	value: FormDataEntryValue | null
+): value is FormDataEntryValue & FormFileLike {
 	return (
 		typeof value === 'object' &&
 		value !== null &&
@@ -142,6 +154,16 @@ function formString(form: FormData, key: string): string | undefined {
 	return typeof value === 'string' ? value : undefined;
 }
 
+function parseCameraSnapshot(value: string | undefined): CameraSnapshot {
+	if (!value) return null;
+	try {
+		const parsed = JSON.parse(value) as CameraSnapshot;
+		return parsed && typeof parsed === 'object' ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
 async function parseRenderVideoRequest(request: Request): Promise<ParsedRenderVideoBody> {
 	const contentType = request.headers.get('content-type') ?? '';
 	if (contentType.includes('multipart/form-data')) {
@@ -159,6 +181,8 @@ async function parseRenderVideoRequest(request: Request): Promise<ParsedRenderVi
 			videoUrl: cleanProviderField(formString(form, 'videoUrl')),
 			videoModel: cleanProviderField(formString(form, 'videoModel')),
 			aspectRatio: formString(form, 'aspectRatio'),
+			startCamera: parseCameraSnapshot(formString(form, 'startCamera')),
+			endCamera: parseCameraSnapshot(formString(form, 'endCamera')),
 			startFrameImage: await blobToInlineImage(form.get('startFrame'), 'startFrame'),
 			endFrameImage: await blobToInlineImage(form.get('endFrame'), 'endFrame')
 		};
@@ -175,6 +199,43 @@ function googleImagePayload(image: { mimeType: string; data: string }) {
 		mimeType: image.mimeType,
 		bytesBase64Encoded: image.data
 	};
+}
+
+function numberList(value: unknown): string {
+	if (!Array.isArray(value)) return '';
+	const numbers = value.filter(
+		(item): item is number => typeof item === 'number' && Number.isFinite(item)
+	);
+	if (numbers.length !== value.length || numbers.length === 0) return '';
+	return `[${numbers.map((item) => Number(item.toFixed(4))).join(', ')}]`;
+}
+
+function cameraLines(snapshot: CameraSnapshot): string[] {
+	if (!snapshot) return [];
+	return [
+		`projection=${typeof snapshot.projection === 'string' ? snapshot.projection : 'unknown'}`,
+		numberList(snapshot.position) ? `position=${numberList(snapshot.position)}` : '',
+		numberList(snapshot.target) ? `target=${numberList(snapshot.target)}` : '',
+		numberList(snapshot.up) ? `up=${numberList(snapshot.up)}` : '',
+		typeof snapshot.fov === 'number' && Number.isFinite(snapshot.fov)
+			? `fov=${Number(snapshot.fov.toFixed(3))}`
+			: '',
+		typeof snapshot.zoom === 'number' && Number.isFinite(snapshot.zoom)
+			? `zoom=${Number(snapshot.zoom.toFixed(3))}`
+			: ''
+	].filter(Boolean);
+}
+
+function cameraPairPrompt(startCamera: CameraSnapshot, endCamera: CameraSnapshot): string {
+	const startLines = cameraLines(startCamera);
+	const endLines = cameraLines(endCamera);
+	if (!startLines.length && !endLines.length) return '';
+	return `\n\nFrame camera context:
+${startLines.length ? `Start frame camera:\n${startLines.join('\n')}` : 'Start frame camera: unavailable'}
+
+${endLines.length ? `End frame camera:\n${endLines.join('\n')}` : 'End frame camera: unavailable'}
+
+Treat this camera metadata as continuity guidance for framing, apparent object scale, view direction, and transition intent.`;
 }
 
 function publicVideoFrameUrl(requestUrl: URL, image: InlineImage): string {
@@ -271,7 +332,10 @@ function knownModelSupportsEndFrame(provider: string, model: string): boolean {
 	return false;
 }
 
-function openRouterFallbackCapabilities(model: string, requestedAspectRatio: string): OpenRouterVideoCapabilities {
+function openRouterFallbackCapabilities(
+	model: string,
+	requestedAspectRatio: string
+): OpenRouterVideoCapabilities {
 	const supportsLastFrame = knownModelSupportsEndFrame('openrouter', model);
 	const supportedDurations = model.trim().toLowerCase().includes('veo-3.1') ? [4, 6, 8] : [5, 8];
 	return {
@@ -285,7 +349,10 @@ function openRouterFallbackCapabilities(model: string, requestedAspectRatio: str
 	};
 }
 
-function chooseOpenRouterDuration(supportedDurations: number[] | null | undefined, hasEndFrame: boolean): number {
+function chooseOpenRouterDuration(
+	supportedDurations: number[] | null | undefined,
+	hasEndFrame: boolean
+): number {
 	const durations = [...(supportedDurations ?? [])]
 		.filter((duration) => Number.isFinite(duration) && duration > 0)
 		.sort((a, b) => a - b);
@@ -361,7 +428,9 @@ async function openRouterVideoCapabilities(
 		const payload = (await response.json().catch(() => ({}))) as {
 			data?: OpenRouterVideoModel[];
 		};
-		const match = payload.data?.find((entry) => entry.id === model || entry.canonical_slug === model);
+		const match = payload.data?.find(
+			(entry) => entry.id === model || entry.canonical_slug === model
+		);
 		if (!match) return openRouterFallbackCapabilities(model, requestedAspectRatio);
 		const supportedFrames = match.supported_frame_images;
 		const supportsLastFrame = supportedFrames?.includes('last_frame') ?? false;
@@ -461,7 +530,8 @@ export const POST: RequestHandler = async ({ request, url }) => {
 	const prompt = body.prompt?.trim() ?? '';
 	const apiKey = body.apiKey?.trim() ?? '';
 	const requestedVideoModel = body.videoModel?.trim() ?? '';
-	const videoModel = provider === 'google' ? normalizeGoogleVideoModel(requestedVideoModel) : requestedVideoModel;
+	const videoModel =
+		provider === 'google' ? normalizeGoogleVideoModel(requestedVideoModel) : requestedVideoModel;
 	const startFrameDataUrl = body.startFrameDataUrl?.trim() ?? '';
 	const requestedEndFrameDataUrl = body.endFrameDataUrl?.trim() ?? '';
 	const aspectRatio = body.aspectRatio?.trim() || '16:9';
@@ -518,6 +588,7 @@ export const POST: RequestHandler = async ({ request, url }) => {
 	const fullPrompt = `${prompt}
 
 Preserve the scene layout, object count, relative positions, silhouette, and camera intent from the supplied frame image${endFrameImage ? 's' : ''}. Use hard continuity over invention.
+${cameraPairPrompt(body.startCamera ?? null, body.endCamera ?? null)}
 
 Live OBJ metadata:
 ${sceneMetadata || '(no #@ metadata found)'}`;

@@ -6,6 +6,41 @@ const OPENAI_IMAGE_MODEL = 'gpt-image-1.5';
 const OPENAI_IMAGES_TIMEOUT_MS = 90_000;
 const MAX_SCENE_METADATA_CHARS = 12_000;
 
+type CameraSnapshot = {
+	projection?: string;
+	position?: number[];
+	target?: number[];
+	up?: number[];
+	fov?: number | null;
+	zoom?: number | null;
+} | null;
+
+function normalizeAspectRatio(value: unknown): string | null {
+	const text = typeof value === 'string' ? value.trim() : '';
+	if (!/^\d+:\d+$/.test(text)) return null;
+	const [w, h] = text.split(':').map(Number);
+	if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+	return `${w}:${h}`;
+}
+
+function positiveInteger(value: unknown): number | null {
+	const number = Number(value);
+	if (!Number.isInteger(number) || number <= 0) return null;
+	return number;
+}
+
+function openAiSizeForTarget(
+	aspectRatio: string | null,
+	width: number | null,
+	height: number | null
+) {
+	if (width && height && width === height) return '1024x1024';
+	if (aspectRatio === '1:1') return '1024x1024';
+	if (aspectRatio === '3:2' || aspectRatio === '16:9') return '1536x1024';
+	if (aspectRatio === '2:3' || aspectRatio === '9:16') return '1024x1536';
+	return null;
+}
+
 function metadataFromLiveObj(liveObjText: string): string {
 	const metadata = liveObjText
 		.split(/\r?\n/)
@@ -97,6 +132,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		apiUrl?: string;
 		imageUrl?: string;
 		imageModel?: string;
+		targetAspectRatio?: string;
+		targetWidth?: number;
+		targetHeight?: number;
 	};
 	try {
 		body = (await request.json()) as {
@@ -108,6 +146,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			apiUrl?: string;
 			imageUrl?: string;
 			imageModel?: string;
+			targetAspectRatio?: string;
+			targetWidth?: number;
+			targetHeight?: number;
 		};
 	} catch {
 		throw error(400, 'Invalid JSON');
@@ -132,8 +173,28 @@ export const POST: RequestHandler = async ({ request }) => {
 		throw error(400, 'Claude API supports text and vision input, but not image generation.');
 	}
 
+	const targetAspectRatio = normalizeAspectRatio(body.targetAspectRatio);
+	const targetWidth = positiveInteger(body.targetWidth);
+	const targetHeight = positiveInteger(body.targetHeight);
+	const targetCanvasPrompt =
+		targetAspectRatio || (targetWidth && targetHeight)
+			? [
+					'Canvas requirement:',
+					targetWidth && targetHeight
+						? `Return exactly one ${targetWidth}x${targetHeight}px image.`
+						: '',
+					targetAspectRatio
+						? `The output aspect ratio must be ${targetAspectRatio}; do not return a 16:9 landscape sheet unless that exact ratio was requested.`
+						: '',
+					'Do not add extra panels, duplicated atlas columns, padding, letterboxing, or a wider presentation canvas.'
+				]
+					.filter(Boolean)
+					.join('\n')
+			: '';
 	const sceneMetadata = metadataFromLiveObj(liveObjText);
 	const fullPrompt = `${prompt}
+
+${targetCanvasPrompt}
 
 Do not redesign the object. Preserve exact silhouette, object count, relative position, camera angle, major outlines, and block proportions.
 
@@ -200,6 +261,12 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 	if (isGoogleGenerateContentUrl(imagesApiUrl)) {
 		const image = dataUrlToInlineImage(screenshotDataUrl);
 		const googleUrl = googleGenerateContentUrlForModel(imagesApiUrl, imageModel);
+		const generationConfig: Record<string, unknown> = {
+			responseModalities: ['TEXT', 'IMAGE']
+		};
+		if (targetAspectRatio) {
+			generationConfig.imageConfig = { aspectRatio: targetAspectRatio };
+		}
 		const abortController = new AbortController();
 		const timeout = setTimeout(() => abortController.abort(), OPENAI_IMAGES_TIMEOUT_MS);
 		let response: Response;
@@ -225,9 +292,7 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 							]
 						}
 					],
-					generationConfig: {
-						responseModalities: ['TEXT', 'IMAGE']
-					}
+					generationConfig
 				}),
 				signal: abortController.signal
 			});
@@ -280,6 +345,8 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 	form.append('model', imageModel);
 	form.append('prompt', fullPrompt);
 	form.append('image', dataUrlToBlob(screenshotDataUrl), 'scene-screenshot.jpg');
+	const openAiSize = openAiSizeForTarget(targetAspectRatio, targetWidth, targetHeight);
+	if (openAiSize) form.append('size', openAiSize);
 
 	const abortController = new AbortController();
 	const timeout = setTimeout(() => abortController.abort(), OPENAI_IMAGES_TIMEOUT_MS);
@@ -331,7 +398,8 @@ ${sceneMetadata || '(no #@ metadata found)'}`;
 				body: JSON.stringify({
 					model: imageModel,
 					prompt: fullPrompt,
-					image: dataUrlToBase64Payload(screenshotDataUrl)
+					image: dataUrlToBase64Payload(screenshotDataUrl),
+					...(openAiSize ? { size: openAiSize } : {})
 				})
 			});
 		} catch (err) {

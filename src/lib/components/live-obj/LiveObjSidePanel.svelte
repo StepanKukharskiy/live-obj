@@ -79,12 +79,19 @@
 		start?: ShotFrame;
 		middle?: ShotFrame;
 		end?: ShotFrame;
+		transitionPrompts?: Partial<Record<'startToMiddle' | 'middleToEnd', string>>;
 		clips: GeneratedClip[];
 	};
 	type ProcessImageAsset = {
 		label: string;
 		meta?: string;
 		imageDataUrl: string;
+	};
+	type ModelUsage = {
+		role: string;
+		provider: string;
+		model: string;
+		usedAt: number;
 	};
 	type AgentMetrics = {
 		processCaptures?: number;
@@ -162,8 +169,11 @@
 		onStopGeneration,
 		onCaptureSceneScreenshot,
 		onCaptureSceneCameraSnapshot,
+		onCaptureReelTurntableFrames,
 		renderFrameAssets = $bindable<FrameAsset[]>([]),
 		renderVideoShot = $bindable<VideoShot>({ clips: [] }),
+		renderTurntableFrameAssets = $bindable<FrameAsset[]>([]),
+		renderModelUsage = $bindable<ModelUsage[]>([]),
 		projectProcessImages = [],
 		onLaunchObjExample,
 		onOpenLiveObj,
@@ -224,8 +234,11 @@
 		onStopGeneration?: () => void;
 		onCaptureSceneScreenshot?: (options?: CaptureSceneScreenshotOptions | string[]) => string;
 		onCaptureSceneCameraSnapshot?: () => CameraSnapshot;
+		onCaptureReelTurntableFrames?: () => Promise<FrameAsset[]>;
 		renderFrameAssets?: FrameAsset[];
 		renderVideoShot?: VideoShot;
+		renderTurntableFrameAssets?: FrameAsset[];
+		renderModelUsage?: ModelUsage[];
 		projectProcessImages?: ProcessImageAsset[];
 		onLaunchObjExample?: (liveObj: string) => void;
 		onOpenLiveObj?: (sourceText: string) => void | Promise<void>;
@@ -237,7 +250,6 @@
 	let chatFeedbackLoop = $state(false);
 	let chatAttachedDataUrl = $state<string | undefined>(undefined);
 	let renderPrompt = $state('');
-	let renderVideoPrompt = $state('');
 	let renderScreenshotDataUrl = $state('');
 	let renderGeneratedImageDataUrl = $state('');
 	let renderVideoBusy = $state(false);
@@ -245,10 +257,24 @@
 	let renderBusy = $state(false);
 	let renderErrorLine = $state<string | null>(null);
 
+	function isTextureOrAtlasChatImage(message: ChatMsg): boolean {
+		const text = `${message.meta ?? ''} ${message.content ?? ''}`.toLowerCase();
+		return (
+			text.includes('texture artifact') ||
+			text.includes('uv debug artifact') ||
+			text.includes('source uv unwrap') ||
+			text.includes('generated uv height') ||
+			text.includes('generated uv diffuse') ||
+			text.includes('dream source sheet') ||
+			text.includes('dream map sheet')
+		);
+	}
+
 	let chatProcessImageAssets = $derived.by(() => {
 		const assets: ProcessImageAsset[] = [];
 		for (const message of msgs) {
 			if (!message.imageDataUrl) continue;
+			if (!isTextureOrAtlasChatImage(message)) continue;
 			assets.push({
 				label: message.content || message.meta || 'Process image',
 				...(message.meta ? { meta: message.meta } : {}),
@@ -257,9 +283,17 @@
 		}
 		return assets;
 	});
-	let packageProcessImages = $derived(
-		projectProcessImages.length ? projectProcessImages : chatProcessImageAssets
-	);
+	let packageProcessImages = $derived.by(() => {
+		const seen = new Set<string>();
+		const merged: ProcessImageAsset[] = [];
+		for (const asset of [...projectProcessImages, ...chatProcessImageAssets]) {
+			const key = `${asset.meta ?? ''}|${asset.label}|${asset.imageDataUrl}`;
+			if (!asset.imageDataUrl || seen.has(key)) continue;
+			seen.add(key);
+			merged.push(asset);
+		}
+		return merged;
+	});
 
 	function durationMetaMs(meta: string | undefined): number {
 		const label = meta?.match(/\btime\s+(.+)$/i)?.[1]?.trim();
@@ -425,13 +459,15 @@
 					{providerSettings}
 					{onCaptureSceneScreenshot}
 					{onCaptureSceneCameraSnapshot}
+					{onCaptureReelTurntableFrames}
 					{canvasAspectRatio}
 					bind:prompt={renderPrompt}
-					bind:videoPrompt={renderVideoPrompt}
 					bind:screenshotDataUrl={renderScreenshotDataUrl}
 					bind:generatedImageDataUrl={renderGeneratedImageDataUrl}
 					bind:frameAssets={renderFrameAssets}
 					bind:videoShot={renderVideoShot}
+					bind:turntableFrameAssets={renderTurntableFrameAssets}
+					bind:modelUsage={renderModelUsage}
 					processImages={packageProcessImages}
 					{agentMetrics}
 					bind:videoBusy={renderVideoBusy}

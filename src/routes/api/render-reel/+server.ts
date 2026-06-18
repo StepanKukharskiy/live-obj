@@ -2,18 +2,17 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { randomUUID } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import ffmpegPath from 'ffmpeg-static';
-import ffprobeStatic from 'ffprobe-static';
 
 const execFile = promisify(execFileCallback);
 const MAX_ASSET_BYTES = 120 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 520;
 const MAX_PROCESS_IMAGES = 9;
-const MAX_TEXTURE_IMAGES = 6;
+const MAX_TEXTURE_IMAGES = 8;
 const MAX_GALLERY_IMAGES = 8;
 const MAX_REEL_LINE_LENGTH = 92;
 
@@ -38,6 +37,11 @@ type ReelAgentMetrics = {
 	promptTokens?: number;
 	completionTokens?: number;
 };
+type ReelModel = {
+	role?: string;
+	provider?: string;
+	model?: string;
+};
 type ReelBody = {
 	aspectRatio?: ReelAspectRatio;
 	liveObjText?: string;
@@ -46,12 +50,15 @@ type ReelBody = {
 	videoPrompt?: string;
 	galleryFrames?: ReelImage[];
 	timelineFrames?: ReelImage[];
+	turntableFrames?: ReelImage[];
+	sourceFrames?: ReelImage[];
 	processImages?: ReelImage[];
 	textureImages?: ReelImage[];
 	projectStructure?: string[];
 	finalClips?: ReelClip[];
 	finalClip?: ReelClip;
 	agentMetrics?: ReelAgentMetrics;
+	modelsUsed?: ReelModel[];
 };
 type WrittenAsset = {
 	label: string;
@@ -60,6 +67,14 @@ type WrittenAsset = {
 	kind: 'image' | 'video';
 	durationSeconds?: number;
 };
+type FfmpegToolPaths = {
+	ffmpegPath: string;
+	ffprobePath?: string;
+	binaryDirs: string[];
+};
+
+let ffmpegToolPathsPromise: Promise<FfmpegToolPaths> | null = null;
+let hyperframesBrowserPathPromise: Promise<string | undefined> | null = null;
 
 function shortText(value: unknown, fallback: string): string {
 	const text = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
@@ -92,6 +107,14 @@ function compactReelText(
 			? `${firstSentence.slice(0, maxLength - 1).trim()}...`
 			: firstSentence;
 	return compact || fallback;
+}
+
+function compactReelTitle(value: unknown, fallback: string, maxLength = 74): string {
+	const text = publicReelText(value, fallback);
+	if (text.length <= maxLength) return text || fallback;
+	const boundary = text.lastIndexOf(' ', maxLength - 1);
+	const cut = boundary > Math.floor(maxLength * 0.55) ? boundary : maxLength - 1;
+	return `${text.slice(0, cut).trim()}...`;
 }
 
 function reelSentence(value: unknown, fallback: string): string {
@@ -149,6 +172,40 @@ function structureEntries(value: unknown): string[] {
 	return entries.slice(0, 24);
 }
 
+function modelIdText(value: unknown, maxLength = 82): string {
+	const text =
+		typeof value === 'string'
+			? value.trim().replace(/\s+/g, ' ')
+			: value == null
+				? ''
+				: String(value).trim().replace(/\s+/g, ' ');
+	if (!text) return '';
+	return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+}
+
+function modelEntries(value: unknown): ReelModel[] {
+	if (!Array.isArray(value)) return [];
+	const seen = new Set<string>();
+	const entries: ReelModel[] = [];
+	for (const item of value) {
+		if (!item || typeof item !== 'object') continue;
+		const source = item as Record<string, unknown>;
+		const role = modelIdText(source.role, 32);
+		const provider = modelIdText(source.provider, 32);
+		const model = modelIdText(source.model);
+		if (!model) continue;
+		const key = `${role}|${provider}|${model}`.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		entries.push({
+			...(role ? { role } : {}),
+			...(provider ? { provider } : {}),
+			model
+		});
+	}
+	return entries.slice(0, 6);
+}
+
 function dataUrlToBuffer(dataUrl: string): { bytes: Buffer; mimeType: string; ext: string } {
 	const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
 	if (!match) throw error(400, 'Invalid reel asset data URL');
@@ -173,23 +230,74 @@ function dataUrlToBuffer(dataUrl: string): { bytes: Buffer; mimeType: string; ex
 	return { bytes, mimeType, ext };
 }
 
-async function assertFfmpegAvailable() {
-	const ffmpegBinary = ffmpegPath || 'ffmpeg';
+async function optionalImportModule<T>(specifier: string): Promise<T | null> {
 	try {
-		await execFile(ffmpegBinary, ['-version'], { timeout: 8_000 });
+		return (await import(/* @vite-ignore */ specifier)) as T;
+	} catch {
+		return null;
+	}
+}
+
+async function commandWorks(command: string): Promise<boolean> {
+	try {
+		await execFile(command, ['-version'], { timeout: 8_000 });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function firstWorkingCommand(candidates: string[]): Promise<string | undefined> {
+	for (const candidate of candidates) {
+		if (await commandWorks(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+async function resolveFfmpegToolPaths(): Promise<FfmpegToolPaths> {
+	if (ffmpegToolPathsPromise) return ffmpegToolPathsPromise;
+	ffmpegToolPathsPromise = (async () => {
+		const ffmpegStatic = await optionalImportModule<{ default?: string | null }>('ffmpeg-static');
+		const ffprobeStatic = await optionalImportModule<{
+			default?: string | { path?: string } | null;
+			path?: string;
+		}>('ffprobe-static');
+		const ffprobeDefault = ffprobeStatic?.default;
+		const ffmpegPath =
+			(await firstWorkingCommand([ffmpegStatic?.default || '', 'ffmpeg'])) || 'ffmpeg';
+		const staticFfprobePath =
+			(typeof ffprobeDefault === 'string'
+				? ffprobeDefault
+				: ffprobeDefault?.path || ffprobeStatic?.path) || 'ffprobe';
+		const ffprobePath = await firstWorkingCommand([staticFfprobePath, 'ffprobe']);
+		const binaryDirs = [
+			ffmpegPath !== 'ffmpeg' ? path.dirname(ffmpegPath) : '',
+			ffprobePath && ffprobePath !== 'ffprobe' ? path.dirname(ffprobePath) : ''
+		].filter(Boolean);
+		return { ffmpegPath, ...(ffprobePath ? { ffprobePath } : {}), binaryDirs };
+	})();
+	return ffmpegToolPathsPromise;
+}
+
+async function assertFfmpegAvailable(toolPaths: FfmpegToolPaths) {
+	try {
+		await execFile(toolPaths.ffmpegPath, ['-version'], { timeout: 8_000 });
 	} catch {
 		throw error(
 			501,
-			'Generate reel uses HyperFrames MP4 export, but the server-side FFmpeg binary is unavailable. Reinstall dependencies, then try Generate reel again.'
+			'Generate reel needs FFmpeg for MP4 export, but no FFmpeg binary is available. Reinstall dependencies so ffmpeg-static is present, or install ffmpeg on this machine, then try again.'
 		);
 	}
 }
 
-async function videoDurationSeconds(filePath: string): Promise<number | undefined> {
-	if (!ffprobeStatic.path) return undefined;
+async function videoDurationSeconds(
+	filePath: string,
+	toolPaths: FfmpegToolPaths
+): Promise<number | undefined> {
+	if (!toolPaths.ffprobePath) return undefined;
 	try {
 		const { stdout } = await execFile(
-			ffprobeStatic.path,
+			toolPaths.ffprobePath,
 			[
 				'-v',
 				'error',
@@ -209,15 +317,73 @@ async function videoDurationSeconds(filePath: string): Promise<number | undefine
 	}
 }
 
-function renderEnvironment(): NodeJS.ProcessEnv {
-	const binaryDirs = [
-		ffmpegPath ? path.dirname(ffmpegPath) : '',
-		ffprobeStatic.path ? path.dirname(ffprobeStatic.path) : ''
-	].filter(Boolean);
+function hyperframesChromeCacheDir(): string {
+	return path.join(homedir(), '.cache', 'hyperframes', 'chrome');
+}
+
+async function hyperframesBrowserPath(cliPath: string): Promise<string | undefined> {
+	if (hyperframesBrowserPathPromise) return hyperframesBrowserPathPromise;
+	hyperframesBrowserPathPromise = (async () => {
+		const envPath =
+			process.env.PRODUCER_HEADLESS_SHELL_PATH || process.env.HYPERFRAMES_BROWSER_PATH;
+		if (envPath && existsSync(envPath)) return envPath;
+
+		const readBrowserPath = async () => {
+			try {
+				const { stdout } = await execFile(process.execPath, [cliPath, 'browser', 'path'], {
+					timeout: 45_000,
+					env: { ...process.env, HYPERFRAMES_TELEMETRY_DISABLED: '1' }
+				});
+				return stdout.trim().split(/\r?\n/).findLast(Boolean);
+			} catch {
+				return undefined;
+			}
+		};
+
+		const cachedPath = await readBrowserPath();
+		if (cachedPath && existsSync(cachedPath)) return cachedPath;
+
+		const cacheDir = hyperframesChromeCacheDir();
+		if (cachedPath?.startsWith(cacheDir)) {
+			await rm(cacheDir, { recursive: true, force: true }).catch(() => {});
+		}
+
+		try {
+			await execFile(process.execPath, [cliPath, 'browser', 'ensure'], {
+				timeout: 90_000,
+				env: { ...process.env, HYPERFRAMES_TELEMETRY_DISABLED: '1' }
+			});
+		} catch {
+			throw error(
+				501,
+				'Generate reel needs to repair the local HyperFrames render browser, but that repair did not finish. Run `npx hyperframes browser clear` and then `npx hyperframes browser ensure`, restart the dev server, and try exporting again.'
+			);
+		}
+
+		const repairedPath = await readBrowserPath();
+		if (repairedPath && existsSync(repairedPath)) return repairedPath;
+		throw error(
+			501,
+			'Generate reel needs the HyperFrames render browser, but the browser executable is still missing after repair. Run `npx hyperframes browser clear` and then `npx hyperframes browser ensure`, restart the dev server, and try exporting again.'
+		);
+	})();
+	hyperframesBrowserPathPromise.catch(() => {
+		hyperframesBrowserPathPromise = null;
+	});
+	return hyperframesBrowserPathPromise;
+}
+
+function renderEnvironment(toolPaths: FfmpegToolPaths, browserPath?: string): NodeJS.ProcessEnv {
 	return {
 		...process.env,
 		HYPERFRAMES_TELEMETRY_DISABLED: '1',
-		PATH: [...binaryDirs, process.env.PATH ?? ''].filter(Boolean).join(path.delimiter)
+		...(browserPath
+			? {
+					HYPERFRAMES_BROWSER_PATH: browserPath,
+					PRODUCER_HEADLESS_SHELL_PATH: browserPath
+				}
+			: {}),
+		PATH: [...toolPaths.binaryDirs, process.env.PATH ?? ''].filter(Boolean).join(path.delimiter)
 	};
 }
 
@@ -226,7 +392,8 @@ async function writeAsset(
 	item: ReelImage | ReelClip,
 	index: number,
 	kind: 'image' | 'video',
-	fallbackLabel: string
+	fallbackLabel: string,
+	toolPaths: FfmpegToolPaths
 ): Promise<WrittenAsset | null> {
 	const dataUrl =
 		kind === 'image' ? (item as ReelImage).imageDataUrl : (item as ReelClip).videoDataUrl;
@@ -237,7 +404,8 @@ async function writeAsset(
 	const basename = `${String(index + 1).padStart(2, '0')}-${sanitizeFilename(label, fallbackLabel)}.${payload.ext}`;
 	const absolutePath = path.join(assetsDir, basename);
 	await writeFile(absolutePath, payload.bytes);
-	const durationSeconds = kind === 'video' ? await videoDurationSeconds(absolutePath) : undefined;
+	const durationSeconds =
+		kind === 'video' ? await videoDurationSeconds(absolutePath, toolPaths) : undefined;
 	return {
 		label,
 		...(meta ? { meta: shortText(meta, '') } : {}),
@@ -263,13 +431,12 @@ function reelCopy(direction: Record<string, any>): Record<string, any> {
 
 function projectTitle(direction: Record<string, any>): string {
 	const copy = reelCopy(direction);
-	return compactReelText(
+	return compactReelTitle(
 		copy.title ??
 			direction.story_for_image_and_3s_animation?.story_title ??
 			direction.primary_direction?.name ??
 			direction.geometry_read?.main_character,
-		'Spellshape project reel',
-		38
+		'Spellshape project reel'
 	);
 }
 
@@ -306,11 +473,6 @@ function animationSummary(direction: Record<string, any>): string {
 	);
 }
 
-function openingLabel(direction: Record<string, any>): string {
-	const label = compactReelText(reelCopy(direction).opening_label, 'Project reveal', 28);
-	return label.toLowerCase() === 'final animation' ? 'Project reveal' : label;
-}
-
 function referenceTitle(direction: Record<string, any>): string {
 	return compactReelText(reelCopy(direction).references_title, 'Visual recipe', 34);
 }
@@ -321,17 +483,21 @@ function referenceLine(direction: Record<string, any>): string {
 }
 
 function referenceList(direction: Record<string, any>): string[] {
-	const copyRefs = compactReelList(reelCopy(direction).references, [], 3, 48);
+	const copySource = reelCopy(direction).references;
+	const copyRefs = Array.isArray(copySource)
+		? copySource
+				.map((ref) => publicReelText(ref, ''))
+				.filter(Boolean)
+				.slice(0, 3)
+		: [];
 	if (copyRefs.length > 0) return copyRefs;
 	const primary = direction.primary_direction ?? {};
 	const refs = Array.isArray(primary.supporting_references)
-		? primary.supporting_references
-				.map((ref: unknown) => compactReelText(ref, '', 42))
-				.filter(Boolean)
+		? primary.supporting_references.map((ref: unknown) => publicReelText(ref, '')).filter(Boolean)
 		: [];
 	if (refs.length > 0) return refs.slice(0, 3);
-	const name = compactReelText(primary.name, '', 42);
-	const type = compactReelText(primary.type, '', 42);
+	const name = publicReelText(primary.name, '');
+	const type = publicReelText(primary.type, '');
 	return [name, type].filter(Boolean).slice(0, 3);
 }
 
@@ -431,6 +597,14 @@ function effortItems(metrics: ReelAgentMetrics): Array<{ value: string; label: s
 	return items.slice(0, 5);
 }
 
+function modelRoleLabel(value: string | undefined, fallback: string): string {
+	const normalized = (value ?? '').trim().toLowerCase();
+	if (normalized === 'text') return 'Text planning';
+	if (normalized === 'image') return 'Image render';
+	if (normalized === 'video') return 'Video motion';
+	return value?.trim() || fallback;
+}
+
 type TreeNode = {
 	isFile: boolean;
 	children: Map<string, TreeNode>;
@@ -478,29 +652,9 @@ function structureTreeText(entries: string[]): string {
 	return lines.slice(0, 30).join('\n');
 }
 
-function processCellStyle(index: number, total: number, portrait: boolean): string {
-	const cols = portrait ? (total > 4 ? 3 : 2) : Math.min(4, Math.max(2, total));
-	const gap = portrait ? 18 : 22;
-	const gridWidth = portrait ? 960 : 1500;
-	const gridTop = portrait ? 590 : 300;
-	const gridLeft = portrait ? 60 : 210;
-	const cellWidth = Math.floor((gridWidth - gap * (cols - 1)) / cols);
-	const cellHeight = portrait ? Math.floor(cellWidth * 1.18) : Math.floor(cellWidth * 0.68);
-	const col = index % cols;
-	const row = Math.floor(index / cols);
-	const left = gridLeft + col * (cellWidth + gap);
-	const top = gridTop + row * (cellHeight + gap);
-	return `left:${left}px;top:${top}px;width:${cellWidth}px;height:${cellHeight}px;`;
-}
-
-function assetGridCellStyle(index: number, total: number, portrait: boolean): string {
-	return processCellStyle(index, total, portrait);
-}
-
 function buildCompositionHtml(args: {
 	aspectRatio: ReelAspectRatio;
 	title: string;
-	openingLabel: string;
 	direction: string;
 	animation: string;
 	referenceTitle: string;
@@ -514,8 +668,11 @@ function buildCompositionHtml(args: {
 	processImages: WrittenAsset[];
 	textureImages: WrittenAsset[];
 	galleryImages: WrittenAsset[];
+	sourceImages: WrittenAsset[];
+	dataBackgroundImage: WrittenAsset | null;
 	projectStructure: string[];
 	agentMetrics: ReelAgentMetrics;
+	modelsUsed: ReelModel[];
 }) {
 	const width = args.aspectRatio === '9:16' ? 1080 : 1920;
 	const height = args.aspectRatio === '9:16' ? 1920 : 1080;
@@ -523,36 +680,28 @@ function buildCompositionHtml(args: {
 	const heroDuration = clipDurations.length
 		? clipDurations.reduce((sum, duration) => sum + duration, 0)
 		: 3.2;
-	const directionStart = heroDuration;
-	const directionDuration = 1.9;
-	const referenceStart = directionStart + directionDuration;
-	const referenceDuration = args.references.length
-		? Math.max(2.4, args.references.length * 1.25)
-		: 0;
-	const processStart = referenceStart + referenceDuration;
+	const pipelineStart = heroDuration;
+	const pipelineDuration = 1.1;
+	const processStart = pipelineStart + pipelineDuration;
 	const processCards = args.processImages.slice(0, 9);
-	const processDuration = processCards.length
-		? Math.min(4.2, Math.max(2.4, 1.25 + processCards.length * 0.34))
-		: 0;
-	const processStep = processCards.length ? processDuration / (processCards.length + 1) : 0;
-	const textureStart = processStart + processDuration;
-	const textureCards = args.textureImages.slice(0, MAX_TEXTURE_IMAGES);
-	const textureDuration = textureCards.length
-		? Math.min(3.4, Math.max(2.1, 1.1 + textureCards.length * 0.42))
-		: 0;
-	const textureStep = textureCards.length ? textureDuration / (textureCards.length + 1) : 0;
-	const galleryStart = textureStart + textureDuration;
+	const sequenceFrameDuration = 0.5;
+	const processDuration = processCards.length ? processCards.length * sequenceFrameDuration : 0;
+	const galleryStart = processStart + processDuration;
 	const galleryCards = args.galleryImages.slice(0, MAX_GALLERY_IMAGES);
-	const galleryDuration = galleryCards.length
-		? Math.min(3.8, Math.max(2.2, 1.2 + galleryCards.length * 0.4))
-		: 0;
-	const galleryStep = galleryCards.length ? galleryDuration / (galleryCards.length + 1) : 0;
+	const galleryDuration = galleryCards.length ? galleryCards.length * sequenceFrameDuration : 0;
+	const textureStart = galleryStart + galleryDuration;
+	const textureCards = args.textureImages.slice(0, MAX_TEXTURE_IMAGES);
+	const textureDuration = textureCards.length ? textureCards.length * sequenceFrameDuration : 0;
+	const sourceStart = textureStart + textureDuration;
+	const sourceCards = args.sourceImages.slice(0, MAX_GALLERY_IMAGES);
+	const sourceDuration = sourceCards.length ? sourceCards.length * sequenceFrameDuration : 0;
 	const effort = effortItems(args.agentMetrics);
-	const effortStart = galleryStart + galleryDuration;
-	const effortDuration = effort.length ? 1.85 : 0;
-	const structureStart = effortStart + effortDuration;
-	const structureDuration = 1.45;
-	const totalDuration = structureStart + structureDuration;
+	const models = args.modelsUsed;
+	const dataStart = sourceStart + sourceDuration;
+	const dataDuration = effort.length || models.length ? 2.25 : 0;
+	const logoStart = dataStart + dataDuration;
+	const logoDuration = 1.65;
+	const totalDuration = logoStart + logoDuration;
 	const portrait = args.aspectRatio === '9:16';
 	const media = args.heroImage;
 	const heroMediaHtml = args.finalClips.length
@@ -566,68 +715,76 @@ function buildCompositionHtml(args: {
 		: media
 			? `<img class="hero-media-full clip" src="${escapeHtml(media.file)}" data-start="0" data-duration="${heroDuration.toFixed(2)}" alt="" />`
 			: '';
-	const conceptVisualHtml = media
-		? `<figure class="concept-visual"><img src="${escapeHtml(media.file)}" alt="" /></figure>`
-		: '';
+	const pipelineHtml = portrait
+		? `<div class="pipeline-stack" aria-label="Prompt to Scene to Image to Video">
+				<strong>Prompt</strong>
+				<span>↓</span>
+				<strong>Scene</strong>
+				<span>↓</span>
+				<strong>Image</strong>
+				<span>↓</span>
+				<strong>Video</strong>
+			</div>`
+		: `<h2>Prompt <span>→</span> Scene <span>→</span> Image <span>→</span> Video</h2>`;
 	const processHtml = processCards
 		.map((asset, index) => {
-			const start = processStart + (index + 1) * processStep;
-			const duration = processStart + processDuration - start;
-			return `<figure class="clip process-cell" style="${processCellStyle(index, processCards.length, portrait)}" data-start="${start.toFixed(2)}" data-duration="${Math.max(0.35, duration).toFixed(2)}">
-				<img src="${escapeHtml(asset.file)}" alt="" />
-				<figcaption>
-					<span class="kicker">Step ${index + 1}</span>
-					<strong>${escapeHtml(args.processSteps[index] ?? compactReelText(asset.label, `Build ${index + 1}`, 34))}</strong>
-				</figcaption>
+			const start = processStart + index * sequenceFrameDuration;
+			const tilt = [-1.4, 1.1, -0.7, 0.9][index % 4];
+			const x = [-16, 14, 0, 10][index % 4];
+			const y = [8, -10, 0, 12][index % 4];
+			return `<figure class="clip sequence-shot process-shot" style="--tilt:${tilt}deg;--x:${x}px;--y:${y}px;" data-start="${start.toFixed(2)}" data-duration="${sequenceFrameDuration.toFixed(2)}">
+				<div class="shot-stage"><img src="${escapeHtml(asset.file)}" alt="" /></div>
 			</figure>`;
 		})
 		.join('\n');
 	const textureHtml = textureCards
 		.map((asset, index) => {
-			const start = textureStart + (index + 1) * textureStep;
-			const duration = textureStart + textureDuration - start;
-			return `<figure class="clip texture-cell" style="${assetGridCellStyle(index, textureCards.length, portrait)}" data-start="${start.toFixed(2)}" data-duration="${Math.max(0.45, duration).toFixed(2)}">
-				<img src="${escapeHtml(asset.file)}" alt="" />
-				<figcaption>
-					<span class="kicker">Texture ${index + 1}</span>
-					<strong>${escapeHtml(compactReelText(asset.label, `Generated texture ${index + 1}`, 34))}</strong>
-				</figcaption>
+			const start = textureStart + index * sequenceFrameDuration;
+			const tilt = [-0.6, 0.6, -0.35, 0.35][index % 4];
+			return `<figure class="clip sequence-shot texture-shot" style="--tilt:${tilt}deg;--x:0px;--y:0px;" data-start="${start.toFixed(2)}" data-duration="${sequenceFrameDuration.toFixed(2)}">
+				<div class="shot-stage"><img src="${escapeHtml(asset.file)}" alt="" /></div>
 			</figure>`;
 		})
 		.join('\n');
 	const galleryHtml = galleryCards
 		.map((asset, index) => {
-			const start = galleryStart + (index + 1) * galleryStep;
-			const duration = galleryStart + galleryDuration - start;
-			return `<figure class="clip gallery-cell" style="${assetGridCellStyle(index, galleryCards.length, portrait)}" data-start="${start.toFixed(2)}" data-duration="${Math.max(0.45, duration).toFixed(2)}">
-				<img src="${escapeHtml(asset.file)}" alt="" />
-				<figcaption>
-					<span class="kicker">View ${index + 1}</span>
-					<strong>${escapeHtml(compactReelText(asset.label, `Final view ${index + 1}`, 34))}</strong>
-				</figcaption>
+			const start = galleryStart + index * sequenceFrameDuration;
+			return `<figure class="clip gallery-shot" data-start="${start.toFixed(2)}" data-duration="${sequenceFrameDuration.toFixed(2)}">
+				<div class="shot-stage"><img src="${escapeHtml(asset.file)}" alt="" /></div>
 			</figure>`;
 		})
 		.join('\n');
-	const structureItems =
-		args.projectStructure.length > 0
-			? args.projectStructure
-			: ['spellshape-live.obj', 'spellshape-live.mtl', 'manifest.json'];
-	const structureTree = structureTreeText(structureItems);
-	const referenceHtml = args.references
-		.map((reference, index) => {
-			const start = referenceStart + index * (referenceDuration / args.references.length);
-			const duration = referenceStart + referenceDuration - start;
-			return `<li class="clip reference-item reference-${index}" data-start="${start.toFixed(2)}" data-duration="${duration.toFixed(2)}"><span>0${index + 1}</span>${escapeHtml(reference)}</li>`;
+	const sourceHtml = sourceCards
+		.map((asset, index) => {
+			const start = sourceStart + index * sequenceFrameDuration;
+			const tilt = [1.2, -1.0, 0.55, -0.45][index % 4];
+			const x = [18, -14, 10, -8][index % 4];
+			const y = [-8, 10, -12, 4][index % 4];
+			return `<figure class="clip sequence-shot source-shot" style="--tilt:${tilt}deg;--x:${x}px;--y:${y}px;" data-start="${start.toFixed(2)}" data-duration="${sequenceFrameDuration.toFixed(2)}">
+				<div class="shot-stage"><img src="${escapeHtml(asset.file)}" alt="" /></div>
+			</figure>`;
 		})
 		.join('\n');
-	const effortHtml = effort
-		.map(
-			(item, index) => `<div class="effort-item effort-${index}">
+	const dataHeroTileStyle = args.dataBackgroundImage
+		? ` style="--tile-bg:url('${escapeHtml(args.dataBackgroundImage.file)}')"`
+		: '';
+	const dataTileHtml = [
+		...effort.map(
+			(
+				item,
+				index
+			) => `<div class="bento-tile stat-tile stat-tile-${index}${index === 0 && args.dataBackgroundImage ? ' has-bg' : ''}"${index === 0 ? dataHeroTileStyle : ''}>
 				<strong>${escapeHtml(item.value)}</strong>
 				<span>${escapeHtml(item.label)}</span>
 			</div>`
+		),
+		...models.map(
+			(item, index) => `<div class="bento-tile model-tile model-tile-${index}">
+				<span>${escapeHtml(modelRoleLabel(item.role, 'Model'))}</span>
+				<strong>${escapeHtml(item.model ?? '')}</strong>
+			</div>`
 		)
-		.join('\n');
+	].join('\n');
 
 	return `<!doctype html>
 <html>
@@ -637,48 +794,50 @@ function buildCompositionHtml(args: {
 		<title>${escapeHtml(args.title)}</title>
 		<style>
 			:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-			html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #02020a; }
-			#root { position: relative; width: ${width}px; height: ${height}px; overflow: hidden; background: #02020a; color: #f7f7fb; }
+			html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #ffffff; }
+			#root { position: relative; width: ${width}px; height: ${height}px; overflow: hidden; background: #ffffff; color: #050505; }
 			.clip { position: absolute; box-sizing: border-box; }
-			.scene-backdrop { inset: 0; background: #02020a; }
+			.scene-backdrop { inset: 0; background: #ffffff; }
 			.hero-media-full { inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
-			.hero-dim { inset: 0; background: linear-gradient(90deg, rgba(2,2,10,.84) 0%, rgba(2,2,10,.38) 45%, rgba(2,2,10,.62) 100%), linear-gradient(0deg, rgba(2,2,10,.82) 0%, transparent 42%, rgba(2,2,10,.42) 100%); }
-				.hero-copy { left: ${portrait ? '58px' : '82px'}; right: ${portrait ? '58px' : '800px'}; bottom: ${portrait ? '170px' : '92px'}; display: grid; gap: 16px; text-shadow: 0 16px 50px rgba(0,0,0,.58); }
-				.eyebrow, .kicker { text-transform: uppercase; letter-spacing: .08em; font-size: ${portrait ? '28px' : '18px'}; font-weight: 860; color: #8ea0ff; }
-				h1 { margin: 0; max-width: 100%; font-size: ${portrait ? '78px' : '72px'}; line-height: .98; letter-spacing: 0; color: #ffffff; text-wrap: balance; overflow-wrap: anywhere; hyphens: auto; }
-				.hero-copy p { margin: 0; max-width: 720px; color: rgba(255,255,255,.74); font-size: ${portrait ? '32px' : '25px'}; line-height: 1.2; font-weight: 720; }
-				.direction-card { left: ${portrait ? '58px' : '82px'}; right: ${portrait ? '58px' : '82px'}; top: ${portrait ? '360px' : '190px'}; display: grid; grid-template-columns: ${portrait ? '1fr' : '0.78fr 0.92fr'}; gap: ${portrait ? '30px' : '56px'}; align-items: center; color: #ffffff; text-shadow: 0 16px 50px rgba(0,0,0,.58); }
-				.direction-copy { display: grid; gap: 20px; }
-				.direction-card h2 { margin: 0; max-width: ${portrait ? '780px' : '980px'}; font-size: ${portrait ? '62px' : '56px'}; line-height: 1; letter-spacing: 0; text-wrap: balance; overflow-wrap: anywhere; hyphens: auto; }
-				.direction-card p { margin: 0; max-width: ${portrait ? '780px' : '900px'}; font-size: ${portrait ? '36px' : '30px'}; line-height: 1.14; color: rgba(255,255,255,.78); font-weight: 740; }
-				.concept-visual { margin: 0; min-height: 0; height: ${portrait ? '560px' : '650px'}; overflow: hidden; border-radius: 8px; box-shadow: 0 24px 80px rgba(0,0,0,.42); }
-				.concept-visual img { width: 100%; height: 100%; object-fit: cover; display: block; }
-				.references-card { left: ${portrait ? '58px' : '82px'}; right: ${portrait ? '58px' : '650px'}; top: ${portrait ? '390px' : '210px'}; display: grid; gap: ${portrait ? '28px' : '24px'}; color: #ffffff; text-shadow: 0 16px 50px rgba(0,0,0,.62); }
-				.references-card h2 { margin: 0; font-size: ${portrait ? '72px' : '60px'}; line-height: .94; letter-spacing: 0; }
-				.references-card p { margin: 0; max-width: ${portrait ? '900px' : '1180px'}; color: rgba(255,255,255,.76); font-size: ${portrait ? '34px' : '27px'}; line-height: 1.18; font-weight: 760; text-wrap: balance; overflow-wrap: anywhere; }
-				.references-card ul { margin: ${portrait ? '28px' : '24px'} 0 0; padding: 0; list-style: none; }
-				.reference-item { left: ${portrait ? '58px' : '1020px'}; right: ${portrait ? '58px' : '92px'}; min-height: ${portrait ? '108px' : '82px'}; display: flex; align-items: center; gap: 20px; padding: 0 0 0 ${portrait ? '0' : '26px'}; color: #ffffff; font-size: ${portrait ? '39px' : '30px'}; line-height: 1.06; font-weight: 850; text-shadow: 0 16px 50px rgba(0,0,0,.62); border-left: ${portrait ? '0' : '2px solid rgba(142,160,255,.74)'}; }
-				.reference-0 { top: ${portrait ? '880px' : '300px'}; }
-				.reference-1 { top: ${portrait ? '1030px' : '440px'}; }
-				.reference-2 { top: ${portrait ? '1180px' : '580px'}; }
-				.reference-item span { flex: 0 0 auto; color: #8ea0ff; font-size: ${portrait ? '25px' : '20px'}; font-weight: 900; }
-			.process-heading { left: ${portrait ? '60px' : '210px'}; right: ${portrait ? '60px' : '210px'}; top: ${portrait ? '420px' : '150px'}; display: grid; gap: 8px; text-shadow: 0 16px 50px rgba(0,0,0,.62); }
-			.process-heading h2 { margin: 0; color: #ffffff; font-size: ${portrait ? '62px' : '54px'}; line-height: .94; letter-spacing: 0; }
-			.gallery-heading { left: ${portrait ? '60px' : '210px'}; right: ${portrait ? '60px' : '210px'}; top: ${portrait ? '420px' : '150px'}; display: grid; gap: 8px; text-shadow: 0 16px 50px rgba(0,0,0,.62); }
-			.gallery-heading h2 { margin: 0; color: #ffffff; font-size: ${portrait ? '62px' : '54px'}; line-height: .94; letter-spacing: 0; }
-			.process-cell, .texture-cell, .gallery-cell { margin: 0; overflow: hidden; border-radius: 8px; background: rgba(255,255,255,.1); box-shadow: 0 22px 70px rgba(0,0,0,.34); }
-			.process-cell img, .texture-cell img, .gallery-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
-				.process-cell figcaption, .texture-cell figcaption, .gallery-cell figcaption { position: absolute; left: 0; right: 0; bottom: 0; display: grid; gap: 4px; padding: ${portrait ? '16px' : '13px'}; background: linear-gradient(0deg, rgba(2,2,42,.82), rgba(2,2,42,0)); color: #ffffff; }
-				.process-cell strong, .texture-cell strong, .gallery-cell strong { font-size: ${portrait ? '24px' : '20px'}; line-height: 1.03; color: #ffffff; }
-				.effort-card { left: ${portrait ? '58px' : '180px'}; right: ${portrait ? '58px' : '180px'}; top: ${portrait ? '470px' : '230px'}; display: grid; gap: ${portrait ? '36px' : '30px'}; color: #ffffff; text-shadow: 0 16px 50px rgba(0,0,0,.62); }
-				.effort-card h2 { margin: 0; max-width: ${portrait ? '820px' : '980px'}; font-size: ${portrait ? '76px' : '66px'}; line-height: .94; letter-spacing: 0; }
-				.effort-grid { display: grid; grid-template-columns: repeat(${portrait ? 2 : 5}, minmax(0, 1fr)); gap: ${portrait ? '18px' : '20px'}; }
-				.effort-item { min-height: ${portrait ? '168px' : '142px'}; display: grid; align-content: center; gap: 8px; border-top: 2px solid rgba(142,160,255,.72); }
-				.effort-item strong { font-size: ${portrait ? '60px' : '54px'}; line-height: .92; color: #ffffff; }
-				.effort-item span { color: rgba(255,255,255,.72); font-size: ${portrait ? '27px' : '22px'}; line-height: 1.08; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
-				.structure-card { left: ${portrait ? '58px' : '180px'}; right: ${portrait ? '58px' : '180px'}; top: ${portrait ? '360px' : '180px'}; bottom: ${portrait ? '310px' : '150px'}; display: grid; grid-template-columns: ${portrait ? '1fr' : '0.7fr 1.3fr'}; gap: ${portrait ? '28px' : '42px'}; align-items: start; color: #ffffff; text-shadow: 0 16px 50px rgba(0,0,0,.62); }
-			.structure-card h2 { margin: 0; font-size: ${portrait ? '66px' : '56px'}; line-height: .96; letter-spacing: 0; }
-			.structure-tree { margin: 0; max-height: 100%; overflow: hidden; white-space: pre; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; color: rgba(255,255,255,.82); font-size: ${portrait ? '24px' : '24px'}; line-height: 1.22; font-weight: 760; }
+				.kicker { text-transform: uppercase; letter-spacing: .08em; font-size: ${portrait ? '22px' : '16px'}; font-weight: 860; color: #0000eb; }
+				h1 { position: relative; margin: 0; max-width: 100%; font-size: ${portrait ? '54px' : '52px'}; line-height: 1.04; letter-spacing: 0; color: #050505; text-wrap: balance; overflow-wrap: normal; word-break: normal; hyphens: none; }
+				@keyframes shotIn {
+					from { opacity: .58; transform: translate3d(var(--x, 0px), calc(var(--y, 0px) + 18px), 0) scale(.982) rotate(var(--tilt, 0deg)); }
+					to { opacity: 1; transform: translate3d(var(--x, 0px), var(--y, 0px), 0) scale(1) rotate(var(--tilt, 0deg)); }
+				}
+				.sequence-shot, .gallery-shot { inset: 0; margin: 0; overflow: hidden; display: grid; place-items: center; padding: ${portrait ? '96px 48px' : '58px 86px'}; background: linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%); }
+				.pipeline-card { inset: 0; display: grid; place-items: center; padding: ${portrait ? '88px 58px' : '70px 120px'}; background: #ffffff; color: #050505; }
+				.pipeline-card h2 { margin: 0; font-size: ${portrait ? '58px' : '64px'}; line-height: 1; letter-spacing: 0; font-weight: 850; text-align: center; text-wrap: balance; }
+				.pipeline-card span { color: #0000eb; }
+				.pipeline-stack { display: grid; justify-items: center; gap: 16px; }
+				.pipeline-stack strong { font-size: 74px; line-height: .94; letter-spacing: 0; font-weight: 860; }
+				.pipeline-stack span { font-size: 44px; line-height: 1; color: #0000eb; font-weight: 760; }
+				.shot-stage { position: relative; display: grid; place-items: center; width: fit-content; height: fit-content; max-width: 100%; max-height: 100%; padding: ${portrait ? '14px' : '12px'}; border: 1px solid rgba(0,0,0,.075); border-radius: ${portrait ? '24px' : '22px'}; background: rgba(255,255,255,.94); box-shadow: 0 34px 96px rgba(0,0,0,.14), 0 9px 30px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.96); backdrop-filter: blur(14px) saturate(1.05); -webkit-backdrop-filter: blur(14px) saturate(1.05); animation: shotIn .42s cubic-bezier(.2,.86,.2,1) both; }
+				.texture-shot .shot-stage { box-shadow: 0 30px 84px rgba(0,0,0,.13), 0 8px 28px rgba(0,0,0,.07), inset 0 1px 0 rgba(255,255,255,.96); }
+				.gallery-shot .shot-stage { animation-duration: .38s; }
+				.shot-stage img { width: auto; height: auto; max-width: ${portrait ? '920px' : '1660px'}; max-height: ${portrait ? '1500px' : '870px'}; object-fit: contain; display: block; border-radius: ${portrait ? '14px' : '13px'}; }
+				.data-card { inset: 0; display: grid; place-items: center; padding: ${portrait ? '104px 58px' : '82px 132px'}; background: linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%); color: #050505; }
+				.bento-grid { width: min(100%, ${portrait ? '860px' : '1420px'}); max-height: 100%; justify-self: center; align-self: center; display: grid; grid-template-columns: repeat(${portrait ? 2 : 6}, minmax(0, 1fr)); grid-auto-rows: ${portrait ? '156px' : '142px'}; gap: ${portrait ? '18px' : '20px'}; }
+				.bento-tile { position: relative; min-width: 0; overflow: hidden; display: grid; align-content: end; gap: 10px; padding: ${portrait ? '22px' : '22px'}; border: 1px solid rgba(0,0,0,.075); border-radius: ${portrait ? '24px' : '22px'}; background: rgba(255,255,255,.9); box-shadow: 0 24px 70px rgba(0,0,0,.1), inset 0 1px 0 rgba(255,255,255,.96); }
+				.bento-tile::before { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(0,0,235,.09), rgba(255,255,255,0) 46%); pointer-events: none; }
+				.bento-tile strong, .bento-tile span { position: relative; min-width: 0; }
+				.bento-tile.has-bg { background: #050505; border-color: rgba(0,0,0,.08); box-shadow: 0 26px 82px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.38); }
+				.bento-tile.has-bg::before { background: linear-gradient(180deg, rgba(255,255,255,.42), rgba(255,255,255,.18) 38%, rgba(0,0,0,.4)), var(--tile-bg); background-size: cover; background-position: center; transform: scale(1.035); filter: saturate(1.05); }
+				.bento-tile.has-bg::after { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(0,0,235,.16), rgba(255,255,255,0) 46%); pointer-events: none; }
+				.stat-tile strong { color: #050505; font-size: ${portrait ? '54px' : '50px'}; line-height: .9; letter-spacing: 0; }
+				.stat-tile span, .model-tile span { color: rgba(0,0,0,.58); font-size: ${portrait ? '22px' : '18px'}; line-height: 1.05; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
+				.stat-tile.has-bg strong { color: #ffffff; text-shadow: 0 10px 38px rgba(0,0,0,.34); }
+				.stat-tile.has-bg span { color: rgba(255,255,255,.82); text-shadow: 0 8px 28px rgba(0,0,0,.28); }
+				.model-tile { background: rgba(250,250,255,.92); }
+				.model-tile span { color: #0000eb; }
+				.model-tile strong { color: #050505; font-size: ${portrait ? '28px' : '24px'}; line-height: 1.05; overflow-wrap: anywhere; }
+				.stat-tile-0 { grid-column: span ${portrait ? 2 : 2}; grid-row: span 2; }
+				.stat-tile-0 strong { font-size: ${portrait ? '92px' : '88px'}; }
+				.stat-tile-1, .stat-tile-2 { grid-column: span ${portrait ? 1 : 2}; }
+				.stat-tile-3, .stat-tile-4, .model-tile { grid-column: span ${portrait ? 1 : 2}; }
+				.model-tile-0 { grid-column: span ${portrait ? 2 : 2}; }
+				.brand-end { inset: 0; display: grid; place-items: center; background: #ffffff; }
+				.brand-end img { width: ${portrait ? '58%' : '34%'}; max-width: ${portrait ? '660px' : '720px'}; height: auto; display: block; }
 		</style>
 	</head>
 	<body>
@@ -686,76 +845,22 @@ function buildCompositionHtml(args: {
 		<div id="root" data-composition-id="spellshape-reel" data-start="0" data-duration="${totalDuration.toFixed(2)}" data-width="${width}" data-height="${height}">
 			<div class="scene-backdrop clip" data-start="0" data-duration="${totalDuration.toFixed(2)}"></div>
 			${heroMediaHtml}
-			<div class="hero-dim clip" data-start="0" data-duration="${heroDuration.toFixed(2)}"></div>
-			<section class="hero-copy clip" data-start="0.15" data-duration="${(heroDuration - 0.25).toFixed(2)}">
-				<div class="eyebrow">${escapeHtml(args.openingLabel)}</div>
-				<h1>${escapeHtml(args.title)}</h1>
-				<p>${escapeHtml(args.animation)}</p>
+			<section class="pipeline-card clip" data-start="${pipelineStart.toFixed(2)}" data-duration="${pipelineDuration.toFixed(2)}">
+				${pipelineHtml}
 			</section>
-			<section class="direction-card clip" data-start="${directionStart.toFixed(2)}" data-duration="${directionDuration.toFixed(2)}">
-				<div class="direction-copy">
-					<div class="eyebrow">Concept</div>
-					<h2>${escapeHtml(args.title)}</h2>
-					<p>${escapeHtml(args.direction)}</p>
-				</div>
-				${conceptVisualHtml}
-			</section>
-			${
-				args.references.length
-					? `<section class="references-card clip" data-start="${referenceStart.toFixed(2)}" data-duration="${referenceDuration.toFixed(2)}">
-						<div>
-							<div class="eyebrow">References</div>
-							<h2>${escapeHtml(args.referenceTitle)}</h2>
-							<p>${escapeHtml(args.referenceLine)}</p>
-						</div>
-					</section>`
-					: ''
-			}
-			${referenceHtml}
-			${
-				processCards.length
-					? `<section class="process-heading clip" data-start="${processStart.toFixed(2)}" data-duration="${processDuration.toFixed(2)}">
-						<div class="eyebrow">Process</div>
-						<h2>${escapeHtml(args.processTitle)}</h2>
-					</section>`
-					: ''
-			}
 			${processHtml}
-			${
-				textureCards.length
-					? `<section class="gallery-heading clip" data-start="${textureStart.toFixed(2)}" data-duration="${textureDuration.toFixed(2)}">
-						<div class="eyebrow">Generated textures</div>
-						<h2>UV texture gallery</h2>
-					</section>`
-					: ''
-			}
-			${textureHtml}
-			${
-				galleryCards.length
-					? `<section class="gallery-heading clip" data-start="${galleryStart.toFixed(2)}" data-duration="${galleryDuration.toFixed(2)}">
-						<div class="eyebrow">Final model</div>
-						<h2>Screenshot gallery</h2>
-					</section>`
-					: ''
-			}
 			${galleryHtml}
+			${textureHtml}
+			${sourceHtml}
 			${
-				effort.length
-					? `<section class="effort-card clip" data-start="${effortStart.toFixed(2)}" data-duration="${effortDuration.toFixed(2)}">
-						<div>
-							<div class="eyebrow">Agent effort</div>
-							<h2>What it took to make the scene</h2>
-						</div>
-						<div class="effort-grid">${effortHtml}</div>
+				dataDuration
+					? `<section class="data-card clip" data-start="${dataStart.toFixed(2)}" data-duration="${dataDuration.toFixed(2)}">
+						<div class="bento-grid">${dataTileHtml}</div>
 					</section>`
 					: ''
 			}
-			<section class="structure-card clip" data-start="${structureStart.toFixed(2)}" data-duration="${structureDuration.toFixed(2)}">
-				<div>
-					<div class="eyebrow">Project package</div>
-					<h2>${escapeHtml(args.structureTitle)}</h2>
-				</div>
-				<pre class="structure-tree">${escapeHtml(structureTree)}</pre>
+			<section class="brand-end clip" data-start="${logoStart.toFixed(2)}" data-duration="${logoDuration.toFixed(2)}">
+				<img src="./spellshape_text_logo.svg" alt="Spellshape" />
 			</section>
 		</div>
 		<script>
@@ -770,7 +875,8 @@ function buildCompositionHtml(args: {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	await assertFfmpegAvailable();
+	const toolPaths = await resolveFfmpegToolPaths();
+	await assertFfmpegAvailable(toolPaths);
 	let body: ReelBody;
 	try {
 		body = (await request.json()) as ReelBody;
@@ -781,7 +887,6 @@ export const POST: RequestHandler = async ({ request }) => {
 	const aspectRatio: ReelAspectRatio = body.aspectRatio === '16:9' ? '16:9' : '9:16';
 	const direction = parseDirection(body.creativeDirectionJson);
 	const title = projectTitle(direction);
-	const heroLabel = openingLabel(direction);
 	const animation = animationSummary(direction);
 	const summary = directionSummary(direction, body.renderPrompt);
 	const referencesTitle = referenceTitle(direction);
@@ -791,6 +896,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const buildSteps = processSteps(direction);
 	const packageTitle = structureTitle(direction);
 	const projectStructure = structureEntries(body.projectStructure);
+	const modelsUsed = modelEntries(body.modelsUsed);
 	const workspaceDir = path.join(tmpdir(), `spellshape-reel-${randomUUID()}`);
 	const assetsDir = path.join(workspaceDir, 'assets');
 	const outputPath = path.join(workspaceDir, 'spellshape-reel.mp4');
@@ -800,6 +906,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		await copyFile(
 			path.join(process.cwd(), 'node_modules', 'gsap', 'dist', 'gsap.min.js'),
 			path.join(workspaceDir, 'gsap.min.js')
+		);
+		await copyFile(
+			path.join(process.cwd(), 'static', 'images', 'spellshape_text_logo.svg'),
+			path.join(workspaceDir, 'spellshape_text_logo.svg')
 		);
 		const finalClipInputs =
 			Array.isArray(body.finalClips) && body.finalClips.length > 0
@@ -811,30 +921,62 @@ export const POST: RequestHandler = async ({ request }) => {
 			await Promise.all(
 				finalClipInputs
 					.slice(0, 3)
-					.map((item, index) => writeAsset(assetsDir, item, index, 'video', `clip-${index + 1}`))
+					.map((item, index) =>
+						writeAsset(assetsDir, item, index, 'video', `clip-${index + 1}`, toolPaths)
+					)
 			)
 		).filter((asset): asset is WrittenAsset => !!asset);
 		const processImages = (
 			await Promise.all(
 				(body.processImages ?? [])
 					.slice(0, MAX_PROCESS_IMAGES)
-					.map((item, index) => writeAsset(assetsDir, item, index, 'image', `process-${index + 1}`))
+					.map((item, index) =>
+						writeAsset(assetsDir, item, index, 'image', `process-${index + 1}`, toolPaths)
+					)
 			)
 		).filter((asset): asset is WrittenAsset => !!asset);
 		const textureImages = (
 			await Promise.all(
 				(body.textureImages ?? [])
 					.slice(0, MAX_TEXTURE_IMAGES)
-					.map((item, index) => writeAsset(assetsDir, item, index, 'image', `texture-${index + 1}`))
+					.map((item, index) =>
+						writeAsset(assetsDir, item, index, 'image', `texture-${index + 1}`, toolPaths)
+					)
 			)
 		).filter((asset): asset is WrittenAsset => !!asset);
 		const galleryImages = (
 			await Promise.all(
-				(body.galleryFrames ?? [])
+				[
+					...(body.turntableFrames?.length ? body.turntableFrames : []),
+					...(body.turntableFrames?.length ? [] : (body.timelineFrames ?? [])),
+					...(body.turntableFrames?.length ? [] : (body.galleryFrames ?? []))
+				]
 					.slice(0, MAX_GALLERY_IMAGES)
-					.map((item, index) => writeAsset(assetsDir, item, index, 'image', `frame-${index + 1}`))
+					.map((item, index) =>
+						writeAsset(assetsDir, item, index, 'image', `frame-${index + 1}`, toolPaths)
+					)
 			)
 		).filter((asset): asset is WrittenAsset => !!asset);
+		const sourceImages = (
+			await Promise.all(
+				(body.sourceFrames ?? [])
+					.slice(0, MAX_GALLERY_IMAGES)
+					.map((item, index) =>
+						writeAsset(assetsDir, item, index, 'image', `source-${index + 1}`, toolPaths)
+					)
+			)
+		).filter((asset): asset is WrittenAsset => !!asset);
+		const timelineStartImage =
+			body.timelineFrames?.[0] && body.timelineFrames[0].imageDataUrl
+				? await writeAsset(
+						assetsDir,
+						body.timelineFrames[0],
+						0,
+						'image',
+						'data-start-frame',
+						toolPaths
+					)
+				: null;
 		const heroImage = galleryImages[0] ?? processImages[0] ?? textureImages[0] ?? null;
 		if (finalClips.length === 0 && !heroImage) {
 			throw error(
@@ -854,7 +996,6 @@ export const POST: RequestHandler = async ({ request }) => {
 			buildCompositionHtml({
 				aspectRatio,
 				title,
-				openingLabel: heroLabel,
 				direction: summary,
 				animation,
 				referenceTitle: referencesTitle,
@@ -868,12 +1009,16 @@ export const POST: RequestHandler = async ({ request }) => {
 				processImages,
 				textureImages,
 				galleryImages,
+				sourceImages,
+				dataBackgroundImage: timelineStartImage ?? galleryImages[0] ?? sourceImages[0] ?? heroImage,
 				projectStructure,
-				agentMetrics
+				agentMetrics,
+				modelsUsed
 			})
 		);
 
 		const cliPath = path.join(process.cwd(), 'node_modules', 'hyperframes', 'dist', 'cli.js');
+		const browserPath = await hyperframesBrowserPath(cliPath);
 		await execFile(
 			process.execPath,
 			[
@@ -895,7 +1040,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			{
 				cwd: workspaceDir,
 				timeout: 10 * 60_000,
-				env: renderEnvironment()
+				env: renderEnvironment(toolPaths, browserPath)
 			}
 		);
 		const videoBytes = await readFile(outputPath);

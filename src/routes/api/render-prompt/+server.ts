@@ -79,9 +79,24 @@ type VisualDirection = {
 type Body = {
 	liveObjText?: string;
 	currentPrompt?: string;
+	currentDirectionJson?: string;
+	timelineCameraContext?: TimelineCameraContext[];
 	model?: string;
 	apiKey?: string;
 	apiUrl?: string;
+};
+type CameraSnapshot = {
+	projection?: string;
+	position?: number[];
+	target?: number[];
+	up?: number[];
+	fov?: number | null;
+	zoom?: number | null;
+} | null;
+type TimelineCameraContext = {
+	key?: string;
+	label?: string;
+	camera?: CameraSnapshot;
 };
 
 function metadataFromLiveObj(liveObjText: string): string {
@@ -95,6 +110,47 @@ function metadataFromLiveObj(liveObjText: string): string {
 function truncateForPrompt(value: string): string {
 	if (value.length <= MAX_METADATA_CHARS) return value;
 	return `${value.slice(0, MAX_METADATA_CHARS)}\n...[truncated]`;
+}
+
+function numberList(value: unknown): string {
+	if (!Array.isArray(value)) return '';
+	const numbers = value.filter(
+		(item): item is number => typeof item === 'number' && Number.isFinite(item)
+	);
+	if (numbers.length !== value.length || numbers.length === 0) return '';
+	return `[${numbers.map((item) => Number(item.toFixed(4))).join(', ')}]`;
+}
+
+function cameraLines(snapshot: CameraSnapshot): string[] {
+	if (!snapshot) return [];
+	return [
+		`projection=${typeof snapshot.projection === 'string' ? snapshot.projection : 'unknown'}`,
+		numberList(snapshot.position) ? `position=${numberList(snapshot.position)}` : '',
+		numberList(snapshot.target) ? `target=${numberList(snapshot.target)}` : '',
+		numberList(snapshot.up) ? `up=${numberList(snapshot.up)}` : '',
+		typeof snapshot.fov === 'number' && Number.isFinite(snapshot.fov)
+			? `fov=${Number(snapshot.fov.toFixed(3))}`
+			: '',
+		typeof snapshot.zoom === 'number' && Number.isFinite(snapshot.zoom)
+			? `zoom=${Number(snapshot.zoom.toFixed(3))}`
+			: ''
+	].filter(Boolean);
+}
+
+function timelineCameraPrompt(value: unknown): string {
+	if (!Array.isArray(value)) return '';
+	const blocks = value
+		.map((item, index) => {
+			if (!item || typeof item !== 'object') return '';
+			const context = item as TimelineCameraContext;
+			const lines = cameraLines(context.camera ?? null);
+			if (!lines.length) return '';
+			const label = context.label?.trim() || context.key?.trim() || `Frame ${index + 1}`;
+			return `${label}:\n${lines.join('\n')}`;
+		})
+		.filter(Boolean);
+	if (!blocks.length) return '';
+	return `Timeline frame camera context:\n${blocks.join('\n\n')}`;
 }
 
 function cleanProviderField(value: string | undefined): string | undefined {
@@ -197,25 +253,27 @@ Do not create a moodboard dump.
 
 Choose the clearest and strongest visual idea for the geometry.
 
-The agent must also define a surprising story moment that could become a 3-second animation.
+The agent must also define a coherent short visual story that could become a 3-frame image sequence and a 3-second animation.
 The story should be image-native: it must emerge from the geometry, material, atmosphere, light, people, or environment.
 Do not invent complicated plot.
 Do not make characters more important than the geometry.
 The geometry must remain the protagonist.
 
-For the animation idea, prefer one vivid, shareable transformation over a smooth camera-only move.
-The motion can be surreal, magical, funny, uncanny, or physically impossible, as long as it grows out of the chosen visual direction and the existing geometry.
-Good animation beats include: facades blooming into signs, columns liquefying, cars melting into chrome streams, windows becoming eyes, architecture swallowing the sun, roofs turning into birds or butterflies, furniture inflating, shadows becoming characters, material suddenly switching states, or a day-to-night snap.
-Avoid generic cinematic motion like only dolly, pan, orbit, fog drift, particles, or parallax unless paired with a concrete transformation.
+For the animation idea, prefer a watchable mini-arc over a disconnected wow shot.
+The three frames should behave like a tiny storyboard: setup, surprising turn, payoff.
+The motion can be surreal, magical, funny, uncanny, or physically impossible, but it must stay causally connected to the previous frame and resolve into a satisfying final image.
+Good animation beats include: facades blooming into signs, columns liquefying because the structure is waking up, cars melting into chrome streams that reveal a path, windows becoming eyes that trigger the lighting change, architecture swallowing the sun and snapping into night, roofs turning into birds or butterflies that reveal the silhouette, furniture inflating into a usable object, shadows becoming characters that guide scale, material switching states as a clear before/after, or a day-to-night snap with a motivated reveal.
+Avoid generic cinematic motion like only dolly, pan, orbit, fog drift, particles, or parallax unless paired with a concrete story action.
+Avoid abstract spectacle where each shot is only "more intense" than the previous one. The viewer should understand why the image changes and want to watch the sequence to its end.
 
 The 3-second animation idea should include:
-- story beat: the unexpected transformation or impossible event
+- story beat: the setup, surprising turn, and payoff of the visual arc
 - emotional beat: what the viewer should feel
 - camera move: how the shot moves over 3 seconds
-- geometry action: how the architecture transforms, reacts, or performs
+- geometry action: how the architecture transforms, reacts, or performs while preserving continuity
 - atmosphere action: light, fog, rain, dust, wind, reflections, birds, fabric, water, etc.
 - foreground action: small human or environmental movement for scale
-- loop potential: whether the transformation can snap, reverse, or loop memorably
+- loop potential: whether the final payoff can snap, reverse, or loop memorably
 
 Use current visual trends only as a secondary filter, not as the main output.
 Do not hardcode trends. Mention a trend only if it makes the selected direction more visually relevant or shareable.
@@ -273,24 +331,24 @@ Output format:
     "aspect_ratio": "16:9",
     "frames": [
       {
-        "label": "Hero reveal",
-        "purpose": "Establish the geometry and the selected visual direction",
+        "label": "Story setup",
+        "purpose": "Establish the geometry, visual direction, and the question the viewer will follow",
         "view": "low_front_3q",
         "camera_direction": [-1, 0.55, -1],
         "focus_objects": [],
         "framing": "full object with breathing room"
       },
       {
-        "label": "Material detail",
-        "purpose": "Show the most important material or assembly detail",
+        "label": "Surprising turn",
+        "purpose": "Show the first readable change, deformation, or reveal while staying connected to the setup",
         "view": "side_detail",
         "camera_direction": [1, 0.35, -0.75],
         "focus_objects": [],
         "framing": "closer view, still readable as the same object"
       },
       {
-        "label": "Final silhouette",
-        "purpose": "Create the strongest end frame for a short clip",
+        "label": "Payoff frame",
+        "purpose": "Resolve the visual story into the strongest final image",
         "view": "high_back_3q",
         "camera_direction": [-0.45, 1.1, 0.65],
         "focus_objects": [],
@@ -311,10 +369,11 @@ Rules:
 - Preserve concrete user constraints from draft guidance unless they conflict with the Live OBJ geometry.
 - If the user provides no draft guidance, choose the strongest direction from the scene metadata alone.
 - Supporting references are optional and must be limited to 3 maximum.
-- The story must be readable in a still image and expandable into a 3-second animation.
-- The animation must have one bold visual change, not a complex sequence.
-- The animation_prompt must describe a specific transformation event, not just camera movement.
+- The story must be readable in the still image and expandable into a coherent 3-frame / 3-second sequence.
+- The animation must have a clear arc: setup, surprising turn, payoff. It can include unexpected visuals, deformations, material shifts, or impossible events, but they must form one continuous story.
+- The animation_prompt must describe the complete visual arc, not just camera movement and not just an isolated transformation.
 - The shot_plan must contain exactly 3 frames designed for this specific geometry and visual direction.
+- The shot_plan frames are a storyboard for the final image/video output. Frame 0 sets context, frame 1 changes the situation, and frame 2 pays it off.
 - reel_copy is for a 9:16 or 16:9 short-form project reel. It must tell a mini educational story about this exact project, not a generic Spellshape ad.
 - reel_copy.story_mode must be one of: reference_recipe, process_breakdown, cinematic_breakdown, design_critique, before_after, same_scene_variations, user_workflow.
 - reel_copy.opening_label should be specific, such as "Project reveal", "Motion test", or "Scene payoff". Do not use "Final animation".
@@ -328,9 +387,11 @@ Rules:
 - Shot views should not be generic defaults. Choose camera directions that fit the object: tall objects can use low/high vertical emphasis, flat objects can use plan/oblique views, products can use hero/detail/reveal, and scenes can use establishing/detail/final reveal.
 - camera_direction is an approximate normalized world-space vector [x,y,z] from the object center toward the camera. Use positive y for elevated views and lower y values for eye-level/low views.
 - focus_objects may be empty, but if metadata names important objects, use at most 3 exact object ids that should drive framing.
-- pair_prompts should describe motion from frame 0 to 1 and frame 1 to 2, aligned with the story and shot purposes.
-- Make the animation more dynamic and surprising than a normal architectural flythrough.
-- Keep the surprise aligned with the primary direction. For example: a Memphis style hotel suddenly swallows the sun, turns on bright neon signs, and snaps into night time.
+- pair_prompts should describe motion from frame 0 to 1 and frame 1 to 2 as connected story beats, aligned with the shot purposes and selected images.
+- The first pair prompt should introduce the motivating change. The second pair prompt should resolve or escalate that change into a final payoff.
+- Make the animation more dynamic and surprising than a normal architectural flythrough, but never as random abstract spectacle.
+- Keep the surprise aligned with the primary direction. For example: a Memphis style hotel swallows the sun, turns on bright neon signs, then resolves into a nighttime festival facade.
+- Preserve visual continuity across pair_prompts: same protagonist geometry, readable object scale, coherent camera intent, and a cause-effect relationship between changes.
 - The geometry must remain the protagonist.
 - People can appear only as scale, ritual, or foreground motion.
 - Do not include trend lists.
@@ -357,6 +418,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	);
 	const sceneSummary = summarizeLiveObjForPlanning(liveObjText);
 	const currentPrompt = body.currentPrompt?.trim();
+	const currentDirectionJson = body.currentDirectionJson?.trim();
+	const cameraContext = timelineCameraPrompt(body.timelineCameraContext);
 
 	const userPrompt = `Analyze this Live OBJ scene as the visual source of truth.
 
@@ -369,9 +432,14 @@ ${sceneMetadata}
 Draft user guidance from the render prompt field:
 ${currentPrompt || '(empty - start from scratch)'}
 
+Existing visual direction JSON, if this is a refinement pass:
+${currentDirectionJson || '(none)'}
+
+${cameraContext || 'Timeline frame camera context: (no timeline frames selected yet)'}
+
 If draft guidance is present, expand it into a complete image prompt while keeping the geometry as the protagonist. If the draft guidance is empty, start from the Live OBJ scene alone.
 
-Choose one strong visual direction and return the required JSON object.`;
+Choose one strong visual direction and return the required JSON object. If existing visual direction JSON is provided, preserve its core visual direction and update only what needs to align with the timeline camera context. When timeline camera context is available, treat the selected timeline frames as a storyboard: align shot_plan frames and pair_prompts to those exact frame cameras, preserve visual continuity between frames, and make the two motion prompts read as setup-to-turn and turn-to-payoff instead of unrelated camera moves.`;
 
 	try {
 		const llmResult = await withLlmRequestOverrides(

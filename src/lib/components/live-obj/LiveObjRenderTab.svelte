@@ -29,6 +29,7 @@
 		start?: ShotFrame;
 		middle?: ShotFrame;
 		end?: ShotFrame;
+		transitionPrompts?: Partial<Record<TimelineTransitionKey, string>>;
 		clips: GeneratedClip[];
 	};
 	type ProcessImageAsset = {
@@ -57,6 +58,14 @@
 		meta?: string;
 		imageDataUrl: string;
 	};
+	type ReelModelPayload = {
+		role: string;
+		provider: string;
+		model: string;
+	};
+	type ModelUsage = ReelModelPayload & {
+		usedAt: number;
+	};
 	type CaptureSceneScreenshotOptions = {
 		frameObjectIds?: string[];
 		xrayFocusObjectIds?: string[];
@@ -65,6 +74,13 @@
 		autoFrame?: boolean;
 		framePadding?: number;
 	};
+	type TimelineCameraContext = {
+		key: TimelineFrameKey;
+		label: string;
+		camera: CameraSnapshot;
+	};
+
+	const MAX_RENDER_FRAME_ASSETS = 96;
 	type ShotPlanFrame = {
 		label?: string;
 		purpose?: string;
@@ -113,12 +129,14 @@
 		onCaptureSceneCameraSnapshot,
 		canvasAspectRatio = 'fill',
 		prompt = $bindable(''),
-		videoPrompt = $bindable(''),
 		screenshotDataUrl = $bindable(''),
 		generatedImageDataUrl = $bindable(''),
 		frameAssets = $bindable<FrameAsset[]>([]),
 		videoShot = $bindable<VideoShot>({ clips: [] }),
+		turntableFrameAssets = $bindable<FrameAsset[]>([]),
+		modelUsage = $bindable<ModelUsage[]>([]),
 		processImages = [],
+		onCaptureReelTurntableFrames,
 		agentMetrics = {},
 		videoBusy = $bindable(false),
 		generatedDirectionJson = $bindable(''),
@@ -141,12 +159,14 @@
 		onCaptureSceneCameraSnapshot?: () => CameraSnapshot;
 		canvasAspectRatio?: CanvasAspectRatio;
 		prompt?: string;
-		videoPrompt?: string;
 		screenshotDataUrl?: string;
 		generatedImageDataUrl?: string;
 		frameAssets?: FrameAsset[];
 		videoShot?: VideoShot;
+		turntableFrameAssets?: FrameAsset[];
+		modelUsage?: ModelUsage[];
 		processImages?: ProcessImageAsset[];
+		onCaptureReelTurntableFrames?: () => Promise<FrameAsset[]>;
 		agentMetrics?: AgentMetrics;
 		videoBusy?: boolean;
 		generatedDirectionJson?: string;
@@ -158,10 +178,12 @@
 	let fullscreenDialog: HTMLDialogElement | null = $state(null);
 	let promptBusy = $state(false);
 	let reelBusy = $state(false);
+	let reelStatus = $state('');
 	let reelAspectRatio = $state<ReelAspectRatio>('9:16');
 	let reelVideoDataUrl = $state('');
 	let reelFilename = $state('spellshape-reel.mp4');
 	let renderSourceFrameId = $state('');
+	let activeTransitionPromptKey = $state<TimelineTransitionKey>('startToMiddle');
 
 	let videoProviderReady = $derived(
 		(providerSettings.provider === 'google' || providerSettings.provider === 'openrouter') &&
@@ -261,14 +283,30 @@
 			await Promise.all(
 				images.map(async (asset): Promise<ReelImagePayload | null> => {
 					if (!asset.imageDataUrl) return null;
-					return {
-						label: asset.label,
-						...(asset.meta ? { meta: asset.meta } : {}),
-						imageDataUrl: await mediaUrlToDataUrl(asset.imageDataUrl)
-					};
+					try {
+						return {
+							label: asset.label,
+							...(asset.meta ? { meta: asset.meta } : {}),
+							imageDataUrl: await mediaUrlToDataUrl(asset.imageDataUrl)
+						};
+					} catch {
+						return null;
+					}
 				})
 			)
 		).filter((asset): asset is ReelImagePayload => !!asset?.imageDataUrl);
+	}
+
+	function dedupeReelImages(images: ReelImagePayload[]): ReelImagePayload[] {
+		const seen = new Set<string>();
+		const out: ReelImagePayload[] = [];
+		for (const image of images) {
+			const key = `${image.meta ?? ''}|${image.label ?? ''}|${image.imageDataUrl}`;
+			if (!image.imageDataUrl || seen.has(key)) continue;
+			seen.add(key);
+			out.push(image);
+		}
+		return out;
 	}
 
 	function generatedAnimationPrompt(): string {
@@ -285,10 +323,6 @@
 		} catch {
 			return '';
 		}
-	}
-
-	function promptForVideo(): string {
-		return videoPrompt.trim();
 	}
 
 	function sanitizeProjectFilename(value: string, fallback: string): string {
@@ -327,6 +361,62 @@
 		return [...new Set(filenames)];
 	}
 
+	function metadataValue(raw: string, key: string): string {
+		return (
+			raw
+				.match(new RegExp(`(?:^|\\s)${key}=("[^"]+"|'[^']+'|\\S+)`))?.[1]
+				?.replace(/^['"]|['"]$/g, '') ?? ''
+		);
+	}
+
+	function metadataImageUrl(path: string): string {
+		const trimmed = path.trim();
+		if (/^(data:|blob:|https?:\/\/)/i.test(trimmed)) return trimmed;
+		if (/^\/api\//i.test(trimmed)) return trimmed;
+		const projectFileMatch = trimmed.match(/(?:^|[/\\])(project_live_obj_files[/\\].+)$/);
+		if (projectFileMatch) {
+			return `/api/project-file?path=${encodeURIComponent(projectFileMatch[1].replace(/\\/g, '/'))}`;
+		}
+		return `/api/project-file?path=${encodeURIComponent(trimmed)}`;
+	}
+
+	async function textureImagePayloadsFromLiveObj(sourceText: string): Promise<ReelImagePayload[]> {
+		const seen = new Set<string>();
+		const candidates: Array<{ label: string; meta: string; url: string }> = [];
+		for (const line of sourceText.split(/\r?\n/)) {
+			const match = line.match(/^\s*#@(texture|debug_image):\s*(.+)$/);
+			if (!match) continue;
+			const type = match[1];
+			const raw = match[2];
+			const path = metadataValue(raw, 'path') || metadataValue(raw, 'src');
+			if (!path || !/\.(png|jpe?g|webp)(?:$|[?#])/i.test(path)) continue;
+			const kind = (metadataValue(raw, 'kind') || type).replace(/[_-]+/g, ' ');
+			const url = metadataImageUrl(path);
+			const key = `${type}:${kind}:${url}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			candidates.push({
+				label: `${kind} map`,
+				meta: type === 'texture' ? 'texture artifact' : 'uv debug artifact',
+				url
+			});
+		}
+		const payloads = await Promise.all(
+			candidates.slice(0, 8).map(async (item): Promise<ReelImagePayload | null> => {
+				try {
+					return {
+						label: item.label,
+						meta: item.meta,
+						imageDataUrl: await mediaUrlToDataUrl(item.url)
+					};
+				} catch {
+					return null;
+				}
+			})
+		);
+		return payloads.filter((item): item is ReelImagePayload => !!item?.imageDataUrl);
+	}
+
 	function isTextureGalleryImage(asset: ProcessImageAsset): boolean {
 		const text = `${asset.meta ?? ''} ${asset.label ?? ''}`.toLowerCase();
 		return (
@@ -339,9 +429,7 @@
 	}
 
 	function textureGalleryImages(): ProcessImageAsset[] {
-		return processImages
-			.filter((asset) => isTextureGalleryImage(asset))
-			.slice(0, 6);
+		return processImages.filter((asset) => isTextureGalleryImage(asset)).slice(0, 8);
 	}
 
 	function projectStructureEntries(
@@ -394,11 +482,35 @@
 		}
 	}
 
-	function shotPlanPairPrompts(): string[] {
-		return [shotPlanPairPrompt(0, 1), shotPlanPairPrompt(1, 2)].filter(
-			(prompt) => prompt.length > 0
-		);
-	}
+	type TimelineFrameKey = 'start' | 'middle' | 'end';
+	type TimelineTransitionKey = 'startToMiddle' | 'middleToEnd';
+	type TimelineTransition = {
+		key: TimelineTransitionKey;
+		fromIndex: number;
+		toIndex: number;
+		fromKey: TimelineFrameKey;
+		toKey: TimelineFrameKey;
+		label: string;
+	};
+
+	const TIMELINE_TRANSITIONS: TimelineTransition[] = [
+		{
+			key: 'startToMiddle',
+			fromIndex: 0,
+			toIndex: 1,
+			fromKey: 'start',
+			toKey: 'middle',
+			label: 'Start to middle'
+		},
+		{
+			key: 'middleToEnd',
+			fromIndex: 1,
+			toIndex: 2,
+			fromKey: 'middle',
+			toKey: 'end',
+			label: 'Middle to end'
+		}
+	];
 
 	function shotPlanPairPrompt(from: number, to: number): string {
 		const prompts = parseShotPlanDirection(generatedDirectionJson)?.shot_plan?.pair_prompts ?? [];
@@ -407,12 +519,71 @@
 		return (exact?.prompt ?? fallback?.prompt ?? '').trim();
 	}
 
-	function timelinePairPrompt(fromIndex: number, toIndex: number, label: string): string {
-		const generated = shotPlanPairPrompt(fromIndex, toIndex);
-		const manual = promptForVideo();
+	function transitionPromptValue(key: TimelineTransitionKey): string {
+		return videoShot.transitionPrompts?.[key] ?? '';
+	}
+
+	function hasTransitionPromptOverride(key: TimelineTransitionKey): boolean {
+		return Object.prototype.hasOwnProperty.call(videoShot.transitionPrompts ?? {}, key);
+	}
+
+	function transitionGeneratedPrompt(transition: TimelineTransition): string {
+		return (
+			shotPlanPairPrompt(transition.fromIndex, transition.toIndex) ||
+			(transition.key === 'startToMiddle' ? generatedAnimationPrompt() : '')
+		);
+	}
+
+	function effectiveTransitionPrompt(transition: TimelineTransition): string {
+		if (hasTransitionPromptOverride(transition.key)) {
+			return transitionPromptValue(transition.key).trim();
+		}
+		const generated = transitionGeneratedPrompt(transition);
 		if (generated) return generated;
-		if (!manual) return '';
-		return `${label}: ${manual}`;
+		return '';
+	}
+
+	function transitionPromptSource(transition: TimelineTransition): string {
+		if (hasTransitionPromptOverride(transition.key)) return 'Custom';
+		if (transitionGeneratedPrompt(transition)) return 'Generated';
+		return 'Empty';
+	}
+
+	function transitionEditorValue(transition: TimelineTransition): string {
+		return hasTransitionPromptOverride(transition.key)
+			? transitionPromptValue(transition.key)
+			: transitionGeneratedPrompt(transition);
+	}
+
+	function updateTransitionPrompt(key: TimelineTransitionKey, value: string) {
+		updateActiveVideoShot({
+			transitionPrompts: {
+				...(videoShot.transitionPrompts ?? {}),
+				[key]: value
+			},
+			clips: []
+		});
+	}
+
+	function clearTransitionPromptOverride(key: TimelineTransitionKey) {
+		const { [key]: _removed, ...transitionPrompts } = videoShot.transitionPrompts ?? {};
+		updateActiveVideoShot({
+			transitionPrompts,
+			clips: []
+		});
+	}
+
+	function activeTransition(): TimelineTransition {
+		return (
+			TIMELINE_TRANSITIONS.find((transition) => transition.key === activeTransitionPromptKey) ??
+			TIMELINE_TRANSITIONS[0]
+		);
+	}
+
+	function timelinePairPrompt(transition: TimelineTransition): string {
+		const effective = effectiveTransitionPrompt(transition);
+		if (!effective) return '';
+		return effective;
 	}
 
 	async function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
@@ -512,25 +683,32 @@
 	}
 
 	function addFrameAsset(imageDataUrl: string, source: FrameAsset['source']) {
+		const camera = onCaptureSceneCameraSnapshot?.() ?? null;
+		addFrameAssetWithCamera(imageDataUrl, source, camera);
+	}
+
+	function addFrameAssetWithCamera(
+		imageDataUrl: string,
+		source: FrameAsset['source'],
+		camera: CameraSnapshot
+	) {
 		const id =
 			typeof crypto !== 'undefined' && 'randomUUID' in crypto
 				? crypto.randomUUID()
 				: `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-		const label =
-			source === 'screenshot'
-				? `Shot ${frameAssets.length + 1}`
-				: `Image ${frameAssets.length + 1}`;
+		const sourceCount = frameAssets.filter((asset) => asset.source === source).length + 1;
+		const label = source === 'screenshot' ? `Shot ${sourceCount}` : `Image ${sourceCount}`;
 		frameAssets = [
 			{
 				id,
 				label,
 				source,
 				imageDataUrl,
-				camera: onCaptureSceneCameraSnapshot?.() ?? null,
+				camera,
 				capturedAt: Date.now()
 			},
 			...frameAssets
-		].slice(0, 12);
+		].slice(0, MAX_RENDER_FRAME_ASSETS);
 	}
 
 	function makeFrameAsset(
@@ -603,11 +781,12 @@
 			assets.push(makeFrameAsset(imageDataUrl, shotPlanLabel(frame, index)));
 		}
 		if (assets.length < 3) return;
-		frameAssets = [...assets, ...frameAssets].slice(0, 12);
+		frameAssets = [...assets, ...frameAssets].slice(0, MAX_RENDER_FRAME_ASSETS);
 		videoShot = {
 			start: assets[0],
 			middle: assets[1],
 			end: assets[2],
+			transitionPrompts: videoShot.transitionPrompts,
 			clips: []
 		};
 	}
@@ -615,8 +794,6 @@
 	function updateActiveVideoShot(patch: Partial<VideoShot>) {
 		videoShot = { ...videoShot, ...patch };
 	}
-
-	type TimelineFrameKey = 'start' | 'middle' | 'end';
 
 	function assignFrameAsset(frame: TimelineFrameKey, asset: FrameAsset) {
 		errorLine = null;
@@ -667,6 +844,18 @@
 		);
 	}
 
+	function timelineCameraContext(): TimelineCameraContext[] {
+		return timelineFrames().map((item) => ({
+			key: item.key,
+			label: item.label,
+			camera: item.frame.camera
+		}));
+	}
+
+	function hasFramePairForMotionPrompts(): boolean {
+		return selectedVideoSupportsEndFrame ? timelineFrames().length >= 2 : !!videoShot.start;
+	}
+
 	function timelinePairs() {
 		const frames = timelineFrames();
 		if (selectedVideoSupportsEndFrame && frames.length >= 2) {
@@ -674,7 +863,7 @@
 				label: `${frame.label} -> ${frames[index + 1].label}`,
 				start: frame.frame,
 				end: frames[index + 1].frame,
-				prompt: timelinePairPrompt(index, index + 1, `${frame.label} to ${frames[index + 1].label}`)
+				prompt: timelinePairPrompt(TIMELINE_TRANSITIONS[index])
 			}));
 		}
 		return frames.length
@@ -683,7 +872,7 @@
 						label: frames.length >= 3 ? 'Start sequence' : frames[0].label,
 						start: frames[0].frame,
 						end: undefined,
-						prompt: shotPlanPairPrompt(0, 1) || promptForVideo()
+						prompt: timelinePairPrompt(TIMELINE_TRANSITIONS[0])
 					}
 				]
 			: [];
@@ -691,6 +880,61 @@
 
 	function timelinePairsWithPrompts() {
 		return timelinePairs().filter((pair) => pair.prompt?.trim());
+	}
+
+	function reelPreviewFrame(): ShotFrame | undefined {
+		return videoShot.start ?? timelineFrames()[0]?.frame;
+	}
+
+	function reelPreviewImageDataUrl(): string {
+		return reelPreviewFrame()?.imageDataUrl ?? '';
+	}
+
+	function hasReelSource(): boolean {
+		return (
+			videoShot.clips.some((clip) => !!clip.videoUrl) ||
+			frameAssets.length > 0 ||
+			timelineFrames().length > 0 ||
+			processImages.length > 0 ||
+			!!onCaptureReelTurntableFrames
+		);
+	}
+
+	function providerLabel(value: string): string {
+		const normalized = value.trim().toLowerCase();
+		if (normalized === 'openai') return 'OpenAI';
+		if (normalized === 'google') return 'Google';
+		if (normalized === 'openrouter') return 'OpenRouter';
+		return value.trim() || 'Provider';
+	}
+
+	function reelModelsUsed(): ReelModelPayload[] {
+		if (modelUsage.length) {
+			return modelUsage
+				.slice()
+				.sort((a, b) => a.usedAt - b.usedAt)
+				.map(({ role, provider, model }) => ({ role, provider, model }));
+		}
+		const provider = providerLabel(providerSettings.provider);
+		return [
+			{ role: 'Text', provider, model: providerSettings.textModel?.trim() ?? '' },
+			{ role: 'Image', provider, model: providerSettings.imageModel?.trim() ?? '' },
+			{ role: 'Video', provider, model: providerSettings.videoModel?.trim() ?? '' }
+		].filter((item) => item.model);
+	}
+
+	function recordModelUsage(role: string, providerValue: string, model: string | undefined) {
+		const cleanModel = model?.trim();
+		if (!cleanModel) return;
+		const provider = providerLabel(providerValue);
+		const existingIndex = modelUsage.findIndex(
+			(item) => item.role === role && item.provider === provider && item.model === cleanModel
+		);
+		const entry = { role, provider, model: cleanModel, usedAt: Date.now() };
+		modelUsage =
+			existingIndex >= 0
+				? modelUsage.map((item, index) => (index === existingIndex ? entry : item))
+				: [...modelUsage, entry].slice(-8);
 	}
 
 	function replaceClip(clips: GeneratedClip[], clipId: string, patch: Partial<GeneratedClip>) {
@@ -766,8 +1010,8 @@
 			errorLine = 'Capture a start frame first.';
 			return;
 		}
-		if (!promptForVideo() && shotPlanPairPrompts().length === 0) {
-			errorLine = 'Please enter a render prompt.';
+		if (timelinePairsWithPrompts().length === 0) {
+			errorLine = 'Please enter a motion prompt.';
 			return;
 		}
 		if (providerSettings.provider !== 'openrouter' && providerSettings.provider !== 'google') {
@@ -780,7 +1024,7 @@
 		}
 
 		videoBusy = true;
-		const pairs = timelinePairs();
+		const pairs = timelinePairsWithPrompts();
 		if (pairs.length === 0) {
 			errorLine = 'Capture a start frame first.';
 			return;
@@ -789,6 +1033,8 @@
 		updateActiveVideoShot({ clips: [] });
 		for (let take = 1; take <= pairs.length; take += 1) {
 			const pair = pairs[take - 1];
+			const videoProvider = providerSettings.provider;
+			const videoModel = providerSettings.videoModel ?? '';
 			const clipId =
 				typeof crypto !== 'undefined' && 'randomUUID' in crypto
 					? crypto.randomUUID()
@@ -802,13 +1048,15 @@
 			updateActiveVideoShot({ clips });
 			try {
 				const formData = new FormData();
-				formData.set('prompt', pair.prompt || promptForVideo());
+				formData.set('prompt', pair.prompt);
 				formData.set('liveObjText', liveObjText);
-				formData.set('provider', providerSettings.provider);
+				formData.set('provider', videoProvider);
 				formData.set('apiKey', providerSettings.apiKey?.trim() || '');
-				formData.set('videoModel', providerSettings.videoModel ?? '');
+				formData.set('videoModel', videoModel);
 				formData.set('videoUrl', providerSettings.videoUrl?.trim() || '');
 				formData.set('aspectRatio', await aspectRatioForVideo(pair.start.imageDataUrl));
+				if (pair.start.camera) formData.set('startCamera', JSON.stringify(pair.start.camera));
+				if (pair.end?.camera) formData.set('endCamera', JSON.stringify(pair.end.camera));
 				formData.set(
 					'startFrame',
 					await dataUrlToVideoFrameBlob(pair.start.imageDataUrl),
@@ -835,6 +1083,7 @@
 				if (!response.ok) {
 					throw new Error(payload.message || 'Video generation failed');
 				}
+				recordModelUsage('Video motion', videoProvider, videoModel);
 				clips = replaceClip(clips, clipId, {
 					status:
 						payload.videoUrl || payload.videoDataUrl
@@ -866,6 +1115,7 @@
 	async function generateReel() {
 		if (reelBusy) return;
 		errorLine = null;
+		reelStatus = '';
 		reelVideoDataUrl = '';
 		const readyClips = videoShot.clips.filter((clip) => !!clip.videoUrl);
 		const timeline = timelineFrames();
@@ -873,31 +1123,68 @@
 			readyClips.length === 0 &&
 			frameAssets.length === 0 &&
 			timeline.length === 0 &&
-			processImages.length === 0
+			processImages.length === 0 &&
+			!onCaptureReelTurntableFrames
 		) {
 			errorLine =
 				'Generate reel needs a final clip, timeline frame, gallery frame, or process screenshot.';
 			return;
 		}
 		reelBusy = true;
+		reelStatus = 'Preparing reel assets…';
+		let slowNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			const finalModelScreenshots = frameAssets.filter((asset) => asset.source === 'screenshot').slice(0, 8);
+			const finalModelScreenshots = frameAssets
+				.filter((asset) => asset.source === 'screenshot')
+				.slice(0, 8);
+			const sourceFrameSequence = [...frameAssets]
+				.sort((a, b) => a.capturedAt - b.capturedAt)
+				.slice(-8);
 			const generatedTextureImages = textureGalleryImages();
 			const buildProcessImages = processImages.filter((asset) => !isTextureGalleryImage(asset));
+			reelStatus = 'Collecting frames and process captures…';
 			const processImagePayload = await processImagePayloads(buildProcessImages);
-			const textureImagePayload = await processImagePayloads(generatedTextureImages);
+			const liveObjTexturePayload = await textureImagePayloadsFromLiveObj(liveObjText);
+			const textureImagePayload = dedupeReelImages([
+				...liveObjTexturePayload,
+				...(await processImagePayloads(generatedTextureImages))
+			]).slice(0, 8);
+			reelStatus = 'Capturing turntable shots…';
+			const capturedTurntableFrames = onCaptureReelTurntableFrames
+				? await onCaptureReelTurntableFrames()
+				: [];
+			if (capturedTurntableFrames.length) turntableFrameAssets = capturedTurntableFrames;
+			const turntableFrames = capturedTurntableFrames.length
+				? capturedTurntableFrames
+				: turntableFrameAssets.length
+					? turntableFrameAssets
+					: finalModelScreenshots;
+			let skippedFinalClips = 0;
 			const finalClips = (
 				await Promise.all(
 					readyClips.map(async (clip): Promise<ReelClipPayload | null> => {
 						if (!clip.videoUrl) return null;
-						return {
-							label: clip.label ?? 'Animation clip',
-							videoDataUrl: await mediaUrlToDataUrl(clip.videoUrl)
-						};
+						try {
+							return {
+								label: clip.label ?? 'Animation clip',
+								videoDataUrl: await mediaUrlToDataUrl(clip.videoUrl)
+							};
+						} catch {
+							skippedFinalClips += 1;
+							return null;
+						}
 					})
 				)
 			).filter((clip): clip is ReelClipPayload => !!clip?.videoDataUrl);
+			if (skippedFinalClips > 0) {
+				reelStatus = `${skippedFinalClips} expired clip${skippedFinalClips === 1 ? '' : 's'} skipped. Rendering MP4…`;
+			}
 			const hasFinalClip = finalClips.length > 0;
+			if (skippedFinalClips === 0) reelStatus = 'Rendering MP4…';
+			slowNoticeTimer = setTimeout(() => {
+				reelStatus =
+					'Still working. First reel export can take a few minutes while the local render browser is prepared.';
+			}, 12_000);
 			const response = await fetch('/api/render-reel', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -906,16 +1193,33 @@
 					liveObjText,
 					creativeDirectionJson: generatedDirectionJson,
 					renderPrompt: prompt,
-					videoPrompt: promptForVideo() || generatedAnimationPrompt(),
+					videoPrompt:
+						timelinePairsWithPrompts()
+							.map((pair) => pair.prompt)
+							.filter(Boolean)
+							.join('\n') || generatedAnimationPrompt(),
 					finalClips,
-					timelineFrames: [],
+					timelineFrames: timeline.map((item) => ({
+						label: item.label,
+						imageDataUrl: item.imageDataUrl
+					})),
 					galleryFrames: finalModelScreenshots.map((asset) => ({
+						label: asset.label,
+						imageDataUrl: asset.imageDataUrl
+					})),
+					sourceFrames: sourceFrameSequence.map((asset) => ({
+						label: asset.label,
+						meta: asset.source === 'generated' ? 'Generated image' : 'Screenshot',
+						imageDataUrl: asset.imageDataUrl
+					})),
+					turntableFrames: turntableFrames.map((asset) => ({
 						label: asset.label,
 						imageDataUrl: asset.imageDataUrl
 					})),
 					textureImages: textureImagePayload,
 					processImages: processImagePayload,
 					agentMetrics,
+					modelsUsed: reelModelsUsed(),
 					projectStructure: projectStructureEntries(hasFinalClip, timeline)
 				})
 			});
@@ -929,10 +1233,12 @@
 			}
 			reelVideoDataUrl = payload.videoDataUrl;
 			reelFilename = payload.filename ?? 'spellshape-reel.mp4';
+			reelStatus = 'Reel ready.';
 			downloadUrl(reelVideoDataUrl, reelFilename);
 		} catch (e) {
 			errorLine = e instanceof Error ? e.message : String(e);
 		} finally {
+			if (slowNoticeTimer) clearTimeout(slowNoticeTimer);
 			reelBusy = false;
 		}
 	}
@@ -941,6 +1247,8 @@
 		if (promptBusy || busy) return;
 		errorLine = null;
 		promptBusy = true;
+		const textProvider = providerSettings.provider;
+		const textModel = providerSettings.textModel;
 		try {
 			const response = await fetch('/api/render-prompt', {
 				method: 'POST',
@@ -948,9 +1256,11 @@
 				body: JSON.stringify({
 					liveObjText,
 					currentPrompt: prompt,
+					currentDirectionJson: generatedDirectionJson || undefined,
+					timelineCameraContext: timelineCameraContext(),
 					apiKey: providerSettings.apiKey?.trim() || undefined,
 					apiUrl: providerSettings.apiUrl?.trim() || undefined,
-					model: providerSettings.textModel
+					model: textModel
 				})
 			});
 			const payload = (await response.json().catch(() => ({}))) as {
@@ -961,12 +1271,52 @@
 			if (!response.ok || !payload.prompt) {
 				throw new Error(payload.message || 'Prompt generation failed');
 			}
+			recordModelUsage('Text planning', textProvider, textModel);
 			prompt = payload.prompt;
 			const directionJson = payload.direction ? JSON.stringify(payload.direction, null, 2) : '';
 			generatedDirectionJson = directionJson;
-			const animationPrompt = animationPromptFromDirectionJson(directionJson);
-			if (animationPrompt) videoPrompt = animationPrompt;
 			await captureShotPlanFrames(directionJson);
+		} catch (e) {
+			errorLine = e instanceof Error ? e.message : String(e);
+		} finally {
+			promptBusy = false;
+		}
+	}
+
+	async function updateMotionPromptsFromFrames() {
+		if (promptBusy || busy || videoBusy) return;
+		errorLine = null;
+		if (!hasFramePairForMotionPrompts()) {
+			errorLine = 'Add timeline frames before updating motion prompts.';
+			return;
+		}
+		promptBusy = true;
+		const textProvider = providerSettings.provider;
+		const textModel = providerSettings.textModel;
+		try {
+			const response = await fetch('/api/render-prompt', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					liveObjText,
+					currentPrompt: prompt,
+					currentDirectionJson: generatedDirectionJson || undefined,
+					timelineCameraContext: timelineCameraContext(),
+					apiKey: providerSettings.apiKey?.trim() || undefined,
+					apiUrl: providerSettings.apiUrl?.trim() || undefined,
+					model: textModel
+				})
+			});
+			const payload = (await response.json().catch(() => ({}))) as {
+				message?: string;
+				direction?: unknown;
+			};
+			if (!response.ok || !payload.direction) {
+				throw new Error(payload.message || 'Motion prompt update failed');
+			}
+			recordModelUsage('Text planning', textProvider, textModel);
+			generatedDirectionJson = JSON.stringify(payload.direction, null, 2);
+			updateActiveVideoShot({ transitionPrompts: {}, clips: [] });
 		} catch (e) {
 			errorLine = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -990,6 +1340,8 @@
 		if (renderSourceFrame) screenshotDataUrl = renderSourceFrame.imageDataUrl;
 		if (!renderScreenshotDataUrl) return;
 		busy = true;
+		const imageProvider = providerSettings.provider;
+		const imageModel = providerSettings.imageModel;
 		try {
 			const response = await fetch('/api/render-image', {
 				method: 'POST',
@@ -999,11 +1351,11 @@
 					screenshotDataUrl: renderScreenshotDataUrl,
 					cameraSnapshot: renderCameraSnapshot,
 					liveObjText,
-					provider: providerSettings.provider,
+					provider: imageProvider,
 					apiKey: providerSettings.apiKey?.trim() || undefined,
 					apiUrl: providerSettings.apiUrl?.trim() || undefined,
 					imageUrl: providerSettings.imageUrl?.trim() || undefined,
-					imageModel: providerSettings.imageModel
+					imageModel
 				})
 			});
 			const payload = (await response.json().catch(() => ({}))) as {
@@ -1013,8 +1365,9 @@
 			if (!response.ok || !payload.imageDataUrl) {
 				throw new Error(payload.message || 'Image generation failed');
 			}
+			recordModelUsage('Image render', imageProvider, imageModel);
 			generatedImageDataUrl = payload.imageDataUrl;
-			addFrameAsset(payload.imageDataUrl, 'generated');
+			addFrameAssetWithCamera(payload.imageDataUrl, 'generated', renderCameraSnapshot);
 		} catch (e) {
 			errorLine = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -1228,6 +1581,19 @@
 						<div class="planner-video-slot-empty">Add first frame</div>
 					{/if}
 				</div>
+				<button
+					type="button"
+					class="planner-transition-button"
+					class:active={activeTransitionPromptKey === 'startToMiddle'}
+					class:custom={hasTransitionPromptOverride('startToMiddle')}
+					onclick={() => (activeTransitionPromptKey = 'startToMiddle')}
+					disabled={videoBusy || promptBusy}
+					title="Edit start to middle motion"
+					aria-label="Edit start to middle motion prompt"
+				>
+					<span>Motion</span>
+					<small>{transitionPromptSource(TIMELINE_TRANSITIONS[0])}</small>
+				</button>
 				<div class="planner-video-slot" class:filled={!!videoShot.middle}>
 					<div class="planner-video-slot-head">
 						<span>Middle</span>
@@ -1245,6 +1611,19 @@
 						<div class="planner-video-slot-empty">Add middle frame</div>
 					{/if}
 				</div>
+				<button
+					type="button"
+					class="planner-transition-button"
+					class:active={activeTransitionPromptKey === 'middleToEnd'}
+					class:custom={hasTransitionPromptOverride('middleToEnd')}
+					onclick={() => (activeTransitionPromptKey = 'middleToEnd')}
+					disabled={videoBusy || promptBusy}
+					title="Edit middle to end motion"
+					aria-label="Edit middle to end motion prompt"
+				>
+					<span>Motion</span>
+					<small>{transitionPromptSource(TIMELINE_TRANSITIONS[1])}</small>
+				</button>
 				<div class="planner-video-slot" class:filled={!!videoShot.end}>
 					<div class="planner-video-slot-head">
 						<span>End</span>
@@ -1261,6 +1640,42 @@
 					{/if}
 				</div>
 			</div>
+			<div class="planner-transition-editor">
+				<label>
+					<span class="planner-label-inline">{activeTransition().label} motion</span>
+					<textarea
+						class="planner-text-input planner-render-prompt planner-transition-prompt"
+						rows="3"
+						placeholder="Describe the motion for this transition..."
+						value={transitionEditorValue(activeTransition())}
+						oninput={(event) =>
+							updateTransitionPrompt(
+								activeTransition().key,
+								(event.currentTarget as HTMLTextAreaElement).value
+							)}
+						disabled={videoBusy || promptBusy}
+					></textarea>
+				</label>
+				<div class="planner-transition-editor-foot">
+					<span>{transitionPromptSource(activeTransition())} prompt</span>
+					<div class="planner-transition-editor-actions">
+						<button
+							type="button"
+							onclick={updateMotionPromptsFromFrames}
+							disabled={videoBusy || promptBusy || busy || !hasFramePairForMotionPrompts()}
+							title="Refresh generated motion prompts using selected timeline frames and cameras"
+							>Update from frames</button
+						>
+						{#if hasTransitionPromptOverride(activeTransition().key)}
+							<button
+								type="button"
+								onclick={() => clearTransitionPromptOverride(activeTransition().key)}
+								disabled={videoBusy || promptBusy}>Use inherited</button
+							>
+						{/if}
+					</div>
+				</div>
+			</div>
 			{#if videoShot.middle && !selectedVideoSupportsEndFrame}
 				<div class="planner-video-note">
 					This model can use the 3-frame timeline as a sequence board, but pair clips need an
@@ -1273,7 +1688,7 @@
 						<span>Segment prompts</span>
 						<span>{timelinePairsWithPrompts().length} clips</span>
 					</div>
-					{#each timelinePairsWithPrompts() as pair}
+					{#each timelinePairsWithPrompts() as pair (pair.label)}
 						<div class="planner-segment-prompt">
 							<span>{pair.label}</span>
 							<p>{pair.prompt}</p>
@@ -1283,19 +1698,6 @@
 			{/if}
 		</section>
 
-		<div class="planner-video-controls">
-			<label>
-				<span class="planner-label-inline">Motion prompt</span>
-				<textarea
-					class="planner-text-input planner-render-prompt planner-video-prompt"
-					rows="3"
-					placeholder="Describe the motion or transformation for the clip..."
-					bind:value={videoPrompt}
-					disabled={videoBusy || promptBusy}
-				></textarea>
-			</label>
-		</div>
-
 		<div class="planner-video-actions planner-action-row planner-action-row--end">
 			<button
 				type="button"
@@ -1304,7 +1706,7 @@
 				disabled={busy ||
 					promptBusy ||
 					videoBusy ||
-					(!promptForVideo() && shotPlanPairPrompts().length === 0) ||
+					timelinePairsWithPrompts().length === 0 ||
 					!videoShot.start?.imageDataUrl ||
 					!videoProviderReady}
 			>
@@ -1367,34 +1769,65 @@
 			<div>
 				<div class="planner-render-title">Project reel</div>
 				<div class="planner-video-note">
-					Export a HyperFrames making-of reel with animation, references, build steps, and agent
-					effort.
+					Export a making-of reel with animation, references, build steps, and final frames.
 				</div>
 			</div>
-			<span class="planner-video-provider-pill">HyperFrames</span>
 		</div>
-		<div class="planner-reel-controls planner-action-row">
-			<label class="planner-context-field rendering-mode">
-				<span class="planner-label-inline">Format</span>
-				<select bind:value={reelAspectRatio} disabled={reelBusy}>
-					<option value="9:16">9:16 Reel</option>
-					<option value="16:9">16:9 Film</option>
-				</select>
-			</label>
+		<div class="planner-reel-controls">
+			<div class="planner-render-subhead">
+				<span>Format</span>
+				<span>{reelAspectRatio}</span>
+			</div>
+			<div class="planner-reel-format-grid" aria-label="Reel format">
+				<button
+					type="button"
+					class="planner-reel-format-button portrait"
+					class:active={reelAspectRatio === '9:16'}
+					aria-pressed={reelAspectRatio === '9:16'}
+					onclick={() => (reelAspectRatio = '9:16')}
+					disabled={reelBusy}
+				>
+					<span class="planner-reel-format-preview">
+						{#if reelPreviewImageDataUrl()}
+							<img src={reelPreviewImageDataUrl()} alt="" />
+						{:else}
+							<span class="planner-reel-format-empty">9:16</span>
+						{/if}
+					</span>
+					<span>Reel</span>
+				</button>
+				<button
+					type="button"
+					class="planner-reel-format-button landscape"
+					class:active={reelAspectRatio === '16:9'}
+					aria-pressed={reelAspectRatio === '16:9'}
+					onclick={() => (reelAspectRatio = '16:9')}
+					disabled={reelBusy}
+				>
+					<span class="planner-reel-format-preview">
+						{#if reelPreviewImageDataUrl()}
+							<img src={reelPreviewImageDataUrl()} alt="" />
+						{:else}
+							<span class="planner-reel-format-empty">16:9</span>
+						{/if}
+					</span>
+					<span>Film</span>
+				</button>
+			</div>
+		</div>
+		<div class="planner-reel-actions planner-action-row planner-action-row--end">
 			<button
 				type="button"
 				class="send-button planner-primary-action"
 				onclick={generateReel}
-				disabled={reelBusy ||
-					videoBusy ||
-					promptBusy ||
-					(!videoShot.clips.some((clip) => !!clip.videoUrl) &&
-						frameAssets.length === 0 &&
-						processImages.length === 0)}
+				disabled={reelBusy || videoBusy || promptBusy || !hasReelSource()}
 			>
 				{reelBusy ? 'Rendering reel…' : 'Generate reel'}
 			</button>
 		</div>
+		{#if reelStatus}
+			<div class="planner-reel-status" role="status">{reelStatus}</div>
+		{/if}
 		<div class="planner-video-note">
 			Uses all ready pair clips first, then concept, references, process captures, agent effort, and
 			package structure.
@@ -1595,27 +2028,77 @@
 	}
 	.planner-reel-controls {
 		margin-top: 1px;
+		display: grid;
+		gap: 7px;
+	}
+	.planner-reel-actions {
+		margin-top: 2px;
 	}
 	.planner-reel-preview {
 		margin-top: 2px;
 	}
-	.rendering-mode select {
-		box-sizing: border-box;
-		max-width: 140px;
-		height: 32px;
-		font-family: inherit;
-		font-size: 12px;
-		font-weight: 600;
-		color: #333;
-		border: 1px solid rgba(0, 0, 0, 0.12);
-		border-radius: 999px;
-		padding: 0 10px;
-		background: rgba(255, 255, 255, 0.95);
-		cursor: pointer;
+	.planner-reel-format-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+		align-items: stretch;
 	}
-	.rendering-mode select:disabled {
+	.planner-reel-format-button {
+		box-sizing: border-box;
+		display: grid;
+		grid-template-rows: 118px auto;
+		justify-items: center;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		min-height: 150px;
+		border: 1px solid var(--spell-border);
+		border-radius: var(--spell-radius-sm);
+		background: rgba(255, 255, 255, 0.58);
+		color: #475569;
+		font-family: inherit;
+		font-size: 11px;
+		font-weight: 800;
+		cursor: pointer;
+		padding: 8px;
+	}
+	.planner-reel-format-button.active {
+		border-color: rgba(0, 0, 235, 0.5);
+		background: rgba(0, 0, 235, 0.07);
+		color: var(--spell-blue);
+	}
+	.planner-reel-format-button:disabled {
 		cursor: not-allowed;
 		opacity: 0.58;
+	}
+	.planner-reel-format-preview {
+		position: relative;
+		display: grid;
+		place-items: center;
+		border: 1px solid rgba(0, 0, 0, 0.1);
+		border-radius: var(--spell-radius-sm);
+		background: var(--spell-surface-soft);
+		overflow: hidden;
+	}
+	.planner-reel-format-button.portrait .planner-reel-format-preview {
+		aspect-ratio: 9 / 16;
+		height: 108px;
+	}
+	.planner-reel-format-button.landscape .planner-reel-format-preview {
+		aspect-ratio: 16 / 9;
+		width: 100%;
+		max-width: 148px;
+	}
+	.planner-reel-format-preview img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+	.planner-reel-format-empty {
+		font-size: 10px;
+		font-weight: 850;
+		color: #94a3b8;
 	}
 	.planner-video-head {
 		display: flex;
@@ -1638,11 +2121,6 @@
 		font-size: 11px;
 		line-height: 1.4;
 		color: #64748b;
-	}
-	.planner-video-controls {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr);
-		gap: 8px;
 	}
 	.planner-render-subsection {
 		display: flex;
@@ -1690,8 +2168,94 @@
 	}
 	.planner-video-timeline {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
+		grid-template-columns: minmax(0, 1fr) 72px minmax(0, 1fr) 72px minmax(0, 1fr);
 		gap: 8px;
+		align-items: stretch;
+	}
+	.planner-transition-button {
+		align-self: center;
+		display: grid;
+		place-items: center;
+		gap: 2px;
+		min-width: 0;
+		min-height: 54px;
+		border: 1px solid var(--spell-border);
+		border-radius: var(--spell-radius-sm);
+		background: rgba(255, 255, 255, 0.62);
+		color: #475569;
+		font: inherit;
+		cursor: pointer;
+		padding: 7px 5px;
+		text-align: center;
+	}
+	.planner-transition-button.active,
+	.planner-transition-button.custom {
+		border-color: rgba(0, 0, 235, 0.38);
+		background: rgba(0, 0, 235, 0.06);
+		color: var(--spell-blue);
+	}
+	.planner-transition-button:disabled {
+		cursor: not-allowed;
+		opacity: 0.58;
+	}
+	.planner-transition-button span {
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 10px;
+		font-weight: 800;
+	}
+	.planner-transition-button small {
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 9px;
+		font-weight: 700;
+		color: currentColor;
+		opacity: 0.72;
+	}
+	.planner-transition-editor {
+		display: grid;
+		gap: 6px;
+		border: 1px solid var(--spell-border-soft);
+		border-radius: var(--spell-radius-sm);
+		background: rgba(255, 255, 255, 0.46);
+		padding: 8px;
+	}
+	.planner-transition-prompt {
+		min-height: 76px;
+	}
+	.planner-transition-editor-foot {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		font-size: 10px;
+		font-weight: 750;
+		color: #94a3b8;
+	}
+	.planner-transition-editor-actions {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.planner-transition-editor-actions button {
+		border: 0;
+		background: transparent;
+		color: var(--spell-blue);
+		font: inherit;
+		font-size: 10px;
+		font-weight: 800;
+		cursor: pointer;
+		padding: 0;
+	}
+	.planner-transition-editor-actions button:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
 	}
 	.planner-video-slot {
 		min-width: 0;
@@ -1849,12 +2413,6 @@
 		min-height: 26px;
 		padding: 0;
 		border-radius: var(--spell-radius-sm);
-	}
-	.planner-video-controls label {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		min-width: 0;
 	}
 	.planner-video-actions {
 		margin-top: 1px;

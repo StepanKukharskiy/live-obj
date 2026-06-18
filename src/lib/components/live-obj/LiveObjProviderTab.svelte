@@ -24,6 +24,8 @@
 		openrouter: {
 			text: [
 				'openai/gpt-5.5',
+				'~anthropic/claude-fable-latest',
+				'anthropic/claude-fable-5',
 				'anthropic/claude-opus-4.8',
 				'google/gemini-3.1-pro-preview',
 				'anthropic/claude-sonnet-4.6',
@@ -58,7 +60,7 @@
 				'gemini-2.5-flash'
 			],
 			image: ['gemini-3.1-flash-image-preview'],
-			video: ['veo-3.1-generate-preview', 'veo-3.1-fast-generate-preview']
+			video: ['veo-3.1-fast-generate-preview', 'veo-3.1-generate-preview']
 		},
 		together: {
 			text: [
