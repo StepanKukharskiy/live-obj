@@ -26,6 +26,7 @@ Output only valid OBJ content with required scene metadata:
 - Per-object UV grouping hint (optional): #@uv_hint: strategy=radial|box|semantic seam=back|inside groups=side,top,bottom
 - Face-block UV island marker (optional, before related face lines): #@uv_island: id=side role=side projection=cylindrical seam=back
 - Per-object intended bounds (optional): #@bbox: min=[x,y,z] max=[x,y,z]
+- Per-object opening contract (optional): #@opening: id=name type=glazed role=glass loop=[[x,y,z],...] normal=[x,y,z]
 - Per-object locks for targeted edits (optional): #@lock: footprint, position, silhouette, material
 - Per-object anchors for later repair/assembly (optional): #@anchor: id=anchor_id at=[x,y,z]
 - Per-object soft intent constraints (optional): #@constraint: roof must_touch walls
@@ -56,6 +57,7 @@ Supported #@post ops:
 - simplify ratio=value
 - face_lattice inset=value thickness=value weld=value guide_subdivide=n guide_smooth=n subdivide=n smooth=n mode=replace|append
 - skin_edges radius=value resolution=n edges=feature|boundary|all angle=degrees mode=replace|append
+- build_glazed_openings frame_width=value frame_depth=value panel_inset=value panel_recess=value panel_thickness=value mode=append|replace
 - snap_to_ground axis=x|y|z
 - center_origin axes=xz|xy|yz|xyz
 - material name=material_name
@@ -69,11 +71,13 @@ Use #@post for:
 - material and tag metadata
 - clean printable panel lattice surfaces from sculpted mesh faces with face_lattice; use guide_subdivide=1 and guide_smooth=1 when panel sizes should be more even or original face edges show as valleys, inset around 0.2-0.4, optional subdivide=1 for final Catmull-Clark smoothing, and mode=replace
 - single continuous printable exoskeleton skins from raw mesh edges with skin_edges; prefer edges=feature angle=25 and mode=replace
+- window, facade, skylight, windshield, and vehicle glass assemblies from exact #@opening loops with build_glazed_openings; this creates the frame/reveal ring and recessed glass panel from the same aperture boundary
 
 Do not use #@post, object names, tags, semantic text, material names, or unsupported attributes as a substitute for visible geometry. If a requested visual property cannot be produced by the supported executable #@post syntax above, bake it into the raw v/f mesh by adding or replacing real geometry with enough vertices/faces for the effect to be visible.
 
 Use semantic edit metadata for post-parametric control intent:
 - #@bbox records intended extents for planning, placement, and validation. It does not transform geometry.
+- #@opening records a fitted aperture boundary for later deterministic infill. For houses and cars, declare window/windshield loops on the owning body/envelope and use #@post build_glazed_openings instead of separately guessing glass mesh outlines.
 - #@lock tells future targeted edits what to preserve. Use concrete values like footprint, position, silhouette, material, proportions, or openings.
 - #@part names the semantic role when an object/group is a meaningful design part.
 - #@uv_hint tells later texture/displacement tools how to group UV islands. Use it for objects with clear unwrap logic: vases/cups use strategy=radial groups=side,top,bottom; cars/sneakers can use strategy=semantic groups=body,sole,windows,laces.

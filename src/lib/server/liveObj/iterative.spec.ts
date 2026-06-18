@@ -6,6 +6,7 @@ import {
 	normalizeGeneratedPartMetadata,
 	parseJsonObject,
 	rawObjControlIssues,
+	summarizeLiveObjForPlanning,
 	validateLiveObj
 } from './iterative';
 
@@ -236,5 +237,23 @@ describe('iterative Live OBJ helpers', () => {
 		expect(repaired).toContain('#@controls:');
 		expect(repaired).toContain('#@ - transform scale=[control_scale,control_scale,control_scale]');
 		expect(validateRawPostSource(repaired).valid).toBe(true);
+	});
+
+	it('includes opening contracts in planning summaries', () => {
+		const source = [
+			'o house_primary_massing',
+			'#@source: llm_mesh',
+			'#@semantic: narrow house body',
+			'#@opening: id=front_window type=glazed role=glass loop=[[-1,0,0],[1,0,0],[1,2,0],[-1,2,0]] normal=[0,0,-1]',
+			'v -2 0 0',
+			'v 2 0 0',
+			'v 0 2 0',
+			'f 1 2 3'
+		].join('\n');
+
+		const summary = summarizeLiveObjForPlanning(source);
+
+		expect(summary).toContain('openings={id=front_window type=glazed role=glass');
+		expect(summary).toContain('loop=[[-1,0,0],[1,0,0],[1,2,0],[-1,2,0]]');
 	});
 });

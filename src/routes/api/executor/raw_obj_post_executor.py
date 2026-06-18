@@ -17,6 +17,7 @@ Supported post ops:
     simplify ratio=v
     face_lattice inset=v thickness=v weld=v guide_subdivide=n guide_smooth=n subdivide=n smooth=n mode=replace|append
     skin_edges radius=v resolution=n edges=feature|boundary|all angle=v mode=replace|append
+    build_glazed_openings frame_width=v frame_depth=v panel_recess=v panel_thickness=v mode=append
     snap_to_ground axis=x|y|z
     center_origin axes=xz|xy|yz|xyz
     material name=mat_id
@@ -106,6 +107,17 @@ SUPPORTED_POST_ATTRIBUTES = {
         "mode",
     },
     "skin_edges": {"radius", "resolution", "edges", "angle", "mode", "padding"},
+    "build_glazed_openings": {
+        "ids",
+        "role",
+        "type",
+        "frame_width",
+        "frame_depth",
+        "panel_inset",
+        "panel_recess",
+        "panel_thickness",
+        "mode",
+    },
     "snap_to_ground": {"axis"},
     "center_origin": {"axes"},
     "material": {"name"},
@@ -372,6 +384,129 @@ def mesh_bbox(mesh: Mesh) -> Tuple[Vec3, Vec3]:
         return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
     xs, ys, zs = zip(*mesh.vertices)
     return (min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs))
+
+
+def vec_scale(v: Vec3, s: float) -> Vec3:
+    return (v[0] * s, v[1] * s, v[2] * s)
+
+
+def coerce_vec3(value: Any) -> Optional[Vec3]:
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        return None
+    try:
+        return (float(value[0]), float(value[1]), float(value[2]))
+    except (TypeError, ValueError):
+        return None
+
+
+def coerce_vec3_loop(value: Any) -> List[Vec3]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    loop: List[Vec3] = []
+    for item in value:
+        vec = coerce_vec3(item)
+        if vec is not None:
+            loop.append(vec)
+    return loop
+
+
+def face_normal_from_points(points: List[Vec3]) -> Vec3:
+    if len(points) < 3:
+        return (0.0, 0.0, 1.0)
+    normal = (0.0, 0.0, 0.0)
+    for i, point in enumerate(points):
+        nxt = points[(i + 1) % len(points)]
+        normal = vec_add(
+            normal,
+            (
+                (point[1] - nxt[1]) * (point[2] + nxt[2]),
+                (point[2] - nxt[2]) * (point[0] + nxt[0]),
+                (point[0] - nxt[0]) * (point[1] + nxt[1]),
+            ),
+        )
+    return vec_normalize(normal)
+
+
+def plane_basis(normal: Vec3) -> Tuple[Vec3, Vec3]:
+    n = vec_normalize(normal)
+    helper = (0.0, 1.0, 0.0) if abs(n[1]) < 0.9 else (1.0, 0.0, 0.0)
+    u = vec_normalize(vec_cross(helper, n), (1.0, 0.0, 0.0))
+    v = vec_normalize(vec_cross(n, u), (0.0, 1.0, 0.0))
+    return u, v
+
+
+def signed_polygon_area_2d(points: List[Tuple[float, float]]) -> float:
+    area = 0.0
+    for i, point in enumerate(points):
+        nxt = points[(i + 1) % len(points)]
+        area += point[0] * nxt[1] - nxt[0] * point[1]
+    return area * 0.5
+
+
+def line_intersection_2d(
+    point_a: Tuple[float, float],
+    dir_a: Tuple[float, float],
+    point_b: Tuple[float, float],
+    dir_b: Tuple[float, float],
+) -> Optional[Tuple[float, float]]:
+    det = dir_a[0] * dir_b[1] - dir_a[1] * dir_b[0]
+    if abs(det) <= 1e-9:
+        return None
+    dx = point_b[0] - point_a[0]
+    dy = point_b[1] - point_a[1]
+    t = (dx * dir_b[1] - dy * dir_b[0]) / det
+    return (point_a[0] + dir_a[0] * t, point_a[1] + dir_a[1] * t)
+
+
+def inset_planar_loop(loop: List[Vec3], normal: Vec3, amount: float) -> List[Vec3]:
+    if len(loop) < 3 or amount <= 1e-9:
+        return list(loop)
+    origin = loop[0]
+    u, v = plane_basis(normal)
+    pts2 = [(vec_dot(vec_sub(point, origin), u), vec_dot(vec_sub(point, origin), v)) for point in loop]
+    area = signed_polygon_area_2d(pts2)
+    if abs(area) <= 1e-9:
+        centroid = (
+            sum(point[0] for point in loop) / len(loop),
+            sum(point[1] for point in loop) / len(loop),
+            sum(point[2] for point in loop) / len(loop),
+        )
+        return [vec_add(point, vec_scale(vec_normalize(vec_sub(centroid, point)), amount)) for point in loop]
+
+    orientation = 1.0 if area > 0 else -1.0
+    offset_lines: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    for i, point in enumerate(pts2):
+        nxt = pts2[(i + 1) % len(pts2)]
+        edge = (nxt[0] - point[0], nxt[1] - point[1])
+        edge_len = math.sqrt(edge[0] * edge[0] + edge[1] * edge[1])
+        if edge_len <= 1e-9:
+            offset_lines.append((point, (1.0, 0.0)))
+            continue
+        direction = (edge[0] / edge_len, edge[1] / edge_len)
+        inward = (-orientation * direction[1], orientation * direction[0])
+        offset_point = (point[0] + inward[0] * amount, point[1] + inward[1] * amount)
+        offset_lines.append((offset_point, direction))
+
+    inset2: List[Tuple[float, float]] = []
+    for i in range(len(pts2)):
+        prev_line = offset_lines[(i - 1) % len(offset_lines)]
+        next_line = offset_lines[i]
+        hit = line_intersection_2d(prev_line[0], prev_line[1], next_line[0], next_line[1])
+        if hit is None:
+            point = pts2[i]
+            centroid2 = (
+                sum(p[0] for p in pts2) / len(pts2),
+                sum(p[1] for p in pts2) / len(pts2),
+            )
+            inward = (centroid2[0] - point[0], centroid2[1] - point[1])
+            length = math.sqrt(inward[0] * inward[0] + inward[1] * inward[1]) or 1.0
+            hit = (point[0] + inward[0] / length * amount, point[1] + inward[1] / length * amount)
+        inset2.append(hit)
+
+    return [
+        vec_add(origin, vec_add(vec_scale(u, point[0]), vec_scale(v, point[1])))
+        for point in inset2
+    ]
 
 
 def face_centroid(mesh: Mesh, face: Face) -> Vec3:
@@ -740,10 +875,10 @@ def vec_length(a: Vec3) -> float:
     return math.sqrt(vec_dot(a, a))
 
 
-def vec_normalize(a: Vec3) -> Vec3:
+def vec_normalize(a: Vec3, fallback: Vec3 = (0.0, 0.0, 0.0)) -> Vec3:
     length = vec_length(a)
     if length <= 1e-12:
-        return (0.0, 0.0, 0.0)
+        return fallback
     return (a[0] / length, a[1] / length, a[2] / length)
 
 
@@ -1492,6 +1627,152 @@ def op_skin_edges(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mes
     return skinned
 
 
+def opening_specs_from_meta(meta_lines: List[str]) -> List[Dict[str, Any]]:
+    openings: List[Dict[str, Any]] = []
+    for raw_line in meta_lines:
+        line = raw_line.strip()
+        if not line.startswith("#@"):
+            continue
+        body = line[2:].strip()
+        if not body.lower().startswith("opening"):
+            continue
+        if body.startswith("opening:"):
+            raw_spec = body[len("opening:") :].strip()
+        elif body.startswith("opening "):
+            raw_spec = body[len("opening ") :].strip()
+        else:
+            continue
+        spec = parse_tokens("opening " + raw_spec)
+        spec.pop("cmd", None)
+        if spec:
+            openings.append(spec)
+    return openings
+
+
+def opening_matches_filter(spec: Dict[str, Any], op: Dict[str, Any]) -> bool:
+    ids = op.get("ids")
+    if ids:
+        wanted = {
+            str(item).strip()
+            for item in (ids if isinstance(ids, (list, tuple)) else str(ids).split(","))
+            if str(item).strip()
+        }
+        if wanted and str(spec.get("id", "")).strip() not in wanted:
+            return False
+    for key in ("role", "type"):
+        wanted = op.get(key)
+        if wanted and str(spec.get(key, "")).strip().lower() != str(wanted).strip().lower():
+            return False
+    return True
+
+
+def add_loop_vertices(mesh: Mesh, points: List[Vec3]) -> List[int]:
+    start = len(mesh.vertices) + 1
+    mesh.vertices.extend(points)
+    return [start + i for i in range(len(points))]
+
+
+def add_ring_faces(mesh: Mesh, outer: List[int], inner: List[int], reverse: bool = False) -> None:
+    count = min(len(outer), len(inner))
+    for i in range(count):
+        face = [outer[i], outer[(i + 1) % count], inner[(i + 1) % count], inner[i]]
+        mesh.faces.append(list(reversed(face)) if reverse else face)
+
+
+def add_loop_solid(mesh: Mesh, front: List[Vec3], back: List[Vec3]) -> None:
+    front_indices = add_loop_vertices(mesh, front)
+    back_indices = add_loop_vertices(mesh, back)
+    mesh.faces.append(front_indices)
+    mesh.faces.append(list(reversed(back_indices)))
+    count = len(front_indices)
+    for i in range(count):
+        mesh.faces.append(
+            [
+                front_indices[i],
+                front_indices[(i + 1) % count],
+                back_indices[(i + 1) % count],
+                back_indices[i],
+            ]
+        )
+
+
+def build_glazed_opening_mesh(spec: Dict[str, Any], op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
+    loop = coerce_vec3_loop(spec.get("loop"))
+    if len(loop) < 3:
+        return Mesh()
+    normal = coerce_vec3(spec.get("normal")) or face_normal_from_points(loop)
+    normal = vec_normalize(normal)
+    frame_width = max(
+        0.0,
+        eval_numeric_expr(spec.get("frame_width", op.get("frame_width", 0.04)), params),
+    )
+    frame_depth = max(
+        0.0,
+        eval_numeric_expr(spec.get("frame_depth", op.get("frame_depth", 0.035)), params),
+    )
+    panel_recess = max(
+        0.0,
+        eval_numeric_expr(spec.get("panel_recess", op.get("panel_recess", 0.018)), params),
+    )
+    panel_thickness = max(
+        0.001,
+        eval_numeric_expr(spec.get("panel_thickness", op.get("panel_thickness", 0.01)), params),
+    )
+    panel_inset = max(
+        frame_width,
+        eval_numeric_expr(spec.get("panel_inset", spec.get("inset", frame_width)), params),
+    )
+    inner = inset_planar_loop(loop, normal, panel_inset)
+    if len(inner) != len(loop):
+        return Mesh()
+
+    out = Mesh()
+    outer_front = add_loop_vertices(out, loop)
+    inner_front = add_loop_vertices(out, inner)
+    outer_back = add_loop_vertices(out, [vec_sub(point, vec_scale(normal, frame_depth)) for point in loop])
+    inner_back = add_loop_vertices(out, [vec_sub(point, vec_scale(normal, frame_depth)) for point in inner])
+
+    add_ring_faces(out, outer_front, inner_front)
+    add_ring_faces(out, outer_back, inner_back, reverse=True)
+    add_ring_faces(out, outer_front, outer_back, reverse=True)
+    add_ring_faces(out, inner_front, inner_back)
+
+    glass_front = [vec_sub(point, vec_scale(normal, panel_recess)) for point in inner]
+    glass_back = [vec_sub(point, vec_scale(normal, panel_recess + panel_thickness)) for point in inner]
+    add_loop_solid(out, glass_front, glass_back)
+    return out
+
+
+def op_build_glazed_openings(
+    mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any], meta_lines: List[str]
+) -> Mesh:
+    openings = [
+        spec for spec in opening_specs_from_meta(meta_lines) if opening_matches_filter(spec, op)
+    ]
+    if not openings:
+        warn("build_glazed_openings found no matching #@opening metadata; leaving mesh unchanged")
+        return mesh
+
+    generated = Mesh()
+    for spec in openings:
+        opening_mesh = build_glazed_opening_mesh(spec, op, params)
+        if not opening_mesh.vertices or not opening_mesh.faces:
+            warn(f"build_glazed_openings skipped malformed opening {spec.get('id', '(unnamed)')!r}")
+            continue
+        generated.extend(opening_mesh)
+
+    if not generated.vertices or not generated.faces:
+        warn("build_glazed_openings generated an empty mesh; leaving mesh unchanged")
+        return mesh
+
+    mode = str(op.get("mode", "append")).strip().lower()
+    if mode == "replace":
+        return generated
+    out = mesh.copy()
+    out.extend(generated)
+    return out
+
+
 def op_snap_to_ground(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
     ax = axis_index(op.get("axis", "y"), "y")
     min_corner, _ = mesh_bbox(mesh)
@@ -1582,6 +1863,11 @@ def apply_post_ops(obj: RawObject) -> None:
                 mesh = op_skin_edges(mesh, op, obj.params)
             except Exception as e:
                 warn(f"{obj.name}: skin_edges failed: {e}")
+        elif cmd == "build_glazed_openings":
+            try:
+                mesh = op_build_glazed_openings(mesh, op, obj.params, obj.meta_lines)
+            except Exception as e:
+                warn(f"{obj.name}: build_glazed_openings failed: {e}")
         elif cmd == "snap_to_ground":
             mesh = op_snap_to_ground(mesh, op)
         elif cmd == "center_origin":

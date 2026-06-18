@@ -73,6 +73,7 @@ type ObjectSummary = {
 	name: string;
 	source?: string;
 	semantic?: string;
+	openings: string[];
 	vertexCount: number;
 	faceCount: number;
 	bbox?: { min: [number, number, number]; max: [number, number, number] };
@@ -651,7 +652,8 @@ export function summarizeLiveObjForPlanning(liveObj: string): string {
 			const bbox = obj.bbox
 				? ` bbox=[${obj.bbox.min.map((n) => n.toFixed(3)).join(',')}..${obj.bbox.max.map((n) => n.toFixed(3)).join(',')}]`
 				: '';
-			return `- ${obj.name}: source=${obj.source || 'unknown'} v=${obj.vertexCount} f=${obj.faceCount}${bbox}${obj.semantic ? ` semantic="${obj.semantic}"` : ''}`;
+			const openings = obj.openings.length ? ` openings={${obj.openings.join('; ')}}` : '';
+			return `- ${obj.name}: source=${obj.source || 'unknown'} v=${obj.vertexCount} f=${obj.faceCount}${bbox}${obj.semantic ? ` semantic="${obj.semantic}"` : ''}${openings}`;
 		})
 		.join('\n');
 }
@@ -662,10 +664,14 @@ function summarizeObjects(liveObj: string): ObjectSummary[] {
 		const name = block.match(/^\s*o\s+([^\s#]+)/m)?.[1] ?? 'unnamed';
 		const source = block.match(/^\s*#@source:\s*([^\s]+)/m)?.[1];
 		const semantic = block.match(/^\s*#@semantic:\s*(.+)$/m)?.[1]?.trim();
+		const openings = [...block.matchAll(/^\s*#@opening:?\s+(.+)$/gim)].map((match) =>
+			match[1].trim()
+		);
 		return {
 			name,
 			source,
 			semantic,
+			openings,
 			vertexCount: countVertices(block),
 			faceCount: countFaces(block),
 			bbox: bboxFromText(block)

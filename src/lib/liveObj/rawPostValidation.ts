@@ -11,6 +11,7 @@ const SUPPORTED_RAW_POST_OPS = new Set([
 	'simplify',
 	'face_lattice',
 	'skin_edges',
+	'build_glazed_openings',
 	'snap_to_ground',
 	'center_origin',
 	'material',
@@ -38,6 +39,17 @@ const SUPPORTED_RAW_POST_ATTRIBUTES: Record<string, Set<string>> = {
 		'mode'
 	]),
 	skin_edges: new Set(['radius', 'resolution', 'edges', 'angle', 'mode', 'padding']),
+	build_glazed_openings: new Set([
+		'ids',
+		'role',
+		'type',
+		'frame_width',
+		'frame_depth',
+		'panel_inset',
+		'panel_recess',
+		'panel_thickness',
+		'mode'
+	]),
 	snap_to_ground: new Set(['axis']),
 	center_origin: new Set(['axes']),
 	material: new Set(['name']),
@@ -48,6 +60,7 @@ const RAW_POST_SEMANTIC_META_KEYS = new Set([
 	'bbox',
 	'lock',
 	'part',
+	'opening',
 	'anchor',
 	'constraint',
 	'variant'
@@ -141,6 +154,10 @@ function hasVec3Attribute(body: string, key: string): boolean {
 
 function hasIdAttribute(body: string): boolean {
 	return /\bid\s*=\s*("[^"]+"|'[^']+'|[A-Za-z_][\w-]*)/i.test(body);
+}
+
+function hasLoopAttribute(body: string): boolean {
+	return /\bloop\s*=\s*\[\s*\[[\s\S]*\]\s*\]/i.test(body);
 }
 
 function hasAttribute(body: string, key: string): boolean {
@@ -283,6 +300,11 @@ export function validateRawPostSource(sourceText: string): RawPostValidationResu
 			}
 			if (key === 'anchor' && (!hasIdAttribute(body) || !hasVec3Attribute(body, 'at'))) {
 				errors.push(`Object '${object.name}' has malformed #@anchor; expected id=name at=[x,y,z]`);
+			}
+			if (key === 'opening' && (!hasIdAttribute(body) || !hasLoopAttribute(body))) {
+				errors.push(
+					`Object '${object.name}' has malformed #@opening; expected id=name loop=[[x,y,z],...]`
+				);
 			}
 		}
 		const postScan = postOpsFromMetaLines(object.metaLines);

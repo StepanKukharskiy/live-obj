@@ -65,6 +65,16 @@ Return only JSON with this shape:
   "scene": "short scene description",
   "units": "meters",
   "up": "y",
+  "visual": {
+    "backgroundColor": "#202124",
+    "ambientLightIntensity": 0.9,
+    "directionalLightIntensity": 1.8,
+    "cameraFov": 45,
+    "toneMappingExposure": 1.05,
+    "canvasAspectRatio": "16:9",
+    "cameraView": "front_left_high",
+    "cameraFocus": ["primary_object_id"]
+  },
   "materials": [
     { "id": "material_id", "color": "#RRGGBB", "roughness": 0.7, "metalness": 0, "role": "short role" }
   ],
@@ -73,7 +83,14 @@ Return only JSON with this shape:
       "id": "stable_object_or_group_id",
       "role": "what this part contributes",
       "method": "llm_mesh",
+      "postProcess": {
+        "type": "none|uv_dream",
+        "prompt": "surface detail intent for this part only",
+        "mode": "displace|map-remesh",
+        "amount": 1
+      },
       "dependencies": ["prior_part_id"],
+      "cameraFocus": ["this_part_id", "supporting_part_id"],
       "prompt": "specific instructions for generating only this part",
       "controls": [
         { "key": "part_width", "label": "Part width", "kind": "slider", "default": 1, "min": 0.5, "max": 1.8, "step": 0.05 }
@@ -94,16 +111,26 @@ Planning rules:
 - Merge related elements into one part instead of producing many small parts.
 - Do not plan separate first-pass parts for seams, fasteners, bolts, handles, bollards, expansion joints, connection plates, tiny context objects, or micro facade details unless the user explicitly asks for them.
 - Make dependencies explicit so later parts can align to earlier geometry.
+- For houses, cars, and product shells with windows or windshields, prefer opening-owned glazing: the body/envelope part should declare #@opening loops for glazed apertures and use #@post build_glazed_openings instead of planning a separate first-pass glass mesh that guesses the gap shape.
+- If a separate infill/glazing part is still useful, make it depend on the body/envelope openings and instruct it to duplicate the provided opening loop coordinates exactly rather than inventing new outlines.
 - Use y as the vertical/up axis unless the user explicitly asks otherwise.
+- Use "visual" for scene-level render direction when the request implies a mood, product shot, video, cinematic framing, or social format. Omit visual fields you are not confident about.
+- Allowed canvasAspectRatio values: "fill", "1:1", "4:3", "16:9", "9:16", "4:5", "3:2", "2:3", "21:9".
+- Allowed cameraView values: "front_left_high", "front_right_high", "low_front", "side", "top", "isometric". Choose a view that supports the requested shot direction.
+- Use cameraFocus on visual or parts when a shot/screenshot should frame specific objects. Values must be existing/planned object ids from parts/dependencies, not prose.
 - Plan raw mesh parts. Each part method must be "llm_mesh".
 - Do not use method values "procedural", "recipe", or "hybrid" in this iterative raw OBJ planner.
 - Do not invent executor operations. The default generation method is llm_mesh with semantic metadata and optional generic post notes.
+- Decide per part whether it needs an AI dreamed surface post-process. If the base mesh should remain simple but the final part needs hallucinated surface relief, ornamental flow, fabric-like folds, cloud/smoke/water/petal detail, or other image-imagined micro/mid-scale geometry, set postProcess.type to "uv_dream" for that part. Otherwise set type to "none" or omit postProcess.
+- Use uv_dream sparingly: usually only the primary shell/body/roof/skin/surface part, not supports, context, lights, cords, fasteners, or already-small details.
+- For uv_dream postProcess, write a part-specific prompt that describes only the surface relief to generate while preserving the base mesh volume and silhouette. Use mode "displace" unless the user explicitly needs map-derived topology; use "map-remesh" only for clean topology experiments.
 - If the user asks for controls, sliders, parameters, adjustable dimensions, or editability, preserve that requirement in the relevant part prompts. Do not treat metadata controls as forbidden UI objects.
-- In raw-first generation, every planned part should expose 2-5 practical controls by default using structured "controls" and "controlPostOps" fields.
+- In raw-first generation, controls are optional but useful when they preserve the authored shape. Add at most 1-2 structured "controls" and "controlPostOps" for a part when the requested edit is safely expressible as a post operation without distorting fitted raw mesh details.
+- Prefer neutral multiplier controls with default 1, such as part_scale, relief_amount, smoothing, count, spacing, or placement offsets. Do not use final authored dimensions directly as scale values.
 - Do not describe controls in prose inside "prompt". Put all control keys, ranges, defaults, and post ops in the structured fields.
-- Every control key must be referenced by at least one executable controlPostOps entry.
+- Every emitted control key should be referenced by at least one executable controlPostOps entry.
 - controlPostOps entries must be #@post op bodies without "#@ -" prefixes, such as "transform scale=[part_width,part_height,part_depth] pivot=[0,0,0]", "smooth iterations=smooth_iterations strength=0.35", or "array count=module_count offset=[module_spacing,0,0] centered=true".
-- Use only supported raw #@post ops in controlPostOps: transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- Use only supported raw #@post ops in controlPostOps: transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, snap_to_ground, center_origin, material, and tag.
 - Use stable snake_case ids.'''
 
 
@@ -121,6 +148,7 @@ Raw-first part rules:
 - Include #@editable, #@semantic, #@part, #@part_of, and #@depends_on metadata where useful.
 - Use #@bbox: min=[x,y,z] max=[x,y,z] when the intended extents are clear.
 - Use #@lock: footprint, position, silhouette, material when future edits should preserve those properties.
+- Use #@opening: id=name type=glazed role=glass loop=[[x,y,z],...] normal=[x,y,z] for windows, windshields, doors, and facade apertures whose infill must fit exactly. The loop is the aperture boundary and should be ordered around the opening.
 - Use #@anchor: id=anchor_id at=[x,y,z] for meaningful connection, contact, edge, support, hinge, or alignment points.
 - Use #@constraint: as soft edit intent only, such as roof must_touch walls or object must_rest_on_ground.
 - Use #@variant: id=base name="Base" when a generated part is one named concept alternative.
@@ -133,12 +161,17 @@ Raw-first part rules:
 - Every raw mesh object or group with vertices must include faces for those vertices. Do not emit vertices-only logs, rings, lattices, supports, or roof members.
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
 - Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
-- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, snap_to_ground, center_origin, material, and tag.
+- For materials, prefer #@post material for whole-object assignment. If one object needs multiple materials, put each usemtl immediately before the face block it should color; do not list several usemtl directives before vertices or before a single shared face block.
+- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, build_glazed_openings, snap_to_ground, center_origin, material, and tag.
+- Use #@post face_lattice when the user asks for cleaner panel or product-like lattice surfaces from a sculpted mesh. It welds the guide mesh first, can pre-fair it with guide_subdivide=n and guide_smooth=n for more even panel sizes and fewer inherited edge valleys, insets each face, extrudes the frame thickness using shared outer offset vertices, omits internal partition walls along source edges shared by adjacent faces, can Catmull-Clark subdivide the result with subdivide=n, and replaces the guide mesh by default.
+- Use #@post skin_edges when the user asks for a single continuous printable exoskeleton/wireframe skin around mesh edges. Prefer edges=feature angle=25 to avoid triangulation diagonals, with radius and resolution exposed as params only when useful. Use mode=replace unless the original sculpt should remain visible.
+- Use #@post build_glazed_openings when a mesh has #@opening metadata for windows, facade glazing, skylights, or vehicle glass. It derives a frame ring and recessed glass panel from the exact loop; prefer this over separately modeling glass in another llm_mesh object.
 - For repeated modules, #@post array supports per-copy expressions in scale, position, and pivot using i, index, step, count, t, sin(), cos(), min(), max(), abs(), sqrt(), pi, and tau.
 - For per-vertex edits, #@post deform supports position=[x,y,z] expressions with x/y/z, normalized u/v/w bbox coordinates, i/index, t, vertex_count, params, and the same math functions.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
 - If the user request, plan, or part prompt asks for controls, include #@params: and #@controls: metadata for meaningful dimensions. Every control key must be referenced by executable #@post metadata such as transform, array, mirror/symmetrize, smooth, subdivide, simplify, snap_to_ground, or center_origin. For raw v/f meshes, use controls for object-level scale, height, spacing, count, smoothing, or placement rather than pretending baked vertex coordinates are parametric.
-- In raw-first generation, include #@params: and #@controls: metadata for 2-5 meaningful part controls by default. Use controls for practical dimensions or post modifiers that can actually be executed.
+- In raw-first generation, #@params and #@controls are optional by default. Add at most 1-2 controls when there are safe post modifiers that preserve the authored mesh intent.
+- For scale controls on raw meshes, prefer neutral multiplier defaults such as scale=1. Do not use final authored dimensions such as body_width/body_height/body_length directly as transform scale values.
 - Parameter references in #@post expressions must use bare names such as voxel_size or (voxel_size*grid_width)/10. Never use template placeholder syntax such as dollar-brace or curly-brace parameter wrappers.
 - Put material and tag assignments inside #@post blocks. Do not use #@ops in raw-first mode.
 - Always use block syntax: #@post: then lines like #@ - material name=mat_id. Do not emit inline #@post material id=... lines.'''
@@ -208,7 +241,7 @@ CONTROL_REPAIR_PROMPT = '''You repair one raw OBJ part for the Spellshape raw OB
 
 Return only complete OBJ text for the same part. Do not return Markdown or explanations.
 Preserve the object's geometry, object names, faces, material intent, and role.
-This raw OBJ part requires controls, but one or more visible objects did not include #@controls metadata.
+This raw OBJ part has problematic or specifically requested controls that need repair.
 
 Add minimal useful controls using:
 #@params: key=value, key=value
@@ -216,9 +249,10 @@ Add minimal useful controls using:
 #@ - slider key=key label=Readable_label min=a max=b step=c
 
 Rules:
-- Every visible raw mesh object in the part must include useful #@controls metadata.
-- Every control key must be referenced by executable #@post metadata.
-- For raw v/f meshes, useful controls are object scale, height, width/depth, vertical exaggeration, smoothing, array count/spacing, or placement.
+- Add controls only when they are safe and useful for the part.
+- Every emitted control key should be referenced by executable #@post metadata.
+- For raw v/f meshes, useful controls are neutral uniform scale, vertical exaggeration, smoothing, array count/spacing, or placement.
+- Do not use final authored dimensions such as body_width/body_height/body_length directly as transform scale values.
 - Parameter references in #@post expressions must use bare names such as tree_scale or (voxel_size*grid_width)/10.
 - Never use template syntax like ${tree_scale}, {tree_scale}, or ${voxel_size}.
 - Do not create controls that only sit in #@params without affecting geometry.

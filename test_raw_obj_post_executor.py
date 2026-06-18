@@ -26,6 +26,12 @@ class RawObjPostExecutorTest(unittest.TestCase):
                 edges[key] = edges.get(key, 0) + 1
         return sum(1 for count in edges.values() if count == 1)
 
+    def assert_has_vertex(self, vertices, expected, places=6):
+        self.assertTrue(
+            any(all(round(actual[i] - expected[i], places) == 0 for i in range(3)) for actual in vertices),
+            "expected vertex %r in %r" % (expected, vertices),
+        )
+
     def test_transform_post_op_can_reference_params(self):
         source = """#@live_obj_version: 0.1
 #@up: y
@@ -293,6 +299,31 @@ f 1 2 3 4
 
         self.assertGreater(len(mesh.faces), 16)
         self.assertEqual(self.boundary_edge_count(mesh.faces), 0)
+
+    def test_build_glazed_openings_appends_frame_and_glass_from_opening_loop(self):
+        source = """#@live_obj_version: 0.1
+#@up: y
+o facade
+#@source: llm_mesh
+#@semantic: facade with tagged window aperture
+#@opening: id=front_window type=glazed role=glass loop=[[-1,0,0],[1,0,0],[1,2,0],[-1,2,0]] normal=[0,0,-1] frame_width=0.2 frame_depth=0.1 panel_recess=0.04 panel_thickness=0.02
+#@post:
+#@ - build_glazed_openings type=glazed mode=append
+v -2 -0.5 0
+v 2 -0.5 0
+v 2 2.5 0
+v -2 2.5 0
+f 1 2 3 4
+"""
+
+        scene = execute_scene(self.parse_scene(source))
+        mesh = scene.objects[0].mesh
+
+        self.assertEqual(len(mesh.vertices), 4 + 24)
+        self.assertEqual(len(mesh.faces), 1 + 22)
+        self.assert_has_vertex(mesh.vertices, (-1.0, 0.0, 0.0))
+        self.assert_has_vertex(mesh.vertices, (-0.8, 0.2, 0.04))
+        self.assert_has_vertex(mesh.vertices, (-0.8, 0.2, 0.06))
 
 
 if __name__ == "__main__":

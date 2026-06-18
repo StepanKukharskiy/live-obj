@@ -140,6 +140,8 @@ Planning rules:
 - Merge related elements into one part instead of producing many small parts.
 - Do not plan separate first-pass parts for seams, fasteners, bolts, handles, bollards, expansion joints, connection plates, tiny context objects, or micro facade details unless the user explicitly asks for them.
 - Make dependencies explicit so later parts can align to earlier geometry.
+- For houses, cars, and product shells with windows or windshields, prefer opening-owned glazing: the body/envelope part should declare #@opening loops for glazed apertures and use #@post build_glazed_openings instead of planning a separate first-pass glass mesh that guesses the gap shape.
+- If a separate infill/glazing part is still useful, make it depend on the body/envelope openings and instruct it to duplicate the provided opening loop coordinates exactly rather than inventing new outlines.
 - Use y as the vertical/up axis unless the user explicitly asks otherwise.
 - Use "visual" for scene-level render direction when the request implies a mood, product shot, video, cinematic framing, or social format. Omit visual fields you are not confident about.
 - Allowed canvasAspectRatio values: "fill", "1:1", "4:3", "16:9", "9:16", "4:5", "3:2", "2:3", "21:9".
@@ -196,6 +198,7 @@ Raw-first part rules:
 - Include #@editable, #@semantic, #@part, #@part_of, and #@depends_on metadata where useful.
 - Use #@bbox: min=[x,y,z] max=[x,y,z] when the intended extents are clear.
 - Use #@lock: footprint, position, silhouette, material when future edits should preserve those properties.
+- Use #@opening: id=name type=glazed role=glass loop=[[x,y,z],...] normal=[x,y,z] for windows, windshields, doors, and facade apertures whose infill must fit exactly. The loop is the aperture boundary and should be ordered around the opening.
 - Use #@anchor: id=anchor_id at=[x,y,z] for meaningful connection, contact, edge, support, hinge, or alignment points.
 - Use #@constraint: as soft edit intent only, such as roof must_touch walls or object must_rest_on_ground.
 - Use #@variant: id=base name="Base" when a generated part is one named concept alternative.
@@ -209,9 +212,10 @@ Raw-first part rules:
 - If you create multiple log cylinders or beams in one object, include the side faces and cap faces for every member. Do not list only section rings or endpoints.
 - Avoid usemtl-only groups. A group is useful only when it contains renderable faces.
 - For materials, prefer #@post material for whole-object assignment. If one object needs multiple materials, put each usemtl immediately before the face block it should color; do not list several usemtl directives before vertices or before a single shared face block.
-- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, snap_to_ground, center_origin, material, and tag.
+- Use #@post: for raw-post modifier intent. Supported #@post ops are transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, build_glazed_openings, snap_to_ground, center_origin, material, and tag.
 - Use #@post face_lattice when the user asks for cleaner panel or product-like lattice surfaces from a sculpted mesh. It welds the guide mesh first, can pre-fair it with guide_subdivide=n and guide_smooth=n for more even panel sizes and fewer inherited edge valleys, insets each face, extrudes the frame thickness using shared outer offset vertices, omits internal partition walls along source edges shared by adjacent faces, can Catmull-Clark subdivide the result with subdivide=n, and replaces the guide mesh by default.
 - Use #@post skin_edges when the user asks for a single continuous printable exoskeleton/wireframe skin around mesh edges. Prefer edges=feature angle=25 to avoid triangulation diagonals, with radius and resolution exposed as params only when useful. Use mode=replace unless the original sculpt should remain visible.
+- Use #@post build_glazed_openings when a mesh has #@opening metadata for windows, facade glazing, skylights, or vehicle glass. It derives a frame ring and recessed glass panel from the exact loop; prefer this over separately modeling glass in another llm_mesh object.
 - For repeated modules, #@post array supports per-copy expressions in scale, position, and pivot using i, index, step, count, t, sin(), cos(), min(), max(), abs(), sqrt(), pi, and tau.
 - For per-vertex edits, #@post deform supports position=[x,y,z] expressions with x/y/z, normalized u/v/w bbox coordinates, i/index, t, vertex_count, params, and the same math functions.
 - Prefer #@post symmetrize for bilaterally symmetric forms and #@post smooth/subdivide for fluid surfaces.
@@ -486,7 +490,7 @@ export async function requestLiveObjSurgicalPatchFromLlm(
 					'Current scene mode: raw OBJ / raw-post output.',
 					'Important: existing v/f mesh blocks are source base geometry, not disposable cache. Preserve existing mesh object blocks unless the user asks to replace them.',
 					'For cleanup, symmetry, repetition, material, or tag edits on raw OBJ scenes, prefer adding or editing #@post blocks. Do not add #@ops and do not convert the whole scene to procedural metadata.',
-					'Supported #@post ops include transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, snap_to_ground, center_origin, material, and tag.',
+					'Supported #@post ops include transform, symmetrize, mirror, array, deform, subdivide, smooth, simplify, face_lattice, skin_edges, build_glazed_openings, snap_to_ground, center_origin, material, and tag.',
 					'When adding tunable #@post values, expose them with #@params and #@controls, and make the #@post expressions reference those params.',
 					'Use #@post only when the requested visible change is fully expressible with supported executable #@post syntax. Otherwise update the affected raw mesh block or add real geometry; object names, #@semantic, #@tag, material names, and unsupported #@post attributes do not count as implementing visible geometry.'
 				].join('\n')

@@ -110,9 +110,12 @@ o roof
 #@part: id=roof role=dominant_form edit=direct
 #@bbox: min=[-4,2,-2] max=[4,5,2]
 #@lock: silhouette, material
+#@opening: id=front_window type=glazed role=glass loop=[[-1,0,0],[1,0,0],[1,2,0],[-1,2,0]] normal=[0,0,-1]
 #@anchor: id=roof_left_edge at=[-4,2,0]
 #@constraint: roof must_touch walls
 #@variant: id=base name="Base"
+#@post:
+#@ - build_glazed_openings type=glazed frame_width=0.08 frame_depth=0.04 panel_recess=0.02 panel_thickness=0.01 mode=append
 v 0 0 0
 v 1 0 0
 v 0 1 0
@@ -122,6 +125,25 @@ f 1 2 3
 		expect(result.valid).toBe(true);
 		expect(result.errors).toEqual([]);
 		expect(result.warnings).toEqual([]);
+	});
+
+	it('rejects malformed opening metadata', () => {
+		const result = validateRawPostSource(`#@scene
+#@live_obj_version: 0.1
+#@workflow: raw_post
+#@up: y
+o facade
+#@source: llm_mesh
+#@semantic: facade
+#@opening: id=front_window normal=[0,0,-1]
+v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3
+`);
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join('\n')).toContain('malformed #@opening');
 	});
 
 	it('rejects malformed bbox and anchor metadata', () => {
