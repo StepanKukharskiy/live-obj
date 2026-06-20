@@ -60,6 +60,13 @@ type VisualDirection = {
 	};
 	shot_plan?: {
 		aspect_ratio?: string;
+		story_arc?: {
+			logline?: string;
+			setup?: string;
+			turn?: string;
+			payoff?: string;
+			final_state?: string;
+		};
 		frames?: Array<{
 			label?: string;
 			purpose?: string;
@@ -71,6 +78,7 @@ type VisualDirection = {
 		pair_prompts?: Array<{
 			from?: number;
 			to?: number;
+			role?: 'setup_to_turn' | 'turn_to_payoff';
 			prompt?: string;
 		}>;
 	};
@@ -181,6 +189,17 @@ function normalizeDirection(direction: VisualDirection): VisualDirection {
 			pair_prompts: direction.shot_plan.pair_prompts.slice(0, 2)
 		};
 	}
+	if (Array.isArray(direction.shot_plan?.pair_prompts)) {
+		direction.shot_plan = {
+			...direction.shot_plan,
+			pair_prompts: direction.shot_plan.pair_prompts.slice(0, 2).map((pair, index) => ({
+				...pair,
+				from: index,
+				to: index + 1,
+				role: index === 0 ? 'setup_to_turn' : 'turn_to_payoff'
+			}))
+		};
+	}
 	if (Array.isArray(direction.reel_copy?.references) && direction.reel_copy.references.length > 3) {
 		direction.reel_copy = {
 			...direction.reel_copy,
@@ -262,7 +281,13 @@ The geometry must remain the protagonist.
 For the animation idea, prefer a watchable mini-arc over a disconnected wow shot.
 The three frames should behave like a tiny storyboard: setup, surprising turn, payoff.
 The motion can be surreal, magical, funny, uncanny, or physically impossible, but it must stay causally connected to the previous frame and resolve into a satisfying final image.
+When the timeline has three frames, treat the final output as two finite video clips that join into one short story:
+- Clip 1 (frame 0 to frame 1) is the opening plot: establish the initial condition, introduce the visual rule, and trigger the irreversible change.
+- Clip 2 (frame 1 to frame 2) is the finish: carry the same change forward, reveal its consequence, and land on a clear final state.
+The second clip must not restart the idea, swap to an unrelated spectacle, or merely intensify the camera. It must pay off the first clip.
 Good animation beats include: facades blooming into signs, columns liquefying because the structure is waking up, cars melting into chrome streams that reveal a path, windows becoming eyes that trigger the lighting change, architecture swallowing the sun and snapping into night, roofs turning into birds or butterflies that reveal the silhouette, furniture inflating into a usable object, shadows becoming characters that guide scale, material switching states as a clear before/after, or a day-to-night snap with a motivated reveal.
+Required surprise rule: animation_prompt and both pair_prompts must include at least one concrete non-camera transformation, deformation, impossible material change, or reality-bending event that creates a memorable "wait, what just happened?" moment. Practical motion alone, such as panels sliding, lights turning on, camera orbiting, fog drifting, or rain starting, is not enough unless it triggers a more unexpected visual event.
+For restrained architectural directions, keep the surprise elegant but unmistakable: concrete can briefly become paper-thin lantern skin, privacy screens can unfold like ribs, shadows can pull the facade open, wet asphalt can rise into a mirror plane, or light can physically carve/deform the building surface.
 Avoid generic cinematic motion like only dolly, pan, orbit, fog drift, particles, or parallax unless paired with a concrete story action.
 Avoid abstract spectacle where each shot is only "more intense" than the previous one. The viewer should understand why the image changes and want to watch the sequence to its end.
 
@@ -329,6 +354,13 @@ Output format:
   },
   "shot_plan": {
     "aspect_ratio": "16:9",
+    "story_arc": {
+      "logline": "",
+      "setup": "",
+      "turn": "",
+      "payoff": "",
+      "final_state": ""
+    },
     "frames": [
       {
         "label": "Story setup",
@@ -356,8 +388,8 @@ Output format:
       }
     ],
     "pair_prompts": [
-      { "from": 0, "to": 1, "prompt": "" },
-      { "from": 1, "to": 2, "prompt": "" }
+      { "from": 0, "to": 1, "role": "setup_to_turn", "prompt": "" },
+      { "from": 1, "to": 2, "role": "turn_to_payoff", "prompt": "" }
     ]
   }
 }
@@ -371,7 +403,9 @@ Rules:
 - Supporting references are optional and must be limited to 3 maximum.
 - The story must be readable in the still image and expandable into a coherent 3-frame / 3-second sequence.
 - The animation must have a clear arc: setup, surprising turn, payoff. It can include unexpected visuals, deformations, material shifts, or impossible events, but they must form one continuous story.
+- shot_plan.story_arc must define the finite storyline in plain visual terms: setup, turn, payoff, and final_state. Do not write abstract theme words; describe what the viewer actually sees.
 - The animation_prompt must describe the complete visual arc, not just camera movement and not just an isolated transformation.
+- The animation_prompt and pair_prompts must make the unexpected transformation explicit. If an existing visual direction is provided and its motion is too practical or calm, preserve the art direction but upgrade the story_for_image_and_3s_animation and shot_plan.pair_prompts with a clearer wow/deformation beat.
 - The shot_plan must contain exactly 3 frames designed for this specific geometry and visual direction.
 - The shot_plan frames are a storyboard for the final image/video output. Frame 0 sets context, frame 1 changes the situation, and frame 2 pays it off.
 - reel_copy is for a 9:16 or 16:9 short-form project reel. It must tell a mini educational story about this exact project, not a generic Spellshape ad.
@@ -388,7 +422,10 @@ Rules:
 - camera_direction is an approximate normalized world-space vector [x,y,z] from the object center toward the camera. Use positive y for elevated views and lower y values for eye-level/low views.
 - focus_objects may be empty, but if metadata names important objects, use at most 3 exact object ids that should drive framing.
 - pair_prompts should describe motion from frame 0 to 1 and frame 1 to 2 as connected story beats, aligned with the shot purposes and selected images.
-- The first pair prompt should introduce the motivating change. The second pair prompt should resolve or escalate that change into a final payoff.
+- pair_prompts are for two generated videos that will be stitched together. The first prompt is the opening plot, and the second prompt is the finish. They must share the same protagonist, visual rule, transformation logic, atmosphere, and camera continuity.
+- The first pair prompt should introduce the motivating change and end on the middle frame as a readable cliffhanger or turn.
+- The second pair prompt should begin from that middle-frame state, complete the same transformation, and end with a resolved final image. It should not introduce a new unrelated event.
+- Each pair prompt must mention its exact start state and end state, using the selected frame cameras when camera context exists.
 - Make the animation more dynamic and surprising than a normal architectural flythrough, but never as random abstract spectacle.
 - Keep the surprise aligned with the primary direction. For example: a Memphis style hotel swallows the sun, turns on bright neon signs, then resolves into a nighttime festival facade.
 - Preserve visual continuity across pair_prompts: same protagonist geometry, readable object scale, coherent camera intent, and a cause-effect relationship between changes.
@@ -439,7 +476,7 @@ ${cameraContext || 'Timeline frame camera context: (no timeline frames selected 
 
 If draft guidance is present, expand it into a complete image prompt while keeping the geometry as the protagonist. If the draft guidance is empty, start from the Live OBJ scene alone.
 
-Choose one strong visual direction and return the required JSON object. If existing visual direction JSON is provided, preserve its core visual direction and update only what needs to align with the timeline camera context. When timeline camera context is available, treat the selected timeline frames as a storyboard: align shot_plan frames and pair_prompts to those exact frame cameras, preserve visual continuity between frames, and make the two motion prompts read as setup-to-turn and turn-to-payoff instead of unrelated camera moves.`;
+Choose one strong visual direction and return the required JSON object. If existing visual direction JSON is provided, preserve its core visual direction but update motion/story fields whenever they lack a concrete unexpected transformation or need to align with timeline camera context. When timeline camera context is available, treat the selected timeline frames as a storyboard: align shot_plan frames and pair_prompts to those exact frame cameras, preserve visual continuity between frames, and make the two motion prompts read as setup-to-turn and turn-to-payoff instead of unrelated camera moves.`;
 
 	try {
 		const llmResult = await withLlmRequestOverrides(

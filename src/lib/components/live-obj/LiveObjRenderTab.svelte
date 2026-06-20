@@ -92,11 +92,19 @@
 	type ShotPlanPairPrompt = {
 		from?: number;
 		to?: number;
+		role?: 'setup_to_turn' | 'turn_to_payoff';
 		prompt?: string;
 	};
 	type ShotPlanDirection = {
 		shot_plan?: {
 			aspect_ratio?: string;
+			story_arc?: {
+				logline?: string;
+				setup?: string;
+				turn?: string;
+				payoff?: string;
+				final_state?: string;
+			};
 			frames?: ShotPlanFrame[];
 			pair_prompts?: ShotPlanPairPrompt[];
 		};
@@ -500,7 +508,7 @@
 			toIndex: 1,
 			fromKey: 'start',
 			toKey: 'middle',
-			label: 'Start to middle'
+			label: 'Opening plot'
 		},
 		{
 			key: 'middleToEnd',
@@ -508,7 +516,7 @@
 			toIndex: 2,
 			fromKey: 'middle',
 			toKey: 'end',
-			label: 'Middle to end'
+			label: 'Finish'
 		}
 	];
 

@@ -17,7 +17,11 @@ import {
 	applyLiveObjSurgicalPatch,
 	parseLiveObjSurgicalPatch
 } from '$lib/server/liveObj/surgicalPatch';
-import { normalizeGeneratedPartMetadata, rawObjControlIssues } from '$lib/server/liveObj/iterative';
+import {
+	addDefaultRawObjControls,
+	normalizeGeneratedPartMetadata,
+	rawObjControlIssues
+} from '$lib/server/liveObj/iterative';
 import { normalizeRawPostHeader } from '$lib/liveObj/rawPostHeader';
 import { rawPostValidationIssues, validateRawPostSource } from '$lib/liveObj/rawPostValidation';
 import { stripLiveObjMeshLines } from '$lib/liveObj/stripLiveObjMeshLines';
@@ -474,6 +478,28 @@ function assertSurgicalPatchPreservesExistingObjects(
 	);
 }
 
+function canFallbackFromSurgicalError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	if (/removed or renamed existing object IDs/i.test(message)) return false;
+	return /json|invalid surgical patch|did not match|matched \d+ locations|incomplete|empty response|unexpected end/i.test(
+		message
+	);
+}
+
+function buildSurgicalRewriteFallbackPrompt(userMessage: string, failure: unknown): string {
+	const message = failure instanceof Error ? failure.message : String(failure);
+	return [
+		'Apply this edit by rewriting the current Live OBJ scene because the exact surgical JSON patch failed.',
+		'Preserve all successful existing object IDs, proportions, materials, controls, and scene intent unless the user explicitly asks to change them.',
+		'Make the smallest complete scene-source change that satisfies the user request. Do not simplify, redesign, or remove unrelated successful objects.',
+		'Return the full updated Live OBJ only.',
+		'',
+		`Surgical patch failure: ${message}`,
+		'',
+		`User request: ${userMessage}`
+	].join('\n');
+}
+
 /**
  * 1) LLM (via `requestChatCompletion` / same prompt as `api/llm`) → Live OBJ text
  * 2) Python executor refreshes v/f from #@ metadata
@@ -504,7 +530,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	let rawLlm: string;
 	let correctedLiveObj: string;
-	const editMode: 'surgical' | 'rewrite' = useSurgicalEdit ? 'surgical' : 'rewrite';
+	let editMode: 'surgical' | 'rewrite' = useSurgicalEdit ? 'surgical' : 'rewrite';
 	let surgicalEditSummary: string | undefined;
 	let surgicalEditCount: number | undefined;
 	const llmUsages: TokenUsage[] = [];
@@ -522,24 +548,49 @@ export const POST: RequestHandler = async ({ request }) => {
 			const baseLiveObj = useProcedural
 				? applyKernelDefaultHeader(currentLiveObj, kernelDefault)
 				: currentLiveObj;
-			const patchResult = await requestAndApplySurgicalPatch({
-				userMessage,
-				baseLiveObj,
-				history,
-				model,
-				currentSceneMode: body.currentSceneMode === 'raw_obj' ? 'raw_obj' : 'live_obj',
-				targetObjectId: body.targetObjectId,
-				imageUrls,
-				reqApiKey,
-				reqApiUrl
-			});
-			rawLlm = patchResult.rawPatch;
-			correctedLiveObj = useProcedural
-				? patchResult.liveObj
-				: normalizeRawPostScene(patchResult.liveObj);
-			surgicalEditSummary = patchResult.summary;
-			surgicalEditCount = patchResult.appliedEdits;
-			recordUsages(patchResult.usages);
+			try {
+				const patchResult = await requestAndApplySurgicalPatch({
+					userMessage,
+					baseLiveObj,
+					history,
+					model,
+					currentSceneMode: body.currentSceneMode === 'raw_obj' ? 'raw_obj' : 'live_obj',
+					targetObjectId: body.targetObjectId,
+					imageUrls,
+					reqApiKey,
+					reqApiUrl
+				});
+				rawLlm = patchResult.rawPatch;
+				correctedLiveObj = useProcedural
+					? patchResult.liveObj
+					: normalizeRawPostScene(patchResult.liveObj);
+				surgicalEditSummary = patchResult.summary;
+				surgicalEditCount = patchResult.appliedEdits;
+				recordUsages(patchResult.usages);
+			} catch (surgicalError) {
+				if (!canFallbackFromSurgicalError(surgicalError)) throw surgicalError;
+				const fallbackResult = await withLlmRequestOverrides(
+					reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
+					() =>
+						requestLiveObjFromLlm(
+							buildSurgicalRewriteFallbackPrompt(userMessage, surgicalError),
+							[...history, { role: 'assistant', content: baseLiveObj }],
+							model,
+							{
+								imageDataUrls: imageUrls,
+								useProcedural
+							}
+						)
+				);
+				rawLlm = fallbackResult.content;
+				recordUsage(fallbackResult.usage);
+				correctedLiveObj = useProcedural
+					? applyKernelDefaultHeader(stripCodeFences(rawLlm), kernelDefault)
+					: normalizeRawPostScene(stripCodeFences(rawLlm), { sourcePrompt: userMessage });
+				editMode = 'rewrite';
+				surgicalEditSummary = `Surgical patch failed, then recovered with a full scene rewrite: ${surgicalError instanceof Error ? surgicalError.message : String(surgicalError)}`;
+				surgicalEditCount = 0;
+			}
 		} else {
 			const llmResult = await withLlmRequestOverrides(
 				reqApiKey || reqApiUrl ? { apiKey: reqApiKey, apiUrl: reqApiUrl } : undefined,
@@ -964,7 +1015,10 @@ function applyKernelDefaultHeader(sceneText: string, kernelDefault: 'auto' | 'ca
 }
 
 function normalizeRawPostScene(sceneText: string, options: { sourcePrompt?: string } = {}): string {
-	return normalizeRawPostHeader(normalizeGeneratedPartMetadata(sceneText), options);
+	return normalizeRawPostHeader(
+		addDefaultRawObjControls(normalizeGeneratedPartMetadata(sceneText)),
+		options
+	);
 }
 
 function collectSceneIssues(args: {
@@ -1024,7 +1078,7 @@ async function validateAndExpandCleanLiveObj(
 function correctionOpInstruction(useProcedural: boolean): string {
 	return useProcedural
 		? 'Use only supported ops. Use #@ops: (never #@op: or #@op_experimental).'
-		: 'For raw-post scenes, preserve raw v/f mesh as source geometry and use #@post: blocks for modifiers. Do not add #@ops or procedural sources. Controls are optional; add at most 1-2 only when they are safe executable post modifiers that preserve the authored mesh intent. Prefer #@post material for whole-object materials; if using usemtl, each usemtl must be followed by the face block it colors before the next usemtl.';
+		: 'For raw-post scenes, preserve raw v/f mesh as source geometry and use #@post: blocks for modifiers. Do not add #@ops or procedural sources. Every visible raw mesh object needs #@params and #@controls backed by executable #@post metadata; include neutral scale and width/height/depth controls through #@post transform scale. Prefer #@post material for whole-object materials; if using usemtl, each usemtl must be followed by the face block it colors before the next usemtl.';
 }
 
 function buildCorrectionPrompt(issues: string[], useProcedural: boolean): string {

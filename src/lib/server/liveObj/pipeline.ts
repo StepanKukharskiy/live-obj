@@ -195,6 +195,7 @@ export async function reconstructDreamRebuildWithExecutor(
 
 export type UvDreamUnwrapResult = {
 	sourceUvPng: Uint8Array;
+	sourceGuidePng: Uint8Array;
 	warnings: string[];
 };
 
@@ -206,17 +207,21 @@ export async function unwrapUvDreamSource(input: {
 	const dir = await mkdtemp(path.join(tmpdir(), 'uv-dream-unwrap-'));
 	const inputPath = path.join(dir, 'scene.obj');
 	const sourceUvPath = path.join(dir, 'source-uv.png');
+	const sourceGuidePath = path.join(dir, 'source-guide.png');
 	try {
 		await writeFile(inputPath, input.liveObj, 'utf-8');
 		const stderr = await runPythonArgs(script, [
 			inputPath,
 			'--target',
 			input.targetObjectId,
+			'--source-guide-out',
+			sourceGuidePath,
 			'--debug-source-uv-out',
 			sourceUvPath
 		]);
 		return {
 			sourceUvPng: new Uint8Array(await readFile(sourceUvPath)),
+			sourceGuidePng: new Uint8Array(await readFile(sourceGuidePath)),
 			warnings: parseExecutorWarnings(stderr)
 		};
 	} finally {

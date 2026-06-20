@@ -22,8 +22,24 @@ function assertString(value: unknown, label: string): string {
 	return value;
 }
 
+function surgicalPatchParseMessage(content: string, cause: unknown): string {
+	const message = cause instanceof Error ? cause.message : String(cause);
+	const cleaned = content.trim();
+	if (!cleaned) return 'Invalid surgical patch: model returned an empty response';
+	const tail = cleaned.replace(/\s+/g, ' ').slice(-180);
+	if (/unexpected end of json input/i.test(message)) {
+		return `Invalid surgical patch: model returned incomplete JSON (response length ${cleaned.length} chars; tail: ${JSON.stringify(tail)})`;
+	}
+	return `Invalid surgical patch JSON: ${message}`;
+}
+
 export function parseLiveObjSurgicalPatch(content: string): LiveObjSurgicalPatch {
-	const parsed = parseStructuredJson<unknown>(content);
+	let parsed: unknown;
+	try {
+		parsed = parseStructuredJson<unknown>(content);
+	} catch (error) {
+		throw new Error(surgicalPatchParseMessage(content, error), { cause: error });
+	}
 	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
 		throw new Error('Invalid surgical patch: expected a JSON object');
 	}
@@ -41,7 +57,6 @@ export function parseLiveObjSurgicalPatch(content: string): LiveObjSurgicalPatch
 		if (!find) throw new Error(`Invalid surgical patch: edit ${index + 1}.find cannot be empty`);
 		return { find, replace };
 	});
-	if (edits.length === 0) throw new Error('Invalid surgical patch: edits cannot be empty');
 	const summary =
 		typeof candidate.summary === 'string' && candidate.summary.trim()
 			? candidate.summary.trim()

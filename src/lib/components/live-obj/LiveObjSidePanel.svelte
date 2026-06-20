@@ -270,6 +270,16 @@
 		);
 	}
 
+	function isBuildStepChatImage(message: ChatMsg): boolean {
+		const text = `${message.meta ?? ''} ${message.content ?? ''}`.toLowerCase();
+		return text.includes('x-ray scene screenshot') || /^built\s+\d+\/\d+:/i.test(message.content);
+	}
+
+	function isBuildStepProcessImage(asset: ProcessImageAsset): boolean {
+		const text = `${asset.meta ?? ''} ${asset.label ?? ''}`.toLowerCase();
+		return text.includes('build step screenshot') || /^build\s+\d+\/\d+:/i.test(asset.label);
+	}
+
 	let chatProcessImageAssets = $derived.by(() => {
 		const assets: ProcessImageAsset[] = [];
 		for (const message of msgs) {
@@ -283,10 +293,29 @@
 		}
 		return assets;
 	});
+	let chatBuildImageAssets = $derived.by(() => {
+		const assets: ProcessImageAsset[] = [];
+		for (const message of msgs) {
+			if (!message.imageDataUrl) continue;
+			if (!isBuildStepChatImage(message)) continue;
+			assets.push({
+				label: message.content || 'Build step',
+				meta: 'build step screenshot',
+				imageDataUrl: message.imageDataUrl
+			});
+		}
+		return assets;
+	});
 	let packageProcessImages = $derived.by(() => {
 		const seen = new Set<string>();
 		const merged: ProcessImageAsset[] = [];
-		for (const asset of [...projectProcessImages, ...chatProcessImageAssets]) {
+		const hasProjectBuildImages = projectProcessImages.some(isBuildStepProcessImage);
+		const buildFallbackImages = hasProjectBuildImages ? [] : chatBuildImageAssets;
+		for (const asset of [
+			...projectProcessImages,
+			...buildFallbackImages,
+			...chatProcessImageAssets
+		]) {
 			const key = `${asset.meta ?? ''}|${asset.label}|${asset.imageDataUrl}`;
 			if (!asset.imageDataUrl || seen.has(key)) continue;
 			seen.add(key);

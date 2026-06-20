@@ -247,27 +247,174 @@ export function hasControlsMetadata(sourceText: string): boolean {
 	return /^\s*#@controls\s*:/m.test(String(sourceText ?? ''));
 }
 
+function objectBlocks(sourceText: string): string[] {
+	return String(sourceText ?? '')
+		.split(/(?=^\s*o\s+)/gm)
+		.filter((block) => /^\s*o\s+/.test(block));
+}
+
+function objectNameFromBlock(block: string): string {
+	return block.match(/^\s*o\s+([^\s#]+)/m)?.[1] ?? 'unnamed';
+}
+
+function controlKeysFromBlock(block: string): Set<string> {
+	const keys = new Set<string>();
+	let inControls = false;
+	for (const rawLine of block.split('\n')) {
+		const line = rawLine.trim();
+		if (/^#@controls\s*:/.test(line)) {
+			inControls = true;
+			const inlineKey = line.match(/\b(?:key|param|name)=([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+			if (inlineKey) keys.add(inlineKey);
+			continue;
+		}
+		if (line.startsWith('#@') && line.endsWith(':') && !/^#@\s*-/.test(line)) {
+			inControls = false;
+			continue;
+		}
+		if (!inControls) continue;
+		const key = line.match(/\b(?:key|param|name)=([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+		if (key) keys.add(key);
+	}
+	return keys;
+}
+
+function paramKeysFromBlock(block: string): Set<string> {
+	const keys = new Set<string>();
+	for (const match of block.matchAll(/^\s*#@params:\s*(.+)$/gm)) {
+		for (const paramMatch of match[1].matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=/g)) {
+			keys.add(paramMatch[1]);
+		}
+	}
+	return keys;
+}
+
+function postBodiesFromBlock(block: string): string[] {
+	const bodies: string[] = [];
+	let inPost = false;
+	for (const rawLine of block.split('\n')) {
+		const line = rawLine.trim();
+		if (line === '#@post:') {
+			inPost = true;
+			continue;
+		}
+		const inlinePost = line.match(/^#@post\s+(.+)$/);
+		if (inlinePost) {
+			bodies.push(inlinePost[1]);
+			inPost = false;
+			continue;
+		}
+		if (line.startsWith('#@') && line.endsWith(':') && line !== '#@post:') {
+			inPost = false;
+			continue;
+		}
+		if (inPost && line.startsWith('#@')) {
+			const op = line.match(/^#@\s*-\s*(.+)$/)?.[1];
+			if (op) bodies.push(op);
+		}
+	}
+	return bodies;
+}
+
+function hasDimensionalScaleControl(block: string, controlKeys = controlKeysFromBlock(block)): boolean {
+	if (controlKeys.size === 0) return false;
+	const keyPattern = [...controlKeys].map((key) => key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+	if (!keyPattern) return false;
+	const paramRef = new RegExp(`\\b(?:${keyPattern})\\b`);
+	return postBodiesFromBlock(block).some(
+		(body) => /\btransform\b/.test(body) && /\bscale\s*=/.test(body) && paramRef.test(body)
+	);
+}
+
 export function rawObjControlIssues(sourceText: string): string[] {
-	void sourceText;
-	return [];
+	const issues: string[] = [];
+	for (const block of objectBlocks(sourceText)) {
+		if (countVertices(block) === 0 || countFaces(block) === 0) continue;
+		const name = objectNameFromBlock(block);
+		const controlKeys = controlKeysFromBlock(block);
+		if (controlKeys.size === 0) {
+			issues.push(
+				`Object '${name}' has raw mesh geometry but no #@controls metadata; add editable size controls backed by executable #@post transform scale parameters.`
+			);
+			continue;
+		}
+		const paramKeys = paramKeysFromBlock(block);
+		const postBodies = postBodiesFromBlock(block);
+		for (const key of controlKeys) {
+			if (!paramKeys.has(key)) {
+				issues.push(`Object '${name}' control '${key}' is missing a default value in #@params.`);
+			}
+			if (!postBodies.some((body) => new RegExp(`\\b${key}\\b`).test(body))) {
+				issues.push(
+					`Object '${name}' control '${key}' is not referenced by executable #@post metadata.`
+				);
+			}
+		}
+		if (!hasDimensionalScaleControl(block, controlKeys)) {
+			issues.push(
+				`Object '${name}' has controls but no editable dimension/scale transform; add width, height, depth, or scale controls that drive #@post transform scale.`
+			);
+		}
+	}
+	return issues;
 }
 
 function defaultControlLines(): string[] {
 	return [
-		'#@params: control_scale=1',
+		'#@params: control_scale=1, control_width=1, control_height=1, control_depth=1',
+		...defaultControlUiLines(),
+		...defaultControlPostLines()
+	];
+}
+
+function defaultControlParamEntries(): Array<[string, string]> {
+	return [
+		['control_scale', '1'],
+		['control_width', '1'],
+		['control_height', '1'],
+		['control_depth', '1']
+	];
+}
+
+function defaultControlUiLines(): string[] {
+	return [
 		'#@controls:',
 		'#@ - slider key=control_scale label=Scale min=0.5 max=1.8 step=0.05',
+		'#@ - slider key=control_width label=Width min=0.5 max=2.5 step=0.05',
+		'#@ - slider key=control_height label=Height min=0.5 max=2.5 step=0.05',
+		'#@ - slider key=control_depth label=Depth min=0.5 max=2.5 step=0.05'
+	];
+}
+
+function defaultControlPostLines(): string[] {
+	return [
 		'#@post:',
-		'#@ - transform scale=[control_scale,control_scale,control_scale] pivot=[0,0,0]'
+		'#@ - transform scale=[control_scale*control_width,control_scale*control_height,control_scale*control_depth] pivot=[0,0,0]'
 	];
 }
 
 function addDefaultControlsToObjectBlock(block: string): string {
-	if (countVertices(block) === 0 || hasControlsMetadata(block)) return block;
+	if (countVertices(block) === 0 || rawObjControlIssues(block).length === 0) return block;
 	const lines = block.split('\n');
 	const insertAt = lines.findIndex((line, index) => index > 0 && /^\s*(v|vn|vt|f|l)\s+/.test(line));
 	if (insertAt < 0) return block;
-	lines.splice(insertAt, 0, ...defaultControlLines());
+	const paramLineIndex = lines.findIndex(
+		(line, index) => index < insertAt && /^\s*#@params:\s*/.test(line.trim())
+	);
+	const params = defaultControlParamEntries();
+	if (paramLineIndex >= 0) {
+		const existing = lines[paramLineIndex];
+		const additions = params
+			.filter(([key]) => !new RegExp(`\\b${key}\\s*=`).test(existing))
+			.map(([key, value]) => `${key}=${value}`);
+		if (additions.length > 0) {
+			const separator = existing.trim().endsWith(':') ? ' ' : ', ';
+			lines[paramLineIndex] = `${existing}${separator}${additions.join(', ')}`;
+		}
+		lines.splice(insertAt, 0, ...defaultControlUiLines(), ...defaultControlPostLines());
+	} else {
+		lines.splice(insertAt, 0, ...defaultControlLines());
+	}
 	return lines.join('\n');
 }
 
@@ -502,17 +649,36 @@ export function normalizeGeneratedPartMetadata(rawPart: string): string {
 	return ensureGeneratedObjectMetadata(normalized);
 }
 
-function remapFaceToken(token: string, vertexOffset: number, localIndexOffset = 0): string {
+function remapFaceToken(
+	token: string,
+	vertexOffset: number,
+	localIndexOffset = 0,
+	localVerticesSeen?: number
+): string {
 	const parts = token.split('/');
 	const n = Number(parts[0]);
-	if (!Number.isInteger(n) || n <= 0) return token;
+	if (!Number.isInteger(n) || n === 0) return token;
+	if (n < 0) {
+		if (localVerticesSeen == null) return token;
+		const localIndex = localVerticesSeen + n + 1;
+		if (localIndex < 1 || localIndex > localVerticesSeen) {
+			throw new Error(
+				`Generated part uses relative face index ${n}, but only ${localVerticesSeen} vertices are available before that face. Return positive local face indices starting at 1.`
+			);
+		}
+		parts[0] = String(localIndex + vertexOffset);
+		return parts.join('/');
+	}
 	parts[0] = String(n - localIndexOffset + vertexOffset);
 	return parts.join('/');
 }
 
 function remapLocalFaceIndices(objectText: string, vertexOffset: number): string {
 	const localVertexCount = countVertices(objectText);
-	const refs = objectText.split('\n').flatMap(elementVertexRefs);
+	const refs = objectText
+		.split('\n')
+		.flatMap(elementVertexRefs)
+		.filter((ref) => ref > 0);
 	const maxRef = refs.length ? Math.max(...refs) : 0;
 	const minRef = refs.length ? Math.min(...refs) : 1;
 	const localIndexOffset =
@@ -526,14 +692,18 @@ function remapLocalFaceIndices(objectText: string, vertexOffset: number): string
 			`Generated part uses face index ${maxRef}, but only defines ${localVertexCount} vertices. Return local face indices starting at 1 for the part.`
 		);
 	}
+	let localVerticesSeen = 0;
 	return objectText
 		.split('\n')
 		.map((line) => {
+			if (/^\s*v\s+/.test(line)) localVerticesSeen += 1;
 			if (!/^\s*[fl]\s+/.test(line)) return line;
 			const [head, ...tokens] = line.trim().split(/\s+/);
 			return [
 				head,
-				...tokens.map((token) => remapFaceToken(token, vertexOffset, localIndexOffset))
+				...tokens.map((token) =>
+					remapFaceToken(token, vertexOffset, localIndexOffset, localVerticesSeen)
+				)
 			].join(' ');
 		})
 		.join('\n');

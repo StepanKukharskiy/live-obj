@@ -215,6 +215,7 @@
 		liveObj?: string;
 		executedObj?: string;
 		sourceUvUrl?: string;
+		sourceGuideUrl?: string;
 		artifacts?: Record<string, string>;
 		warnings?: string[];
 	};
@@ -1616,6 +1617,15 @@ f 4 5 1
 			xraySupportObjectIds
 		});
 		if (!screenshot) return '';
+		const processScreenshot = captureSceneScreenshot({ frameObjectIds }) || screenshot;
+		projectProcessImages = [
+			...projectProcessImages,
+			{
+				label: `Build ${partNumber}/${partCount}: ${label}`,
+				meta: 'build step screenshot',
+				imageDataUrl: processScreenshot
+			}
+		].slice(-MAX_PROJECT_PROCESS_IMAGES);
 		msgs = [
 			...msgs,
 			{
@@ -2214,11 +2224,12 @@ f 4 5 1
 		return [
 			`Generate a machine-readable grayscale UV height map for object ${args.targetObjectId}.`,
 			`Design intent: ${args.text}`,
-			'The attached image is the UV unwrap atlas of the existing mesh with polygon outlines.',
+			'The attached image is a clean UV island guide for the existing mesh.',
 			'Output exactly one square grayscale height map in the same atlas layout, dimensions, island positions, and margins.',
 			'Treat the full square image as a fixed UV document. Do not crop, pad, stretch, letterbox, recenter, or change the aspect ratio.',
 			'Do not move, resize, rotate, or regroup UV islands. Preserve every island boundary.',
 			'Use pure black outside UV islands. Inside islands, use smooth continuous grayscale relief.',
+			'Do not copy guide colors, borders, outlines, seams, diagonal marks, or debug annotations into the output.',
 			'White means raised surface. Black means recessed surface. Mid gray means neutral base surface.',
 			'Create controlled smooth pleats, ribs, folds, grooves, or surface relief according to the design intent.',
 			'Make features align across island borders where connected surfaces meet.',
@@ -2353,7 +2364,7 @@ f 4 5 1
 			'texture generation input'
 		);
 		const sourceUvDataUrl = await imageToPngDataUrl(
-			unwrapPayload.sourceUvUrl,
+			unwrapPayload.sourceGuideUrl ?? unwrapPayload.sourceUvUrl,
 			UV_ATLAS_SIZE,
 			UV_ATLAS_SIZE
 		);
@@ -2677,6 +2688,7 @@ f 4 5 1
 		{ label: 'Low reveal', direction: [0.65, 0.2, -1] }
 	];
 	const MAX_RENDER_FRAME_ASSETS = 96;
+	const MAX_PROJECT_PROCESS_IMAGES = 64;
 
 	const REEL_TURNTABLE_VIEWS: Array<{ label: string; direction: [number, number, number] }> = [
 		{ label: 'Orbit front', direction: [0, 0.42, -1] },
@@ -2793,6 +2805,7 @@ f 4 5 1
 			'Also inspect the mesh for accidental holes or missing polygon spans. Treat holes as errors only when they contradict the part intent; do not close deliberate openings such as lampshade rims, windows, doorways, hollow vessels, frames, tubes, lattices, or intentionally open ends.',
 			'Use both the screenshot and the current Live OBJ coordinates to find conflicts. The screenshot shows what is visible; the OBJ coordinates show whether objects overlap in 3D.',
 			'Repair existing objects before adding any new detail. If glass intersects a roof/shell, move, trim, lower, narrow, or remove the glass panels instead of adding decorative elements.',
+			'If there is no clear visible geometry problem, make no changes. For a surgical patch, return {"summary":"No visible repair needed","edits":[]}.',
 			'Patch only the specific named objects that need repair. Do not replace the whole scene or simplify successful parts.',
 			'Do not add new decorative objects unless the current screenshot has no obvious geometry conflicts.',
 			'Preserve successful object IDs and proportions. Return an updated OBJ scene.'
@@ -2822,6 +2835,7 @@ f 4 5 1
 			'The screenshot is an x-ray diagnostic view: cyan wireframe objects are the newly added part, amber objects are direct dependencies/focus context, and transparent gray objects are surrounding scene geometry that may still occlude or collide.',
 			'Check the cyan wireframe for accidental missing faces, broken caps, or incomplete side panels. Only repair holes that are not intentional; preserve deliberate openings such as lampshade rims, windows, doorways, hollow vessels, frames, tubes, lattices, and open-ended structural members.',
 			'If a wall, roof, slab, glass panel, or support intersects another major part, repair the smaller/newly added offender first. Patch a directly touching dependency only when that is the minimal fix.',
+			'If the new part is visibly acceptable, make no changes. For a surgical patch, return {"summary":"No visible repair needed","edits":[]}.',
 			'Do not redesign the whole scene. Do not replace unrelated successful objects. Return an updated OBJ scene.'
 		].join('\n');
 	}
@@ -3426,6 +3440,7 @@ f 4 5 1
 		const previousLiveObj = currentLiveObj;
 		const previousSceneMode = currentSceneMode;
 		let usedIterativeGeneration = false;
+		if (!isIterativeEdit) projectProcessImages = [];
 		if (
 			isIterativeEdit &&
 			currentLiveObj &&
@@ -3485,7 +3500,6 @@ f 4 5 1
 				});
 				recordRenderModelUsage('Scene generation', modelProvider, model);
 				await captureFinalRenderGalleryFrames();
-				capturedFinalRenderFrames = true;
 			} else {
 				appendProgressMessage(
 					isIterativeEdit
