@@ -24,12 +24,21 @@
 		id: string;
 		role?: string;
 		prompt?: string;
+		subparts?: IterativeSubpartSpec[];
 		dependencies?: string[];
 		method?: string;
 		postProcess?: IterativePartPostProcess;
 		priority?: number;
 		validationHints?: string[];
 		cameraFocus?: string[];
+	};
+
+	type IterativeSubpartSpec = {
+		id: string;
+		role?: string;
+		prompt?: string;
+		dependencies?: string[];
+		validationHints?: string[];
 	};
 
 	type IterativePartPostProcess = {
@@ -1402,8 +1411,12 @@ f 4 5 1
 		const lines = plan.parts.map((part, index) => {
 			const method = part.method?.trim() ? ` [${part.method.trim()}]` : '';
 			const post = plannedUvPostProcess(part) ? ' + UV dream' : '';
+			const subparts =
+				Array.isArray(part.subparts) && part.subparts.length > 0
+					? ` (${part.subparts.length} subpart${part.subparts.length === 1 ? '' : 's'})`
+					: '';
 			const prompt = part.prompt?.trim() ? ` — ${part.prompt.trim()}` : '';
-			return `${index + 1}. ${partLabel(part, index)}${method}${post}${prompt}`;
+			return `${index + 1}. ${partLabel(part, index)}${method}${post}${subparts}${prompt}`;
 		});
 		return `Parts:\n${lines.join('\n')}`;
 	}
