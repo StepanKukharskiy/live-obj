@@ -43,6 +43,26 @@ describe('Live OBJ surgical patches', () => {
 		expect(patch.edits[0].replace).toBe('#@params: center=[0,0,0], size=[1,2,1]');
 	});
 
+	it('reports empty surgical responses clearly', () => {
+		expect.assertions(1);
+		expect(() => parseLiveObjSurgicalPatch('')).toThrow('model returned an empty response');
+	});
+
+	it('reports incomplete surgical JSON clearly', () => {
+		expect.assertions(1);
+		expect(() => parseLiveObjSurgicalPatch('{"summary":"Scale cube","edits":[')).toThrow(
+			'model returned incomplete JSON'
+		);
+	});
+
+	it('allows no-op feedback patches', () => {
+		expect.assertions(2);
+		const patch = parseLiveObjSurgicalPatch('{"summary":"No visible repair needed","edits":[]}');
+		const result = applyLiveObjSurgicalPatch(scene, patch);
+		expect(result.appliedEdits).toBe(0);
+		expect(result.liveObj).toBe(scene);
+	});
+
 	it('rejects missing targets', () => {
 		expect.assertions(1);
 		expect(() =>

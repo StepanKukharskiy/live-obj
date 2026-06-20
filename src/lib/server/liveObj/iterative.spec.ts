@@ -64,6 +64,43 @@ describe('iterative Live OBJ helpers', () => {
 		expect(validateLiveObj(appended.liveObj).valid).toBe(true);
 	});
 
+	it('normalizes relative OBJ face indices before appending', () => {
+		const current = [
+			'#@scene',
+			'#@units: meters',
+			'#@up: y',
+			'#@live_obj_version: 0.1',
+			'',
+			'o base',
+			'#@source: llm_mesh',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 0 1 0',
+			'f 1 2 3'
+		].join('\n');
+		const part = [
+			'o curved_kasagi',
+			'#@source: llm_mesh',
+			'v -2 3 0',
+			'v 2 3 0',
+			'v 2 3.2 0',
+			'v -2 3.2 0',
+			'f -4 -3 -2 -1'
+		].join('\n');
+
+		const appended = appendGeneratedPart(current, part);
+
+		expect(appended.normalizedPart).toContain('f 4 5 6 7');
+		expect(validateLiveObj(appended.liveObj, current).valid).toBe(true);
+		expect(validateRawPostSource(appended.liveObj).valid).toBe(true);
+	});
+
+	it('rejects relative face indices outside the local emitted vertex range', () => {
+		const part = ['o bad_relative', '#@source: llm_mesh', 'v 0 0 0', 'f -2 -1 -1'].join('\n');
+
+		expect(() => appendGeneratedPart('', part)).toThrow(/relative face index -2/);
+	});
+
 	it('normalizes redundant raw-post material target attributes', () => {
 		const part = [
 			'#@material_preset: glow color=#88ccff roughness=0.25 metalness=0',
@@ -194,7 +231,7 @@ describe('iterative Live OBJ helpers', () => {
 		);
 	});
 
-	it('allows visible raw OBJ objects without controls', () => {
+	it('reports visible raw OBJ objects without controls', () => {
 		const source = [
 			'o body',
 			'#@source: llm_mesh',
@@ -217,6 +254,26 @@ describe('iterative Live OBJ helpers', () => {
 			'f 4 5 6'
 		].join('\n');
 
+		expect(rawObjControlIssues(source)).toEqual([
+			"Object 'body' has raw mesh geometry but no #@controls metadata; add editable size controls backed by executable #@post transform scale parameters."
+		]);
+	});
+
+	it('accepts visible raw OBJ objects with executable dimension controls', () => {
+		const source = [
+			'o tuned_roof',
+			'#@source: llm_mesh',
+			'#@params: roof_scale=1',
+			'#@controls:',
+			'#@ - slider key=roof_scale label=Roof_scale min=0.5 max=2 step=0.05',
+			'#@post:',
+			'#@ - transform scale=[roof_scale,1,roof_scale]',
+			'v 0 0 1',
+			'v 1 0 1',
+			'v 0 1 1',
+			'f 1 2 3'
+		].join('\n');
+
 		expect(rawObjControlIssues(source)).toEqual([]);
 	});
 
@@ -235,8 +292,38 @@ describe('iterative Live OBJ helpers', () => {
 
 		expect(rawObjControlIssues(repaired)).toEqual([]);
 		expect(repaired).toContain('#@controls:');
-		expect(repaired).toContain('#@ - transform scale=[control_scale,control_scale,control_scale]');
+		expect(repaired).toContain('#@ - slider key=control_width label=Width');
+		expect(repaired).toContain('#@ - slider key=control_height label=Height');
+		expect(repaired).toContain('#@ - slider key=control_depth label=Depth');
+		expect(repaired).toContain(
+			'#@ - transform scale=[control_scale*control_width,control_scale*control_height,control_scale*control_depth]'
+		);
 		expect(validateRawPostSource(repaired).valid).toBe(true);
+	});
+
+	it('adds fallback dimension controls without dropping existing control params', () => {
+		const source = [
+			'o soft_shell',
+			'#@source: llm_mesh',
+			'#@params: smooth_iterations=2',
+			'#@controls:',
+			'#@ - slider key=smooth_iterations label=Smooth min=0 max=6 step=1',
+			'#@post:',
+			'#@ - smooth iterations=smooth_iterations strength=0.25',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 0 1 0',
+			'f 1 2 3'
+		].join('\n');
+
+		const repaired = addDefaultRawObjControls(source);
+
+		expect(rawObjControlIssues(repaired)).toEqual([]);
+		expect(repaired).toContain(
+			'#@params: smooth_iterations=2, control_scale=1, control_width=1, control_height=1, control_depth=1'
+		);
+		expect(repaired).toContain('#@ - smooth iterations=smooth_iterations strength=0.25');
+		expect(repaired).toContain('#@ - slider key=control_width label=Width');
 	});
 
 	it('includes opening contracts in planning summaries', () => {

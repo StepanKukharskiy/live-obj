@@ -94,6 +94,59 @@
 		| '2:3'
 		| '21:9';
 
+	type CameraSnapshot = {
+		projection?: string;
+		position?: number[];
+		target?: number[];
+		up?: number[];
+		fov?: number | null;
+		zoom?: number | null;
+	} | null;
+
+	type FrameAsset = {
+		id: string;
+		label: string;
+		source: 'screenshot' | 'generated';
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
+
+	type ShotFrame = {
+		imageDataUrl: string;
+		camera: CameraSnapshot;
+		capturedAt: number;
+	};
+
+	type GeneratedClip = {
+		id: string;
+		status: string;
+		label?: string;
+		videoUrl?: string;
+		jobId?: string;
+		error?: string;
+	};
+
+	type VideoShot = {
+		start?: ShotFrame;
+		middle?: ShotFrame;
+		end?: ShotFrame;
+		transitionPrompts?: Partial<Record<'startToMiddle' | 'middleToEnd', string>>;
+		clips: GeneratedClip[];
+	};
+
+	type ProcessImageAsset = {
+		label: string;
+		meta?: string;
+		imageDataUrl: string;
+	};
+	type ModelUsage = {
+		role: string;
+		provider: string;
+		model: string;
+		usedAt: number;
+	};
+
 	type LiveObjApiPayload = {
 		message?: string;
 		liveObj?: string;
@@ -162,6 +215,7 @@
 		liveObj?: string;
 		executedObj?: string;
 		sourceUvUrl?: string;
+		sourceGuideUrl?: string;
 		artifacts?: Record<string, string>;
 		warnings?: string[];
 	};
@@ -278,6 +332,33 @@ f 4 5 1
 	let objectRotYDeg = $state(0);
 	let preserveObjMaterials = $state(false);
 	let canvasRef = $state<Canvas3D | null>(null);
+	let renderFrameAssets = $state<FrameAsset[]>([]);
+	let renderVideoShot = $state<VideoShot>({ clips: [] });
+	let renderTurntableFrameAssets = $state<FrameAsset[]>([]);
+	let renderModelUsage = $state<ModelUsage[]>([]);
+	let projectProcessImages = $state<ProcessImageAsset[]>([]);
+
+	function providerLabel(value: string): string {
+		const normalized = value.trim().toLowerCase();
+		if (normalized === 'openai') return 'OpenAI';
+		if (normalized === 'google') return 'Google';
+		if (normalized === 'openrouter') return 'OpenRouter';
+		return value.trim() || 'Provider';
+	}
+
+	function recordRenderModelUsage(role: string, providerValue: string, model: string | undefined) {
+		const cleanModel = model?.trim();
+		if (!cleanModel) return;
+		const provider = providerLabel(providerValue);
+		const existingIndex = renderModelUsage.findIndex(
+			(item) => item.role === role && item.provider === provider && item.model === cleanModel
+		);
+		const entry = { role, provider, model: cleanModel, usedAt: Date.now() };
+		renderModelUsage =
+			existingIndex >= 0
+				? renderModelUsage.map((item, index) => (index === existingIndex ? entry : item))
+				: [...renderModelUsage, entry].slice(-8);
+	}
 
 	function materialColorFromName(name: string): THREE.Color {
 		let hash = 0;
@@ -306,6 +387,8 @@ f 4 5 1
 		global: TextureTags;
 	};
 
+	const UV_ATLAS_SIZE = 1024;
+	const UV_ATLAS_ASPECT_RATIO = '1:1';
 	const textureCache = new Map<string, THREE.Texture>();
 	const MAX_MODEL_HISTORY_CHARS = 60_000;
 
@@ -402,7 +485,11 @@ f 4 5 1
 		let currentObject: string | null = null;
 		const setTexture = (target: TextureTags, kind: string, path: string) => {
 			const normalizedKind = kind.toLowerCase();
-			if (normalizedKind === 'diffuse' || normalizedKind === 'albedo' || normalizedKind === 'color') {
+			if (
+				normalizedKind === 'diffuse' ||
+				normalizedKind === 'albedo' ||
+				normalizedKind === 'color'
+			) {
 				target.diffuse = path;
 			} else if (normalizedKind === 'height' || normalizedKind === 'depth') {
 				target.height = path;
@@ -507,7 +594,16 @@ f 4 5 1
 		for (const line of text.split(/\r?\n/)) {
 			const objectMatch = line.match(/^\s*o\s+([^\s#]+)/);
 			if (objectMatch) {
-				current = { name: objectMatch[1], lines: [line], v: [], vt: [], vn: [], vp: [], otherMesh: [], faces: [] };
+				current = {
+					name: objectMatch[1],
+					lines: [line],
+					v: [],
+					vt: [],
+					vn: [],
+					vp: [],
+					otherMesh: [],
+					faces: []
+				};
 				blocks.push(current);
 				continue;
 			}
@@ -541,11 +637,20 @@ f 4 5 1
 					const v = vIndex ? vOwner.get(vIndex) : undefined;
 					const vt = vtIndex ? vtOwner.get(vtIndex) : undefined;
 					const vn = vnIndex ? vnOwner.get(vnIndex) : undefined;
-					if (!v || v.block !== current || (vt && vt.block !== current) || (vn && vn.block !== current)) {
+					if (
+						!v ||
+						v.block !== current ||
+						(vt && vt.block !== current) ||
+						(vn && vn.block !== current)
+					) {
 						valid = false;
 						break;
 					}
-					refs.push({ v: v.local, ...(vt ? { vt: vt.local } : {}), ...(vn ? { vn: vn.local } : {}) });
+					refs.push({
+						v: v.local,
+						...(vt ? { vt: vt.local } : {}),
+						...(vn ? { vn: vn.local } : {})
+					});
 				}
 				if (valid && refs.length >= 3) current.faces.push(refs);
 				else current.otherMesh.push(line);
@@ -560,13 +665,18 @@ f 4 5 1
 
 	function refText(ref: ObjRef, offsets: { v: number; vt: number; vn: number }): string {
 		const v = ref.v + offsets.v;
-		if (ref.vt != null && ref.vn != null) return `${v}/${ref.vt + offsets.vt}/${ref.vn + offsets.vn}`;
+		if (ref.vt != null && ref.vn != null)
+			return `${v}/${ref.vt + offsets.vt}/${ref.vn + offsets.vn}`;
 		if (ref.vt != null) return `${v}/${ref.vt + offsets.vt}`;
 		if (ref.vn != null) return `${v}//${ref.vn + offsets.vn}`;
 		return String(v);
 	}
 
-	function appendObjBlock(out: string[], block: ObjBlock, offsets: { v: number; vt: number; vn: number }) {
+	function appendObjBlock(
+		out: string[],
+		block: ObjBlock,
+		offsets: { v: number; vt: number; vn: number }
+	) {
 		if (out.length > 0 && out[out.length - 1].trim() !== '') out.push('');
 		out.push(...block.lines.filter((line) => line.trim()));
 		out.push(...block.v, ...block.vt, ...block.vn, ...block.vp, ...block.otherMesh);
@@ -579,7 +689,11 @@ f 4 5 1
 		const names = new Set<string>();
 		for (const block of sourceText.split(/(?=^\s*o\s+)/gm)) {
 			const name = block.match(/^\s*o\s+([^\s#]+)/m)?.[1];
-			if (name && /^\s*#@workflow_step:\s*uv_dream_enhance\b/im.test(block) && /^\s*vt\s+/im.test(block)) {
+			if (
+				name &&
+				/^\s*#@workflow_step:\s*uv_dream_enhance\b/im.test(block) &&
+				/^\s*vt\s+/im.test(block)
+			) {
 				names.add(name);
 			}
 		}
@@ -629,7 +743,10 @@ f 4 5 1
 		return `${out.join('\n').trimEnd()}\n`;
 	}
 
-	function displayObjForSource(sourceText: string, executedText: string | undefined | null): string {
+	function displayObjForSource(
+		sourceText: string,
+		executedText: string | undefined | null
+	): string {
 		const executed = String(executedText ?? '');
 		if (hasAuthoredUvTextureMesh(sourceText) && executed.trim()) {
 			return displayObjWithAuthoredUvBlocks(sourceText, executed);
@@ -845,7 +962,9 @@ f 4 5 1
 			const a = new THREE.Vector3(position.getX(i), position.getY(i), position.getZ(i));
 			const b = new THREE.Vector3(position.getX(i + 1), position.getY(i + 1), position.getZ(i + 1));
 			const c = new THREE.Vector3(position.getX(i + 2), position.getY(i + 2), position.getZ(i + 2));
-			const faceNormal = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a));
+			const faceNormal = new THREE.Vector3()
+				.subVectors(b, a)
+				.cross(new THREE.Vector3().subVectors(c, a));
 			if (faceNormal.lengthSq() > 1e-12) faceNormal.normalize();
 			for (let j = 0; j < 3; j += 1) {
 				const key = keyFor(i + j);
@@ -892,33 +1011,34 @@ f 4 5 1
 		group.traverse((o: THREE.Object3D) => {
 			if (o instanceof THREE.Mesh && o.name) objectNameSet.add(o.name);
 		});
-			const hasMultipleNamedObjects = Math.max(objectNameSet.size, objectDefinitions.size) > 1;
-			preserveObjMaterials =
-				hasPerObjectMaterials ||
-				hasMultipleNamedObjects ||
-				hasMetadataMaterialTags ||
-				hasMetadataTextureTags;
-			const soleObjectTexture =
-				textureTags.byObject.size === 1 ? [...textureTags.byObject.values()][0] : undefined;
-			const candidateObjectNamesForMesh = (mesh: THREE.Mesh, material?: THREE.Material): string[] => {
-				const names: string[] = [];
-				if (mesh.name) names.push(mesh.name);
-				const materialName = (material as THREE.Material & { name?: string } | undefined)?.name;
-				if (materialName) names.push(materialName);
-				let parent = mesh.parent;
-				while (parent) {
-					if (parent.name) names.push(parent.name);
-					parent = parent.parent;
-				}
-				return [...new Set(names.filter(Boolean))];
-			};
-			const textureTagsForMesh = (mesh: THREE.Mesh, material?: THREE.Material): TextureTags => {
-				for (const name of candidateObjectNamesForMesh(mesh, material)) {
-					if (textureTags.byObject.has(name)) return textureTags.byObject.get(name)!;
-				}
-				if (soleObjectTexture && hasAuthoredUvTextureMesh(sourceTextForMetadata)) return soleObjectTexture;
-				return textureTags.global;
-			};
+		const hasMultipleNamedObjects = Math.max(objectNameSet.size, objectDefinitions.size) > 1;
+		preserveObjMaterials =
+			hasPerObjectMaterials ||
+			hasMultipleNamedObjects ||
+			hasMetadataMaterialTags ||
+			hasMetadataTextureTags;
+		const soleObjectTexture =
+			textureTags.byObject.size === 1 ? [...textureTags.byObject.values()][0] : undefined;
+		const candidateObjectNamesForMesh = (mesh: THREE.Mesh, material?: THREE.Material): string[] => {
+			const names: string[] = [];
+			if (mesh.name) names.push(mesh.name);
+			const materialName = (material as (THREE.Material & { name?: string }) | undefined)?.name;
+			if (materialName) names.push(materialName);
+			let parent = mesh.parent;
+			while (parent) {
+				if (parent.name) names.push(parent.name);
+				parent = parent.parent;
+			}
+			return [...new Set(names.filter(Boolean))];
+		};
+		const textureTagsForMesh = (mesh: THREE.Mesh, material?: THREE.Material): TextureTags => {
+			for (const name of candidateObjectNamesForMesh(mesh, material)) {
+				if (textureTags.byObject.has(name)) return textureTags.byObject.get(name)!;
+			}
+			if (soleObjectTexture && hasAuthoredUvTextureMesh(sourceTextForMetadata))
+				return soleObjectTexture;
+			return textureTags.global;
+		};
 		const globalDiffuseTexture = textureForPath(textureTags.global.diffuse);
 		const fallbackMat = new THREE.MeshStandardMaterial({
 			color: globalDiffuseTexture ? '#ffffff' : objectColor || DEFAULT_CLAY_MATERIAL.color,
@@ -943,20 +1063,21 @@ f 4 5 1
 			}
 			const materialToStandard = (material: THREE.Material): THREE.MeshStandardMaterial => {
 				const base = material as THREE.MeshPhongMaterial & { name?: string };
-					const names = candidateObjectNamesForMesh(o, material);
-					const taggedMaterial = names.map((name) => materialTagsByObject.get(name)).find(Boolean) ?? null;
-					const taggedPreset = taggedMaterial ? materialPresets.get(taggedMaterial) : undefined;
-					const useMtlPreset =
-						hasPerObjectMaterials && base.name ? materialPresets.get(base.name) : undefined;
-					const preset = taggedPreset ?? useMtlPreset;
-					const colorName = taggedMaterial ?? (hasPerObjectMaterials ? base.name : o.name);
+				const names = candidateObjectNamesForMesh(o, material);
+				const taggedMaterial =
+					names.map((name) => materialTagsByObject.get(name)).find(Boolean) ?? null;
+				const taggedPreset = taggedMaterial ? materialPresets.get(taggedMaterial) : undefined;
+				const useMtlPreset =
+					hasPerObjectMaterials && base.name ? materialPresets.get(base.name) : undefined;
+				const preset = taggedPreset ?? useMtlPreset;
+				const colorName = taggedMaterial ?? (hasPerObjectMaterials ? base.name : o.name);
 				const colorValue = preset?.color;
 				const color = colorValue
 					? new THREE.Color(colorValue)
 					: colorName
 						? materialColorFromName(colorName)
 						: new THREE.Color(objectColor);
-					const diffuseTexture = textureForPath(textureTagsForMesh(o, material).diffuse);
+				const diffuseTexture = textureForPath(textureTagsForMesh(o, material).diffuse);
 				return new THREE.MeshStandardMaterial({
 					color: diffuseTexture ? new THREE.Color('#ffffff') : color,
 					...(diffuseTexture ? { map: diffuseTexture } : {}),
@@ -1021,7 +1142,9 @@ f 4 5 1
 	}
 
 	function metadataValue(raw: string, key: string): string | undefined {
-		return raw.match(new RegExp(`(?:^|\\s)${key}=("[^"]+"|'[^']+'|\\S+)`))?.[1]?.replace(/^['"]|['"]$/g, '');
+		return raw
+			.match(new RegExp(`(?:^|\\s)${key}=("[^"]+"|'[^']+'|\\S+)`))?.[1]
+			?.replace(/^['"]|['"]$/g, '');
 	}
 
 	function metadataImageUrl(path: string): string {
@@ -1172,8 +1295,7 @@ f 4 5 1
 					.slice(0, fullMeshAt)
 					.filter(
 						(line) =>
-							/^#@dream_(?:base|delta)_v\b/i.test(line.trim()) &&
-							!editedPrefixText.has(line.trim())
+							/^#@dream_(?:base|delta)_v\b/i.test(line.trim()) && !editedPrefixText.has(line.trim())
 					);
 				const meshSuffix = fullLines.slice(fullMeshAt);
 				return [...editedPrefix, ...hiddenDreamCache, ...meshSuffix].join('\n');
@@ -1475,7 +1597,9 @@ f 4 5 1
 	function cameraFocusForPart(part: IterativePartSpec): string[] {
 		const explicitFocus = normalizedFocusIds(part.cameraFocus);
 		if (explicitFocus.length > 0) return explicitFocus;
-		return [...new Set([part.id, ...(part.dependencies ?? []), ...planCameraFocus].filter(Boolean))];
+		return [
+			...new Set([part.id, ...(part.dependencies ?? []), ...planCameraFocus].filter(Boolean))
+		];
 	}
 
 	async function appendBuiltPartScreenshot(
@@ -1493,6 +1617,15 @@ f 4 5 1
 			xraySupportObjectIds
 		});
 		if (!screenshot) return '';
+		const processScreenshot = captureSceneScreenshot({ frameObjectIds }) || screenshot;
+		projectProcessImages = [
+			...projectProcessImages,
+			{
+				label: `Build ${partNumber}/${partCount}: ${label}`,
+				meta: 'build step screenshot',
+				imageDataUrl: processScreenshot
+			}
+		].slice(-MAX_PROJECT_PROCESS_IMAGES);
 		msgs = [
 			...msgs,
 			{
@@ -1737,9 +1870,7 @@ f 4 5 1
 				let value = 1;
 				if (view === 'top') {
 					value =
-						0.58 +
-						0.28 * Math.sin(u * Math.PI * 6) +
-						0.13 * Math.sin((v + u * 0.35) * Math.PI * 4);
+						0.58 + 0.28 * Math.sin(u * Math.PI * 6) + 0.13 * Math.sin((v + u * 0.35) * Math.PI * 4);
 				}
 				row += Math.round(clamp01(value) * 255)
 					.toString(16)
@@ -1771,7 +1902,10 @@ f 4 5 1
 		return { viewMasks, viewDepthMaps };
 	}
 
-	function dreamMapSheetDataUrl(viewMasks: Record<string, DreamMap>, viewDepthMaps: Record<string, DreamMap>) {
+	function dreamMapSheetDataUrl(
+		viewMasks: Record<string, DreamMap>,
+		viewDepthMaps: Record<string, DreamMap>
+	) {
 		const tile = 92;
 		const gap = 10;
 		const labelH = 18;
@@ -1785,7 +1919,7 @@ f 4 5 1
 				for (let x = 0; x < map.width; x += 1) {
 					const row = map.rows[y] ?? '';
 					const usesByteDepth = isDepth && row.length >= map.width * 2;
-					const ch = usesByteDepth ? row.slice(x * 2, x * 2 + 2) : row[x] ?? '0';
+					const ch = usesByteDepth ? row.slice(x * 2, x * 2 + 2) : (row[x] ?? '0');
 					const level = isDepth
 						? usesByteDepth
 							? Math.round(((parseInt(ch, 16) || 0) / 255) * 15)
@@ -1889,16 +2023,18 @@ f 4 5 1
 				let maskRow = '';
 				let depthRow = '';
 				for (let x = 0; x < size; x += 1) {
-					const sx = Math.min(
-						canvas.width - 1,
-						Math.floor((x + 0.5) * (cellW / size))
-					);
+					const sx = Math.min(canvas.width - 1, Math.floor((x + 0.5) * (cellW / size)));
 					const sy = Math.min(
 						canvas.height - 1,
 						Math.floor(rowIndex * cellH + (y + 0.5) * (cellH / size))
 					);
 					const maskPixel = ctx.getImageData(sx, sy, 1, 1).data;
-					const depthPixel = ctx.getImageData(Math.min(canvas.width - 1, sx + cellW), sy, 1, 1).data;
+					const depthPixel = ctx.getImageData(
+						Math.min(canvas.width - 1, sx + cellW),
+						sy,
+						1,
+						1
+					).data;
 					maskRow += grayscaleAt(maskPixel, 0) > 96 ? '1' : '0';
 					depthRow += grayscaleAt(depthPixel, 0).toString(16).padStart(2, '0');
 				}
@@ -1946,6 +2082,8 @@ f 4 5 1
 		viewMasks: Record<string, DreamMap>;
 		viewDepthMaps: Record<string, DreamMap>;
 	}> {
+		const imageProvider = providerSettings.provider;
+		const imageModel = providerSettings.imageModel?.trim() || undefined;
 		const res = await fetch('/api/render-image', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -1953,16 +2091,20 @@ f 4 5 1
 				prompt: dreamMapImagePrompt(args),
 				screenshotDataUrl: args.screenshotDataUrl,
 				liveObjText,
-				provider: providerSettings.provider,
+				provider: imageProvider,
 				apiKey: providerSettings.apiKey?.trim() || undefined,
 				imageUrl: providerSettings.imageUrl?.trim() || undefined,
-				imageModel: providerSettings.imageModel?.trim() || undefined
+				imageModel
 			})
 		});
-		const payload = (await res.json().catch(() => ({}))) as { imageDataUrl?: string; message?: string };
+		const payload = (await res.json().catch(() => ({}))) as {
+			imageDataUrl?: string;
+			message?: string;
+		};
 		if (!res.ok || !payload.imageDataUrl) {
 			throw new Error(payload.message || res.statusText || 'Dream map image generation failed');
 		}
+		recordRenderModelUsage('Image texture', imageProvider, imageModel);
 		const maps = await parseDreamMapSheetImage(payload.imageDataUrl);
 		return { imageDataUrl: payload.imageDataUrl, ...maps };
 	}
@@ -1976,19 +2118,26 @@ f 4 5 1
 		return btoa(binary);
 	}
 
-	async function imageToPngDataUrl(imageUrl: string): Promise<string> {
-		if (imageUrl.startsWith('data:image/png')) return imageUrl;
+	async function imageToPngDataUrl(
+		imageUrl: string,
+		width?: number,
+		height?: number
+	): Promise<string> {
 		const img = await loadImageDataUrl(imageUrl);
 		const canvas = document.createElement('canvas');
-		canvas.width = img.naturalWidth || img.width;
-		canvas.height = img.naturalHeight || img.height;
+		canvas.width = width ?? (img.naturalWidth || img.width);
+		canvas.height = height ?? (img.naturalHeight || img.height);
 		const ctx = canvas.getContext('2d');
 		if (!ctx) throw new Error('Unable to convert image');
-		ctx.drawImage(img, 0, 0);
+		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 		return canvas.toDataURL('image/png');
 	}
 
-	async function imageToBmpDataUrl(imageUrl: string, width = 1024, height = 1536): Promise<string> {
+	async function imageToBmpDataUrl(
+		imageUrl: string,
+		width = UV_ATLAS_SIZE,
+		height = UV_ATLAS_SIZE
+	): Promise<string> {
 		const img = await loadImageDataUrl(imageUrl);
 		const canvas = document.createElement('canvas');
 		canvas.width = width;
@@ -2018,7 +2167,9 @@ f 4 5 1
 			for (let x = 0; x < width; x += 1) {
 				const sourceIndex = (sourceY * width + x) * 4;
 				const targetIndex = rowOffset + x * 3;
-				const gray = Math.round((rgba[sourceIndex] + rgba[sourceIndex + 1] + rgba[sourceIndex + 2]) / 3);
+				const gray = Math.round(
+					(rgba[sourceIndex] + rgba[sourceIndex + 1] + rgba[sourceIndex + 2]) / 3
+				);
 				bytes[targetIndex] = gray;
 				bytes[targetIndex + 1] = gray;
 				bytes[targetIndex + 2] = gray;
@@ -2029,8 +2180,8 @@ f 4 5 1
 
 	async function imageToColorBmpDataUrl(
 		imageUrl: string,
-		width = 1024,
-		height = 1536
+		width = UV_ATLAS_SIZE,
+		height = UV_ATLAS_SIZE
 	): Promise<string> {
 		const img = await loadImageDataUrl(imageUrl);
 		const canvas = document.createElement('canvas');
@@ -2073,11 +2224,12 @@ f 4 5 1
 		return [
 			`Generate a machine-readable grayscale UV height map for object ${args.targetObjectId}.`,
 			`Design intent: ${args.text}`,
-			'The attached image is the UV unwrap atlas of the existing mesh with polygon outlines.',
+			'The attached image is a clean UV island guide for the existing mesh.',
 			'Output exactly one square grayscale height map in the same atlas layout, dimensions, island positions, and margins.',
 			'Treat the full square image as a fixed UV document. Do not crop, pad, stretch, letterbox, recenter, or change the aspect ratio.',
 			'Do not move, resize, rotate, or regroup UV islands. Preserve every island boundary.',
 			'Use pure black outside UV islands. Inside islands, use smooth continuous grayscale relief.',
+			'Do not copy guide colors, borders, outlines, seams, diagonal marks, or debug annotations into the output.',
 			'White means raised surface. Black means recessed surface. Mid gray means neutral base surface.',
 			'Create controlled smooth pleats, ribs, folds, grooves, or surface relief according to the design intent.',
 			'Make features align across island borders where connected surfaces meet.',
@@ -2090,22 +2242,31 @@ f 4 5 1
 		targetObjectId: string;
 		sourceUvDataUrl: string;
 	}): Promise<string> {
+		const imageProvider = providerSettings.provider;
+		const imageModel = providerSettings.imageModel?.trim() || undefined;
 		const res = await fetch('/api/render-image', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
 				prompt: uvHeightMapPrompt(args),
 				screenshotDataUrl: args.sourceUvDataUrl,
-				provider: providerSettings.provider,
+				provider: imageProvider,
 				apiKey: providerSettings.apiKey?.trim() || undefined,
 				imageUrl: providerSettings.imageUrl?.trim() || undefined,
-				imageModel: providerSettings.imageModel?.trim() || undefined
+				imageModel,
+				targetAspectRatio: UV_ATLAS_ASPECT_RATIO,
+				targetWidth: UV_ATLAS_SIZE,
+				targetHeight: UV_ATLAS_SIZE
 			})
 		});
-		const payload = (await res.json().catch(() => ({}))) as { imageDataUrl?: string; message?: string };
+		const payload = (await res.json().catch(() => ({}))) as {
+			imageDataUrl?: string;
+			message?: string;
+		};
 		if (!res.ok || !payload.imageDataUrl) {
 			throw new Error(payload.message || res.statusText || 'UV height map generation failed');
 		}
+		recordRenderModelUsage('Image texture', imageProvider, imageModel);
 		return payload.imageDataUrl;
 	}
 
@@ -2127,22 +2288,31 @@ f 4 5 1
 		targetObjectId: string;
 		heightMapDataUrl: string;
 	}): Promise<string> {
+		const imageProvider = providerSettings.provider;
+		const imageModel = providerSettings.imageModel?.trim() || undefined;
 		const res = await fetch('/api/render-image', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
 				prompt: uvDiffuseMapPrompt(args),
 				screenshotDataUrl: args.heightMapDataUrl,
-				provider: providerSettings.provider,
+				provider: imageProvider,
 				apiKey: providerSettings.apiKey?.trim() || undefined,
 				imageUrl: providerSettings.imageUrl?.trim() || undefined,
-				imageModel: providerSettings.imageModel?.trim() || undefined
+				imageModel,
+				targetAspectRatio: UV_ATLAS_ASPECT_RATIO,
+				targetWidth: UV_ATLAS_SIZE,
+				targetHeight: UV_ATLAS_SIZE
 			})
 		});
-		const payload = (await res.json().catch(() => ({}))) as { imageDataUrl?: string; message?: string };
+		const payload = (await res.json().catch(() => ({}))) as {
+			imageDataUrl?: string;
+			message?: string;
+		};
 		if (!res.ok || !payload.imageDataUrl) {
 			throw new Error(payload.message || res.statusText || 'UV diffuse map generation failed');
 		}
+		recordRenderModelUsage('Image texture', imageProvider, imageModel);
 		return payload.imageDataUrl;
 	}
 
@@ -2157,10 +2327,7 @@ f 4 5 1
 		const amount = Number.isFinite(args.amount) ? Math.max(0, Math.min(2, args.amount ?? 1)) : 1;
 		throwIfAborted(args.signal);
 		statusLine = `Unwrapping ${args.targetObjectId} into a UV atlas.`;
-		appendProgressMessage(
-			`UV dream: unwrapping ${args.targetObjectId}.`,
-			'building source atlas'
-		);
+		appendProgressMessage(`UV dream: unwrapping ${args.targetObjectId}.`, 'building source atlas');
 		const unwrapRes = await fetch('/api/live-obj/uv-dream-unwrap', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -2187,23 +2354,33 @@ f 4 5 1
 		];
 
 		if (!providerSettings.apiKey?.trim()) {
-			throw new Error('UV dream enhancement needs an image provider key to generate the height map.');
+			throw new Error(
+				'UV dream enhancement needs an image provider key to generate the height map.'
+			);
 		}
 		statusLine = `Generating UV height map for ${args.targetObjectId}.`;
 		appendProgressMessage(
 			`UV dream: preparing ${args.targetObjectId} unwrap for the image model.`,
 			'texture generation input'
 		);
-		const sourceUvDataUrl = await imageToPngDataUrl(unwrapPayload.sourceUvUrl);
+		const sourceUvDataUrl = await imageToPngDataUrl(
+			unwrapPayload.sourceGuideUrl ?? unwrapPayload.sourceUvUrl,
+			UV_ATLAS_SIZE,
+			UV_ATLAS_SIZE
+		);
 		appendProgressMessage(
 			'UV dream: asking the image model for a grayscale height map.',
 			'texture generation'
 		);
-		const generatedHeightDataUrl = await requestGeneratedUvHeightMap({
-			text: args.text,
-			targetObjectId: args.targetObjectId,
-			sourceUvDataUrl
-		});
+		const generatedHeightDataUrl = await imageToPngDataUrl(
+			await requestGeneratedUvHeightMap({
+				text: args.text,
+				targetObjectId: args.targetObjectId,
+				sourceUvDataUrl
+			}),
+			UV_ATLAS_SIZE,
+			UV_ATLAS_SIZE
+		);
 		throwIfAborted(args.signal);
 		msgs = [
 			...msgs,
@@ -2220,24 +2397,38 @@ f 4 5 1
 			'UV dream: asking the image model for a diffuse color map based on the height map.',
 			'diffuse texture generation'
 		);
-		const generatedDiffuseDataUrl = await requestGeneratedUvDiffuseMap({
-			text: args.text,
-			targetObjectId: args.targetObjectId,
-			heightMapDataUrl: generatedHeightDataUrl
-		});
-		throwIfAborted(args.signal);
-		const diffusePngDataUrl = await imageToPngDataUrl(generatedDiffuseDataUrl);
-		const diffuseBmpDataUrl = await imageToColorBmpDataUrl(generatedDiffuseDataUrl);
-		msgs = [
-			...msgs,
-			{
-				role: 'assistant',
-				content: `Generated UV diffuse map for ${args.targetObjectId}.`,
-				imageDataUrl: diffusePngDataUrl,
-				meta: 'generated uv diffuse',
-				excludeFromHistory: true
-			}
-		];
+		let diffusePngDataUrl: string | undefined;
+		let diffuseBmpDataUrl: string | undefined;
+		try {
+			const generatedDiffuseDataUrl = await requestGeneratedUvDiffuseMap({
+				text: args.text,
+				targetObjectId: args.targetObjectId,
+				heightMapDataUrl: generatedHeightDataUrl
+			});
+			throwIfAborted(args.signal);
+			diffusePngDataUrl = await imageToPngDataUrl(
+				generatedDiffuseDataUrl,
+				UV_ATLAS_SIZE,
+				UV_ATLAS_SIZE
+			);
+			diffuseBmpDataUrl = await imageToColorBmpDataUrl(diffusePngDataUrl);
+			msgs = [
+				...msgs,
+				{
+					role: 'assistant',
+					content: `Generated UV diffuse map for ${args.targetObjectId}.`,
+					imageDataUrl: diffusePngDataUrl,
+					meta: 'generated uv diffuse',
+					excludeFromHistory: true
+				}
+			];
+		} catch (err) {
+			throwIfAborted(args.signal);
+			appendProgressMessage(
+				'UV diffuse map generation failed; using deterministic texture fallback.',
+				err instanceof Error ? err.message : String(err)
+			);
+		}
 
 		statusLine = `Applying UV displacement to ${args.targetObjectId}.`;
 		appendProgressMessage(
@@ -2255,14 +2446,14 @@ f 4 5 1
 			headers: { 'Content-Type': 'application/json' },
 			signal: args.signal,
 			body: JSON.stringify({
-					liveObj: liveObjText.trim(),
-					targetObjectId: args.targetObjectId,
-					heightBmpDataUrl,
-					diffusePngDataUrl,
-					diffuseBmpDataUrl,
-					mode,
-					amount,
-					shade: 'smooth'
+				liveObj: liveObjText.trim(),
+				targetObjectId: args.targetObjectId,
+				heightBmpDataUrl,
+				diffusePngDataUrl,
+				diffuseBmpDataUrl,
+				mode,
+				amount,
+				shade: 'smooth'
 			})
 		});
 		const payload = (await enhanceRes.json().catch(() => ({}))) as UvDreamPayload;
@@ -2270,9 +2461,12 @@ f 4 5 1
 		if (!enhanceRes.ok || !payload.liveObj) {
 			throw new Error(payload.message || enhanceRes.statusText || 'UV dream enhancement failed');
 		}
-			clearThinkingMessage();
-			liveObjText = String(payload.liveObj);
-			executedObjText = displayObjForSource(liveObjText, String(payload.executedObj ?? payload.liveObj));
+		clearThinkingMessage();
+		liveObjText = String(payload.liveObj);
+		executedObjText = displayObjForSource(
+			liveObjText,
+			String(payload.executedObj ?? payload.liveObj)
+		);
 		rawLlmText = JSON.stringify(
 			{
 				workflow: 'uv_dream_enhance',
@@ -2306,8 +2500,11 @@ f 4 5 1
 
 	function plannedUvPostProcess(part: IterativePartSpec): IterativePartPostProcess | null {
 		const postProcess = part.postProcess;
-		const type = postProcess?.type?.trim().toLowerCase().replace(/[-\s]+/g, '_');
-		return type === 'uv_dream' ? postProcess ?? { type: 'uv_dream' } : null;
+		const type = postProcess?.type
+			?.trim()
+			.toLowerCase()
+			.replace(/[-\s]+/g, '_');
+		return type === 'uv_dream' ? (postProcess ?? { type: 'uv_dream' }) : null;
 	}
 
 	function plannedPostProcessTarget(part: IterativePartSpec, addedObjectNames: string[]): string {
@@ -2345,7 +2542,10 @@ f 4 5 1
 			return;
 		}
 		const mode =
-			postProcess.mode?.trim().toLowerCase().replace(/[-\s]+/g, '-') === 'map-remesh'
+			postProcess.mode
+				?.trim()
+				.toLowerCase()
+				.replace(/[-\s]+/g, '-') === 'map-remesh'
 				? 'map-remesh'
 				: 'displace';
 		const detailPrompt = [args.text, args.part.prompt, postProcess.prompt]
@@ -2365,7 +2565,11 @@ f 4 5 1
 		});
 	}
 
-	async function runDreamRebuildTurn(args: { text: string; targetObjectId: string; signal?: AbortSignal }) {
+	async function runDreamRebuildTurn(args: {
+		text: string;
+		targetObjectId: string;
+		signal?: AbortSignal;
+	}) {
 		throwIfAborted(args.signal);
 		statusLine = `Capturing six source views for ${args.targetObjectId}.`;
 		const referenceSheetDataUrl = await captureDreamReferenceSheet(args.targetObjectId);
@@ -2427,7 +2631,9 @@ f 4 5 1
 				targetObjectId: args.targetObjectId,
 				prompt: args.text,
 				reconstruction: 'tsdf',
-				mode: /\b(from scratch|new topology|complex spatial|reconstruct from scratch)\b/i.test(args.text)
+				mode: /\b(from scratch|new topology|complex spatial|reconstruct from scratch)\b/i.test(
+					args.text
+				)
 					? 'replace'
 					: 'enhance',
 				profile: /\b(roof|canopy|cloth|fabric|terrain|surface|panel|skin)\b/i.test(args.text)
@@ -2442,9 +2648,12 @@ f 4 5 1
 		if (!res.ok || !payload.liveObj) {
 			throw new Error(payload.message || res.statusText || 'Dream rebuild failed');
 		}
-			clearThinkingMessage();
-			liveObjText = String(payload.liveObj);
-			executedObjText = displayObjForSource(liveObjText, String(payload.executedObj ?? payload.liveObj));
+		clearThinkingMessage();
+		liveObjText = String(payload.liveObj);
+		executedObjText = displayObjForSource(
+			liveObjText,
+			String(payload.executedObj ?? payload.liveObj)
+		);
 		rawLlmText = JSON.stringify(payload.dream ?? {}, null, 2);
 		currentSceneMode = 'raw_obj';
 		sourceTab = 'executed';
@@ -2466,6 +2675,105 @@ f 4 5 1
 		await tick();
 		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+	}
+
+	const AUTO_FINAL_RENDER_VIEWS: Array<{ label: string; direction: [number, number, number] }> = [
+		{ label: 'Hero', direction: [-1, 0.65, -1] },
+		{ label: 'Front', direction: [0, 0.45, -1] },
+		{ label: 'Right', direction: [1, 0.45, -0.2] },
+		{ label: 'Back', direction: [0.25, 0.45, 1] },
+		{ label: 'Left', direction: [-1, 0.45, 0.2] },
+		{ label: 'High three-quarter', direction: [-0.45, 1.15, -0.7] },
+		{ label: 'Top', direction: [-0.2, 1.35, 0.25] },
+		{ label: 'Low reveal', direction: [0.65, 0.2, -1] }
+	];
+	const MAX_RENDER_FRAME_ASSETS = 96;
+	const MAX_PROJECT_PROCESS_IMAGES = 64;
+
+	const REEL_TURNTABLE_VIEWS: Array<{ label: string; direction: [number, number, number] }> = [
+		{ label: 'Orbit front', direction: [0, 0.42, -1] },
+		{ label: 'Orbit front right', direction: [0.72, 0.42, -0.72] },
+		{ label: 'Orbit right', direction: [1, 0.42, 0] },
+		{ label: 'Orbit back right', direction: [0.72, 0.42, 0.72] },
+		{ label: 'Orbit back', direction: [0, 0.42, 1] },
+		{ label: 'Orbit back left', direction: [-0.72, 0.42, 0.72] },
+		{ label: 'Orbit left', direction: [-1, 0.42, 0] },
+		{ label: 'Orbit front left', direction: [-0.72, 0.42, -0.72] }
+	];
+
+	function makeRenderFrameId(): string {
+		return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+			? crypto.randomUUID()
+			: `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+	}
+
+	async function captureFinalRenderGalleryFrames() {
+		if (!canvasRef || !renderObject) return;
+		const originalCamera = canvasRef.captureCameraSnapshot?.() ?? null;
+		const capturedAt = Date.now();
+		const nextAssets: FrameAsset[] = [];
+		await waitForSceneCaptureFrame();
+		for (const [index, view] of AUTO_FINAL_RENDER_VIEWS.entries()) {
+			const imageDataUrl =
+				canvasRef.captureScreenshot?.({
+					maxWidth: 1280,
+					format: 'image/jpeg',
+					quality: 0.9,
+					autoFrame: true,
+					framePadding: 1.08,
+					viewDirection: view.direction
+				}) ?? '';
+			if (!imageDataUrl) continue;
+			nextAssets.push({
+				id: makeRenderFrameId(),
+				label: `Final ${view.label}`,
+				source: 'screenshot',
+				imageDataUrl,
+				camera: canvasRef.captureCameraSnapshot?.() ?? null,
+				capturedAt: capturedAt + index
+			});
+		}
+		canvasRef.restoreCameraSnapshot?.(originalCamera);
+		if (nextAssets.length === 0) return;
+		renderFrameAssets = [...nextAssets, ...renderFrameAssets].slice(0, MAX_RENDER_FRAME_ASSETS);
+		renderVideoShot = {
+			start: nextAssets[0],
+			middle: nextAssets[1],
+			end: nextAssets[2],
+			transitionPrompts: renderVideoShot.transitionPrompts,
+			clips: []
+		};
+	}
+
+	async function captureReelTurntableFrames(): Promise<FrameAsset[]> {
+		if (!canvasRef || !renderObject) return [];
+		const originalCamera = canvasRef.captureCameraSnapshot?.() ?? null;
+		const capturedAt = Date.now();
+		const nextAssets: FrameAsset[] = [];
+		await waitForSceneCaptureFrame();
+		for (const [index, view] of REEL_TURNTABLE_VIEWS.entries()) {
+			const imageDataUrl =
+				canvasRef.captureScreenshot?.({
+					maxWidth: 1280,
+					format: 'image/jpeg',
+					quality: 0.9,
+					autoFrame: true,
+					framePadding: 1.06,
+					viewDirection: view.direction
+				}) ?? '';
+			if (!imageDataUrl) continue;
+			nextAssets.push({
+				id: makeRenderFrameId(),
+				label: view.label,
+				source: 'screenshot',
+				imageDataUrl,
+				camera: canvasRef.captureCameraSnapshot?.() ?? null,
+				capturedAt: capturedAt + index
+			});
+		}
+		canvasRef.restoreCameraSnapshot?.(originalCamera);
+		if (nextAssets.length) renderTurntableFrameAssets = nextAssets;
+		return nextAssets;
 	}
 
 	function captureFeedbackScreenshot() {
@@ -2497,6 +2805,7 @@ f 4 5 1
 			'Also inspect the mesh for accidental holes or missing polygon spans. Treat holes as errors only when they contradict the part intent; do not close deliberate openings such as lampshade rims, windows, doorways, hollow vessels, frames, tubes, lattices, or intentionally open ends.',
 			'Use both the screenshot and the current Live OBJ coordinates to find conflicts. The screenshot shows what is visible; the OBJ coordinates show whether objects overlap in 3D.',
 			'Repair existing objects before adding any new detail. If glass intersects a roof/shell, move, trim, lower, narrow, or remove the glass panels instead of adding decorative elements.',
+			'If there is no clear visible geometry problem, make no changes. For a surgical patch, return {"summary":"No visible repair needed","edits":[]}.',
 			'Patch only the specific named objects that need repair. Do not replace the whole scene or simplify successful parts.',
 			'Do not add new decorative objects unless the current screenshot has no obvious geometry conflicts.',
 			'Preserve successful object IDs and proportions. Return an updated OBJ scene.'
@@ -2526,6 +2835,7 @@ f 4 5 1
 			'The screenshot is an x-ray diagnostic view: cyan wireframe objects are the newly added part, amber objects are direct dependencies/focus context, and transparent gray objects are surrounding scene geometry that may still occlude or collide.',
 			'Check the cyan wireframe for accidental missing faces, broken caps, or incomplete side panels. Only repair holes that are not intentional; preserve deliberate openings such as lampshade rims, windows, doorways, hollow vessels, frames, tubes, lattices, and open-ended structural members.',
 			'If a wall, roof, slab, glass panel, or support intersects another major part, repair the smaller/newly added offender first. Patch a directly touching dependency only when that is the minimal fix.',
+			'If the new part is visibly acceptable, make no changes. For a surgical patch, return {"summary":"No visible repair needed","edits":[]}.',
 			'Do not redesign the whole scene. Do not replace unrelated successful objects. Return an updated OBJ scene.'
 		].join('\n');
 	}
@@ -2765,7 +3075,15 @@ f 4 5 1
 		partFeedback?: boolean;
 		signal?: AbortSignal;
 	}) {
-		const { text, initialImageUrls, model, useProcedural, baseLiveObj = '', partFeedback = false, signal } = args;
+		const {
+			text,
+			initialImageUrls,
+			model,
+			useProcedural,
+			baseLiveObj = '',
+			partFeedback = false,
+			signal
+		} = args;
 		throwIfAborted(signal);
 		let accumulatedUsage: TokenUsageSummary | undefined;
 		const appendToCurrentScene = Boolean(baseLiveObj.trim());
@@ -2887,10 +3205,9 @@ f 4 5 1
 				applyObjString(executedObjText || workingLiveObj, workingLiveObj);
 				await waitForSceneCaptureFrame();
 				const focusObjectIds = cameraFocusForPart(part);
-				const xrayFocusObjectIds =
-					appendPayload.validation?.addedObjectNames?.length
-						? appendPayload.validation.addedObjectNames
-						: [part.id];
+				const xrayFocusObjectIds = appendPayload.validation?.addedObjectNames?.length
+					? appendPayload.validation.addedObjectNames
+					: [part.id];
 				const xraySupportObjectIds = focusObjectIds.filter(
 					(objectId) => !xrayFocusObjectIds.includes(objectId)
 				);
@@ -2993,6 +3310,7 @@ f 4 5 1
 					.filter(Boolean)
 			)
 		];
+		const modelProvider = providerSettings.provider;
 		const model = providerSettings.textModel?.trim() || 'gpt-5.5';
 		const history = buildChatHistory(priorMsgs, includeHistoryImages);
 		const latestHistoryContent = [...priorMsgs]
@@ -3023,7 +3341,7 @@ f 4 5 1
 				...(requestImageUrls.length > 1 ? { imageUrls: requestImageUrls } : {}),
 				history,
 				model,
-				provider: providerSettings.provider,
+				provider: modelProvider,
 				apiKey: providerSettings.apiKey?.trim() || undefined,
 				apiUrl: providerSettings.apiUrl?.trim() || undefined,
 				useProcedural,
@@ -3038,17 +3356,18 @@ f 4 5 1
 		throwIfAborted(signal);
 		if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
 		clearThinkingMessage();
+		recordRenderModelUsage('Scene generation', modelProvider, model);
 
-			liveObjText = String(payload.liveObj ?? '');
-			currentSceneMode = useProcedural ? 'live_obj' : 'raw_obj';
-			rawLlmText = String(payload.rawLlm ?? '');
-			executedObjText = displayObjForSource(
-				liveObjText,
-				typeof payload.executedObj === 'string'
-					? payload.executedObj
-					: String(payload.executedObj ?? '')
-			);
-			applyObjString(executedObjText || liveObjText, liveObjText || executedObjText);
+		liveObjText = String(payload.liveObj ?? '');
+		currentSceneMode = useProcedural ? 'live_obj' : 'raw_obj';
+		rawLlmText = String(payload.rawLlm ?? '');
+		executedObjText = displayObjForSource(
+			liveObjText,
+			typeof payload.executedObj === 'string'
+				? payload.executedObj
+				: String(payload.executedObj ?? '')
+		);
+		applyObjString(executedObjText || liveObjText, liveObjText || executedObjText);
 		sourceTab = 'executed';
 		sceneEpoch += 1;
 
@@ -3088,6 +3407,7 @@ f 4 5 1
 					.filter(Boolean)
 			)
 		];
+		const modelProvider = providerSettings.provider;
 		const model = providerSettings.textModel?.trim() || 'gpt-5.5';
 		const feedbackPasses = payload.feedbackLoop ? 1 : 0;
 		if ((!text.trim() && initialImageUrls.length === 0) || busy) return;
@@ -3120,6 +3440,7 @@ f 4 5 1
 		const previousLiveObj = currentLiveObj;
 		const previousSceneMode = currentSceneMode;
 		let usedIterativeGeneration = false;
+		if (!isIterativeEdit) projectProcessImages = [];
 		if (
 			isIterativeEdit &&
 			currentLiveObj &&
@@ -3177,6 +3498,8 @@ f 4 5 1
 					partFeedback: feedbackPasses > 0,
 					signal
 				});
+				recordRenderModelUsage('Scene generation', modelProvider, model);
+				await captureFinalRenderGalleryFrames();
 			} else {
 				appendProgressMessage(
 					isIterativeEdit
@@ -3197,7 +3520,7 @@ f 4 5 1
 						...(initialImageUrls.length > 1 ? { imageUrls: initialImageUrls } : {}),
 						history,
 						model,
-						provider: providerSettings.provider,
+						provider: modelProvider,
 						apiKey: providerSettings.apiKey?.trim() || undefined,
 						apiUrl: providerSettings.apiUrl?.trim() || undefined,
 						useProcedural,
@@ -3212,17 +3535,18 @@ f 4 5 1
 				throwIfAborted(signal);
 				if (!res.ok) throw new Error(payload.message || res.statusText || 'Request failed');
 				clearThinkingMessage();
+				recordRenderModelUsage('Scene generation', modelProvider, model);
 
-					liveObjText = String(payload.liveObj ?? '');
-					currentSceneMode = useProcedural ? 'live_obj' : 'raw_obj';
-					rawLlmText = String(payload.rawLlm ?? '');
-					executedObjText = displayObjForSource(
-						liveObjText,
-						typeof payload.executedObj === 'string'
-							? payload.executedObj
-							: String(payload.executedObj ?? '')
-					);
-					applyObjString(executedObjText || liveObjText, liveObjText || executedObjText);
+				liveObjText = String(payload.liveObj ?? '');
+				currentSceneMode = useProcedural ? 'live_obj' : 'raw_obj';
+				rawLlmText = String(payload.rawLlm ?? '');
+				executedObjText = displayObjForSource(
+					liveObjText,
+					typeof payload.executedObj === 'string'
+						? payload.executedObj
+						: String(payload.executedObj ?? '')
+				);
+				applyObjString(executedObjText || liveObjText, liveObjText || executedObjText);
 				sourceTab = 'executed';
 				sceneEpoch += 1;
 
@@ -3489,6 +3813,12 @@ f 4 5 1
 		onStopGeneration={stopGeneration}
 		onCaptureSceneScreenshot={captureSceneScreenshot}
 		onCaptureSceneCameraSnapshot={captureSceneCameraSnapshot}
+		onCaptureReelTurntableFrames={captureReelTurntableFrames}
+		bind:renderFrameAssets
+		bind:renderVideoShot
+		bind:renderTurntableFrameAssets
+		bind:renderModelUsage
+		{projectProcessImages}
 		onLaunchObjExample={launchObjExample}
 		bind:kernelDefault
 	/>

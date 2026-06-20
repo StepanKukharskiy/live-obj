@@ -17,8 +17,10 @@ export const POST: RequestHandler = async ({ request }) => {
 			targetObjectId: body.targetObjectId.trim()
 		});
 		const id = storeTempAsset(result.sourceUvPng, 'image/png', 'source-uv.png');
+		const guideId = storeTempAsset(result.sourceGuidePng, 'image/png', 'source-guide.png');
 		return json({
 			sourceUvUrl: `/api/temp-assets/${id}`,
+			sourceGuideUrl: `/api/temp-assets/${guideId}`,
 			expiresInSeconds: 15 * 60,
 			warnings: result.warnings
 		});

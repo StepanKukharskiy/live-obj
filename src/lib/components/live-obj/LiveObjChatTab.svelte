@@ -332,7 +332,19 @@ f 20 24 21 17`
 		clearAttachment();
 	}
 
+	function rerunTexture() {
+		const target = targetObjectId.trim();
+		if (!target || busy) return;
+		onSend?.({
+			text: `Regenerate the UV dream texture map for object ${target}. Preserve the existing geometry, object placement, and paired components exactly while refreshing diffuse and height texture detail.`,
+			useProcedural: false,
+			targetObjectId: target,
+			feedbackLoop: false
+		});
+	}
+
 	let canSend = $derived(Boolean((input.trim() || attachedDataUrl) && !busy));
+	let canRerunTexture = $derived(Boolean(targetObjectId.trim() && !busy));
 
 	function usePrompt(example: { text: string; category: string }) {
 		input = example.text;
@@ -487,15 +499,30 @@ f 20 24 21 17`
 		<div class="planner-chat-input-toolbar">
 			<div class="planner-chat-toolbar-left">
 				{#if targetObjectOptions.length > 0}
-					<label class="planner-chat-procedural-label planner-chat-target-label">
-						<span class="planner-chat-procedural-text">Target</span>
-						<select class="planner-chat-target-select" bind:value={targetObjectId} disabled={busy}>
-							<option value="">Scene</option>
-							{#each targetObjectOptions as objectId}
-								<option value={objectId}>{objectId}</option>
-							{/each}
-						</select>
-					</label>
+					<div class="planner-chat-target-row">
+						<label class="planner-chat-procedural-label planner-chat-target-label">
+							<span class="planner-chat-procedural-text">Target</span>
+							<select
+								class="planner-chat-target-select"
+								bind:value={targetObjectId}
+								disabled={busy}
+							>
+								<option value="">Scene</option>
+								{#each targetObjectOptions as objectId}
+									<option value={objectId}>{objectId}</option>
+								{/each}
+							</select>
+						</label>
+						<button
+							type="button"
+							class="planner-chat-compact-action"
+							disabled={!canRerunTexture}
+							onclick={rerunTexture}
+							title="Regenerate UV dream textures for the selected object"
+						>
+							Rerun texture
+						</button>
+					</div>
 				{/if}
 				<label class="planner-chat-procedural-label">
 					<input
@@ -683,8 +710,17 @@ f 20 24 21 17`
 		user-select: none;
 	}
 
-	.planner-chat-target-label {
+	.planner-chat-target-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 		flex: 1 1 100%;
+		min-width: 0;
+		max-width: 100%;
+	}
+
+	.planner-chat-target-label {
+		flex: 1 1 auto;
 		min-width: 0;
 		max-width: 100%;
 	}
@@ -703,6 +739,32 @@ f 20 24 21 17`
 		border-radius: 8px;
 		padding: 0 30px 0 10px;
 		background: rgba(255, 255, 255, 0.95);
+	}
+
+	.planner-chat-compact-action {
+		box-sizing: border-box;
+		height: 32px;
+		padding: 0 10px;
+		border-radius: 8px;
+		border: 1px solid rgba(0, 0, 0, 0.16);
+		background: #fff;
+		color: #0000eb;
+		font-family: inherit;
+		font-size: 12px;
+		font-weight: 700;
+		cursor: pointer;
+		white-space: nowrap;
+		flex: 0 0 auto;
+	}
+
+	.planner-chat-compact-action:hover:not(:disabled) {
+		border-color: rgba(0, 0, 235, 0.45);
+		background: rgba(0, 0, 235, 0.05);
+	}
+
+	.planner-chat-compact-action:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
 	}
 
 	.planner-chat-procedural-checkbox {

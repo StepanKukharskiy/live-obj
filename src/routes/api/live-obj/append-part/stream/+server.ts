@@ -113,8 +113,9 @@ function validationRepairPrompt(
 		`Validation errors: ${validationErrors.join('; ')}`,
 		'Return the same requested part again as valid OBJ/Live OBJ only.',
 		'Use a unique object name, include vertices, and ensure all visible raw mesh objects include faces.',
+		'Use positive local face indices only. Do not use negative/relative OBJ indices like f -8 -7 -6 -5.',
 		'Every raw mesh object/group with vertices must include faces. Vertices without f lines are invisible and are not acceptable.',
-		'Controls are optional. Add at most 1-2 #@params and #@controls entries only for safe executable post modifiers that preserve the authored mesh intent.',
+		'Every visible raw mesh object needs #@params and #@controls backed by executable #@post metadata; include neutral scale and width/height/depth controls through #@post transform scale.',
 		'If using usemtl, each usemtl must be followed by the face block it colors before the next usemtl.',
 		'If you model a body shell, connect section rings with side faces and cap the ends.',
 		'For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness=, or metalness= on the material op.',
@@ -133,6 +134,7 @@ function appendRepairPrompt(userMessage: string, rawPart: string, appendError: s
 		'Return the same requested part again as valid OBJ/Live OBJ only.',
 		'The response must contain at least one OBJ object line like `o main_body` before any mesh vertices.',
 		'Use local face indices starting at 1 for this returned part.',
+		'Use positive local face indices only. Do not use negative/relative OBJ indices like f -8 -7 -6 -5.',
 		'Every visible raw mesh object/group with vertices must include faces.',
 		'Previous invalid output:',
 		rawPart
@@ -323,7 +325,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 					let validation = applyRawPostPartValidation(
 						validateLiveObj(appended.liveObj, currentLiveObj),
-						rawPart,
+						appended.liveObj,
 						useProcedural
 					);
 					if (!validation.valid) {
@@ -384,7 +386,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						}
 						validation = applyRawPostPartValidation(
 							validateLiveObj(appended.liveObj, currentLiveObj),
-							rawPart,
+							appended.liveObj,
 							useProcedural
 						);
 					}

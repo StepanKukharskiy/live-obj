@@ -34,7 +34,7 @@ Output only valid OBJ content with required scene metadata:
 - Per-object transform: #@transform: position=[x,y,z],rotation=[0,0,0],scale=[1,1,1]
 - Raw post stack (optional): #@post: followed by supported #@ - op lines
 - Material assignment (optional): #@post: then #@ - material name=material_name
-- Raw controls (optional): include at most 1-2 #@params: and #@controls: entries only for safe post operations that preserve the authored mesh intent
+- Raw controls: include #@params: and #@controls: for every visible raw mesh object; at minimum expose neutral scale and width/height/depth controls wired to executable #@post transform scale
 - Always use the block form for post ops:
   #@post:
   #@ - material name=material_name
@@ -100,7 +100,7 @@ Rules:
 - Every object must include #@source: llm_mesh before its v/f block
 - Every object should include #@semantic and #@editable
 - Use #@transform for object-level placement intent even when vertices are already in place
-- Raw mesh controls are optional by default. Add at most 1-2 controls when they are safe and useful; every emitted control key should be referenced by executable #@post syntax.
+- Raw mesh controls are required for visible raw meshes. Add practical scale/dimension controls by default; every emitted control key should be referenced by executable #@post syntax.
 - For scale controls on raw meshes, prefer neutral multiplier defaults such as scale=1. Do not use final authored dimensions directly as transform scale values.
 - Use reasonable default materials (e.g., color=#888888 roughness=0.5 metalness=0.0)
 - Prefer #@post symmetrize over manually modeling both sides when a design is clearly symmetric. Emit the cleaner half or a rough full mesh, then add symmetrize.

@@ -174,6 +174,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						`Append error: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
 						'Return the same requested part again, but fix OBJ face indices.',
 						'Every f line must use local indices that reference vertices in this returned part only.',
+						'Use positive local face indices only. Do not use negative/relative OBJ indices like f -8 -7 -6 -5.',
 						'If a face references vertex 60, this returned part must define at least 60 local vertices; otherwise renumber faces to the local vertex range.',
 						'Previous invalid output:',
 						rawPart
@@ -185,7 +186,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		let validation = applyRawPostPartValidation(
 			validateLiveObj(appended.liveObj, currentLiveObj),
-			rawPart,
+			appended.liveObj,
 			useProcedural
 		);
 		if (!validation.valid) {
@@ -196,8 +197,9 @@ export const POST: RequestHandler = async ({ request }) => {
 						`Validation errors: ${validation.errors.join('; ')}`,
 						'Return the same requested part again as valid OBJ/Live OBJ only.',
 						'Use a unique object name, include vertices, and ensure all faces reference existing local vertices.',
+						'Use positive local face indices only. Do not use negative/relative OBJ indices like f -8 -7 -6 -5.',
 						'Every raw mesh object/group with vertices must include faces. Do not emit vertices-only logs, rings, supports, lattices, or usemtl-only groups.',
-						'Controls are optional. Add at most 1-2 #@params and #@controls entries only for safe executable post modifiers that preserve the authored mesh intent.',
+						'Every visible raw mesh object needs #@params and #@controls backed by executable #@post metadata; include neutral scale and width/height/depth controls through #@post transform scale.',
 						'If using usemtl, each usemtl must be followed by the face block it colors before the next usemtl.',
 						'If you model logs or beams as rings/sections, connect each adjacent section with side faces and cap the ends.',
 						'For #@post material, use only name=material_id. Do not include object=, target=, id=, color=, roughness=, or metalness= on the material op.',
@@ -216,6 +218,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							`Append error: ${appendError instanceof Error ? appendError.message : String(appendError)}`,
 							'Return the same requested part again, but fix OBJ face indices.',
 							'Every f line must use local indices that reference vertices in this returned part only.',
+							'Use positive local face indices only. Do not use negative/relative OBJ indices like f -8 -7 -6 -5.',
 							'If a face references vertex 60, this returned part must define at least 60 local vertices; otherwise renumber faces to the local vertex range.',
 							'For #@post material, use only name=material_id.',
 							'Previous invalid output:',
@@ -227,7 +230,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 			validation = applyRawPostPartValidation(
 				validateLiveObj(appended.liveObj, currentLiveObj),
-				rawPart,
+				appended.liveObj,
 				useProcedural
 			);
 		}

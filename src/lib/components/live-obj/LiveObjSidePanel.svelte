@@ -50,6 +50,7 @@
 		projection?: string;
 		position?: number[];
 		target?: number[];
+		up?: number[];
 		fov?: number | null;
 		zoom?: number | null;
 	} | null;
@@ -69,14 +70,47 @@
 	type GeneratedClip = {
 		id: string;
 		status: string;
+		label?: string;
 		videoUrl?: string;
 		jobId?: string;
 		error?: string;
 	};
 	type VideoShot = {
 		start?: ShotFrame;
+		middle?: ShotFrame;
 		end?: ShotFrame;
+		transitionPrompts?: Partial<Record<'startToMiddle' | 'middleToEnd', string>>;
 		clips: GeneratedClip[];
+	};
+	type ProcessImageAsset = {
+		label: string;
+		meta?: string;
+		imageDataUrl: string;
+	};
+	type ModelUsage = {
+		role: string;
+		provider: string;
+		model: string;
+		usedAt: number;
+	};
+	type AgentMetrics = {
+		processCaptures?: number;
+		galleryFrames?: number;
+		animationClips?: number;
+		buildEvents?: number;
+		elapsedMs?: number;
+		totalTokens?: number;
+		reasoningTokens?: number;
+		promptTokens?: number;
+		completionTokens?: number;
+	};
+	type CaptureSceneScreenshotOptions = {
+		frameObjectIds?: string[];
+		xrayFocusObjectIds?: string[];
+		xraySupportObjectIds?: string[];
+		viewDirection?: [number, number, number];
+		autoFrame?: boolean;
+		framePadding?: number;
 	};
 
 	let {
@@ -135,6 +169,12 @@
 		onStopGeneration,
 		onCaptureSceneScreenshot,
 		onCaptureSceneCameraSnapshot,
+		onCaptureReelTurntableFrames,
+		renderFrameAssets = $bindable<FrameAsset[]>([]),
+		renderVideoShot = $bindable<VideoShot>({ clips: [] }),
+		renderTurntableFrameAssets = $bindable<FrameAsset[]>([]),
+		renderModelUsage = $bindable<ModelUsage[]>([]),
+		projectProcessImages = [],
 		onLaunchObjExample,
 		onOpenLiveObj,
 		kernelDefault = $bindable<'auto' | 'cadquery'>('cadquery')
@@ -192,8 +232,14 @@
 		};
 		onSend?: (payload: SendPayload) => void;
 		onStopGeneration?: () => void;
-		onCaptureSceneScreenshot?: () => string;
+		onCaptureSceneScreenshot?: (options?: CaptureSceneScreenshotOptions | string[]) => string;
 		onCaptureSceneCameraSnapshot?: () => CameraSnapshot;
+		onCaptureReelTurntableFrames?: () => Promise<FrameAsset[]>;
+		renderFrameAssets?: FrameAsset[];
+		renderVideoShot?: VideoShot;
+		renderTurntableFrameAssets?: FrameAsset[];
+		renderModelUsage?: ModelUsage[];
+		projectProcessImages?: ProcessImageAsset[];
 		onLaunchObjExample?: (liveObj: string) => void;
 		onOpenLiveObj?: (sourceText: string) => void | Promise<void>;
 		kernelDefault?: 'auto' | 'cadquery';
@@ -204,15 +250,117 @@
 	let chatFeedbackLoop = $state(false);
 	let chatAttachedDataUrl = $state<string | undefined>(undefined);
 	let renderPrompt = $state('');
-	let renderVideoPrompt = $state('');
 	let renderScreenshotDataUrl = $state('');
 	let renderGeneratedImageDataUrl = $state('');
-	let renderFrameAssets = $state<FrameAsset[]>([]);
-	let renderVideoShot = $state<VideoShot>({ clips: [] });
 	let renderVideoBusy = $state(false);
 	let renderGeneratedDirectionJson = $state('');
 	let renderBusy = $state(false);
 	let renderErrorLine = $state<string | null>(null);
+
+	function isTextureOrAtlasChatImage(message: ChatMsg): boolean {
+		const text = `${message.meta ?? ''} ${message.content ?? ''}`.toLowerCase();
+		return (
+			text.includes('texture artifact') ||
+			text.includes('uv debug artifact') ||
+			text.includes('source uv unwrap') ||
+			text.includes('generated uv height') ||
+			text.includes('generated uv diffuse') ||
+			text.includes('dream source sheet') ||
+			text.includes('dream map sheet')
+		);
+	}
+
+	function isBuildStepChatImage(message: ChatMsg): boolean {
+		const text = `${message.meta ?? ''} ${message.content ?? ''}`.toLowerCase();
+		return text.includes('x-ray scene screenshot') || /^built\s+\d+\/\d+:/i.test(message.content);
+	}
+
+	function isBuildStepProcessImage(asset: ProcessImageAsset): boolean {
+		const text = `${asset.meta ?? ''} ${asset.label ?? ''}`.toLowerCase();
+		return text.includes('build step screenshot') || /^build\s+\d+\/\d+:/i.test(asset.label);
+	}
+
+	let chatProcessImageAssets = $derived.by(() => {
+		const assets: ProcessImageAsset[] = [];
+		for (const message of msgs) {
+			if (!message.imageDataUrl) continue;
+			if (!isTextureOrAtlasChatImage(message)) continue;
+			assets.push({
+				label: message.content || message.meta || 'Process image',
+				...(message.meta ? { meta: message.meta } : {}),
+				imageDataUrl: message.imageDataUrl
+			});
+		}
+		return assets;
+	});
+	let chatBuildImageAssets = $derived.by(() => {
+		const assets: ProcessImageAsset[] = [];
+		for (const message of msgs) {
+			if (!message.imageDataUrl) continue;
+			if (!isBuildStepChatImage(message)) continue;
+			assets.push({
+				label: message.content || 'Build step',
+				meta: 'build step screenshot',
+				imageDataUrl: message.imageDataUrl
+			});
+		}
+		return assets;
+	});
+	let packageProcessImages = $derived.by(() => {
+		const seen = new Set<string>();
+		const merged: ProcessImageAsset[] = [];
+		const hasProjectBuildImages = projectProcessImages.some(isBuildStepProcessImage);
+		const buildFallbackImages = hasProjectBuildImages ? [] : chatBuildImageAssets;
+		for (const asset of [
+			...projectProcessImages,
+			...buildFallbackImages,
+			...chatProcessImageAssets
+		]) {
+			const key = `${asset.meta ?? ''}|${asset.label}|${asset.imageDataUrl}`;
+			if (!asset.imageDataUrl || seen.has(key)) continue;
+			seen.add(key);
+			merged.push(asset);
+		}
+		return merged;
+	});
+
+	function durationMetaMs(meta: string | undefined): number {
+		const label = meta?.match(/\btime\s+(.+)$/i)?.[1]?.trim();
+		if (!label) return 0;
+		const minutes = Number(label.match(/(\d+(?:\.\d+)?)\s*m/i)?.[1] ?? 0);
+		const seconds = Number(label.match(/(\d+(?:\.\d+)?)\s*s/i)?.[1] ?? 0);
+		return Math.round((minutes * 60 + seconds) * 1000);
+	}
+
+	let agentMetrics = $derived.by(() => {
+		const lastUserIndex = msgs.map((message) => message.role).lastIndexOf('user');
+		const currentRunMessages = lastUserIndex >= 0 ? msgs.slice(lastUserIndex + 1) : msgs;
+		const tokenMessages = currentRunMessages
+			.map((message) => message.tokenUsage)
+			.filter((usage): usage is TokenUsageSummary => !!usage);
+		const sumTokenField = (field: keyof TokenUsageSummary) =>
+			tokenMessages.reduce((sum, usage) => sum + (usage[field] ?? 0), 0);
+		const elapsedMs = currentRunMessages.reduce(
+			(sum, message) => sum + durationMetaMs(message.meta),
+			0
+		);
+		const metrics: AgentMetrics = {
+			processCaptures: packageProcessImages.length,
+			galleryFrames: renderFrameAssets.length,
+			animationClips: renderVideoShot.clips.filter((clip) => !!clip.videoUrl).length,
+			buildEvents: currentRunMessages.filter((message) =>
+				/\b(Built|Added|Plan ready|Model pass finished|UV dream)\b/i.test(message.content)
+			).length,
+			elapsedMs,
+			totalTokens: sumTokenField('totalTokens'),
+			reasoningTokens: sumTokenField('reasoningTokens'),
+			promptTokens: sumTokenField('promptTokens'),
+			completionTokens: sumTokenField('completionTokens')
+		};
+		return Object.fromEntries(
+			Object.entries(metrics).filter(([, value]) => typeof value === 'number' && value > 0)
+		) as AgentMetrics;
+	});
 </script>
 
 {#if showPanel}
@@ -328,6 +476,10 @@
 					bind:toonSteps
 					bind:toonOutline
 					{liveObjText}
+					frameAssets={renderFrameAssets}
+					videoShot={renderVideoShot}
+					generatedDirectionJson={renderGeneratedDirectionJson}
+					processImages={packageProcessImages}
 					{onOpenLiveObj}
 				/>
 			{:else if activeTab === 'render'}
@@ -336,13 +488,17 @@
 					{providerSettings}
 					{onCaptureSceneScreenshot}
 					{onCaptureSceneCameraSnapshot}
+					{onCaptureReelTurntableFrames}
 					{canvasAspectRatio}
 					bind:prompt={renderPrompt}
-					bind:videoPrompt={renderVideoPrompt}
 					bind:screenshotDataUrl={renderScreenshotDataUrl}
 					bind:generatedImageDataUrl={renderGeneratedImageDataUrl}
 					bind:frameAssets={renderFrameAssets}
 					bind:videoShot={renderVideoShot}
+					bind:turntableFrameAssets={renderTurntableFrameAssets}
+					bind:modelUsage={renderModelUsage}
+					processImages={packageProcessImages}
+					{agentMetrics}
 					bind:videoBusy={renderVideoBusy}
 					bind:generatedDirectionJson={renderGeneratedDirectionJson}
 					bind:busy={renderBusy}

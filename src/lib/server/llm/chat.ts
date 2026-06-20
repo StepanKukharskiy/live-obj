@@ -306,6 +306,13 @@ function buildAnthropicRequestPayload(input: {
 	};
 }
 
+function openRouterModelSupportsTemperature(model: string): boolean {
+	const m = model.trim().toLowerCase();
+	if (m.startsWith('anthropic/claude-')) return false;
+	if (m.startsWith('~anthropic/claude-')) return false;
+	return true;
+}
+
 function buildCompletionRequestPayload(input: {
 	apiUrl: string;
 	model: string;
@@ -336,7 +343,9 @@ function buildCompletionRequestPayload(input: {
 		model,
 		messages,
 		max_tokens: maxTokens,
-		temperature
+		...(isOpenRouterApiUrl(apiUrl) && !openRouterModelSupportsTemperature(model)
+			? {}
+			: { temperature })
 	};
 }
 

@@ -21,6 +21,7 @@ VERTEX_RE = re.compile(r"^\s*v\s+(.+)$")
 FACE_RE = re.compile(r"^\s*f\s+(.+)$")
 UV_ISLAND_RE = re.compile(r"^\s*#@uv_island:\s*(.+)$")
 UV_HINT_RE = re.compile(r"^\s*#@uv_hint:\s*(.+)$")
+UP_RE = re.compile(r"^\s*#@up:\s*([xyz])\s*$", re.IGNORECASE)
 
 ATLAS_W = 1024
 ATLAS_H = 1024
@@ -61,6 +62,7 @@ class UvIsland:
     max_v: float
     gain: float
     damping: str
+    up_axis: str = "y"
     cylindrical: bool = False
 
 
@@ -105,6 +107,16 @@ def parse_uv_hint_strategy(text: str, target: str) -> str | None:
         if strategy:
             return strategy.lower()
     return None
+
+
+def parse_up_axis(text: str) -> str:
+    for line in text.splitlines():
+        match = UP_RE.match(line)
+        if match:
+            return match.group(1).lower()
+        if OBJECT_RE.match(line):
+            break
+    return "y"
 
 
 def parse_obj_with_uv_islands(text: str, target: str) -> Tuple[List[str], List[Vec3], List[Face], List[str | None]]:
@@ -234,28 +246,52 @@ def face_normal(arr: np.ndarray, face: Face) -> np.ndarray:
     return normal / length if length > 1e-12 else np.array([0.0, 1.0, 0.0])
 
 
-def radial_role_for_normal(normal: np.ndarray) -> str:
-    if normal[1] >= TOP_NORMAL_THRESHOLD:
+def axis_index(up_axis: str) -> int:
+    return {"x": 0, "y": 1, "z": 2}.get(up_axis, 1)
+
+
+def horizontal_axis_indices(up_axis: str) -> Tuple[int, int]:
+    return {"x": (2, 1), "y": (0, 2), "z": (0, 1)}.get(up_axis, (0, 2))
+
+
+def axis_unit(index: int, sign: float = 1.0) -> np.ndarray:
+    value = np.zeros(3, dtype=float)
+    value[index] = sign
+    return value
+
+
+def radial_role_for_normal(normal: np.ndarray, up_axis: str = "y") -> str:
+    up = axis_index(up_axis)
+    if normal[up] >= TOP_NORMAL_THRESHOLD:
         return "top"
-    if normal[1] <= -TOP_NORMAL_THRESHOLD:
+    if normal[up] <= -TOP_NORMAL_THRESHOLD:
         return "bottom"
     return "side"
 
 
-def radial_role_for_face(arr: np.ndarray, face: Face, normal: np.ndarray, bb_min: np.ndarray, bb_max: np.ndarray) -> str:
+def radial_role_for_face(
+    arr: np.ndarray,
+    face: Face,
+    normal: np.ndarray,
+    bb_min: np.ndarray,
+    bb_max: np.ndarray,
+    up_axis: str = "y",
+) -> str:
+    up = axis_index(up_axis)
     points = np.array([arr[index - 1] for index in face], dtype=float)
-    height = max(float(bb_max[1] - bb_min[1]), 1e-9)
+    height = max(float(bb_max[up] - bb_min[up]), 1e-9)
     cap_band = max(height * RADIAL_CAP_HEIGHT_FRACTION, height * 0.015)
-    centroid_y = float(points[:, 1].mean())
-    min_y = float(points[:, 1].min())
-    max_y = float(points[:, 1].max())
-    horizontal = abs(float(normal[1])) >= RADIAL_CAP_NORMAL_THRESHOLD
-    if horizontal and centroid_y >= float(bb_max[1]) - cap_band and min_y >= float(bb_max[1]) - cap_band * 1.8:
+    centroid_up = float(points[:, up].mean())
+    min_up = float(points[:, up].min())
+    max_up = float(points[:, up].max())
+    horizontal = abs(float(normal[up])) >= RADIAL_CAP_NORMAL_THRESHOLD
+    if horizontal and centroid_up >= float(bb_max[up]) - cap_band and min_up >= float(bb_max[up]) - cap_band * 1.8:
         return "top"
-    if horizontal and centroid_y <= float(bb_min[1]) + cap_band and max_y <= float(bb_min[1]) + cap_band * 1.8:
+    if horizontal and centroid_up <= float(bb_min[up]) + cap_band and max_up <= float(bb_min[up]) + cap_band * 1.8:
         return "bottom"
     center = (bb_min + bb_max) * 0.5
-    radial = np.array([float(points[:, 0].mean() - center[0]), 0.0, float(points[:, 2].mean() - center[2])])
+    radial = np.array([float(points[:, axis].mean() - center[axis]) for axis in range(3)], dtype=float)
+    radial[up] = 0.0
     radial_length = float(np.linalg.norm(radial))
     if radial_length > 1e-9:
         radial = radial / radial_length
@@ -264,14 +300,16 @@ def radial_role_for_face(arr: np.ndarray, face: Face, normal: np.ndarray, bb_min
     return "side"
 
 
-def planar_role_for_normal(normal: np.ndarray) -> str:
-    if normal[1] >= TOP_NORMAL_THRESHOLD:
+def planar_role_for_normal(normal: np.ndarray, up_axis: str = "y") -> str:
+    up = axis_index(up_axis)
+    horizontal_a, horizontal_b = horizontal_axis_indices(up_axis)
+    if normal[up] >= TOP_NORMAL_THRESHOLD:
         return "top"
-    if normal[1] <= -TOP_NORMAL_THRESHOLD:
+    if normal[up] <= -TOP_NORMAL_THRESHOLD:
         return "bottom"
-    if abs(float(normal[0])) >= abs(float(normal[2])):
-        return "right" if normal[0] >= 0 else "left"
-    return "front" if normal[2] >= 0 else "back"
+    if abs(float(normal[horizontal_a])) >= abs(float(normal[horizontal_b])):
+        return "right" if normal[horizontal_a] >= 0 else "left"
+    return "front" if normal[horizontal_b] >= 0 else "back"
 
 
 def role_gain(role: str) -> float:
@@ -290,24 +328,27 @@ def role_damping(role: str) -> str:
     return "low"
 
 
-def side_u(point: np.ndarray, center: np.ndarray) -> float:
+def side_u(point: np.ndarray, center: np.ndarray, up_axis: str = "y") -> float:
     # One seam at the back of the object; side faces unwrap into a continuous cylindrical strip.
-    angle = math.atan2(float(point[0] - center[0]), float(point[2] - center[2]))
+    horizontal_a, horizontal_b = horizontal_axis_indices(up_axis)
+    angle = math.atan2(float(point[horizontal_a] - center[horizontal_a]), float(point[horizontal_b] - center[horizontal_b]))
     return (angle + math.pi) / (2.0 * math.pi)
 
 
-def role_axes(role: str) -> Tuple[np.ndarray, np.ndarray]:
+def role_axes(role: str, up_axis: str = "y") -> Tuple[np.ndarray, np.ndarray]:
+    up = axis_index(up_axis)
+    horizontal_a, horizontal_b = horizontal_axis_indices(up_axis)
     if role == "top":
-        return np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])
+        return axis_unit(horizontal_a), axis_unit(horizontal_b)
     if role == "bottom":
-        return np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, -1.0])
+        return axis_unit(horizontal_a), axis_unit(horizontal_b, -1.0)
     if role == "left":
-        return np.array([0.0, 0.0, -1.0]), np.array([0.0, 1.0, 0.0])
+        return axis_unit(horizontal_b, -1.0), axis_unit(up)
     if role == "right":
-        return np.array([0.0, 0.0, 1.0]), np.array([0.0, 1.0, 0.0])
+        return axis_unit(horizontal_b), axis_unit(up)
     if role == "back":
-        return np.array([-1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])
-    return np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])
+        return axis_unit(horizontal_a, -1.0), axis_unit(up)
+    return axis_unit(horizontal_a), axis_unit(up)
 
 
 def project_island(point: np.ndarray, island: UvIsland, bb_min: np.ndarray, bb_max: np.ndarray) -> Tuple[float, float]:
@@ -315,7 +356,8 @@ def project_island(point: np.ndarray, island: UvIsland, bb_min: np.ndarray, bb_m
     p = (point - bb_min) / size
     center = (bb_min + bb_max) * 0.5
     if island.cylindrical:
-        u, v = side_u(point, center), p[1]
+        up = axis_index(island.up_axis)
+        u, v = side_u(point, center, island.up_axis), p[up]
     else:
         raw_u = float(np.dot(point, island.axis_u))
         raw_v = float(np.dot(point, island.axis_v))
@@ -421,26 +463,47 @@ def connected_face_components(faces: List[Face]) -> List[List[int]]:
     return components
 
 
-def is_radial_like(vertices: List[Vec3], faces: List[Face]) -> bool:
+def is_radial_like(vertices: List[Vec3], faces: List[Face], up_axis: str = "y") -> bool:
     if len(connected_face_components(faces)) > 1:
         return False
+    up = axis_index(up_axis)
+    horizontal_a, horizontal_b = horizontal_axis_indices(up_axis)
     arr = np.array(vertices, dtype=float)
     bb_min = arr.min(axis=0)
     bb_max = arr.max(axis=0)
     size = np.maximum(bb_max - bb_min, 1e-9)
-    footprint = max(float(size[0]), float(size[2]))
-    if float(size[1]) < footprint * 0.30:
+    footprint = max(float(size[horizontal_a]), float(size[horizontal_b]))
+    if float(size[up]) < footprint * 0.30:
         return False
-    if min(float(size[0]), float(size[2])) < footprint * 0.25:
+    if min(float(size[horizontal_a]), float(size[horizontal_b])) < footprint * 0.25:
         return False
     normals = [face_normal(arr, face) for face in faces]
-    side_count = sum(1 for normal in normals if radial_role_for_normal(normal) == "side")
+    side_normals = [normal for normal in normals if radial_role_for_normal(normal, up_axis) == "side"]
+    side_count = len(side_normals)
     horizontal_count = len(faces) - side_count
+    angular_bins = set()
+    for normal in side_normals:
+        projected = normal.copy()
+        projected[up] = 0.0
+        length = float(np.linalg.norm(projected))
+        if length <= 1e-9:
+            continue
+        projected = projected / length
+        angle = math.atan2(float(projected[horizontal_a]), float(projected[horizontal_b]))
+        angular_bins.add(int(round(angle / (math.pi / 12.0))))
+    if len(angular_bins) < 6:
+        return False
     return side_count >= max(6, len(faces) * 0.35) and horizontal_count >= 1
 
 
-def island_projected_bounds(arr: np.ndarray, faces: List[Face], face_indices: List[int], role: str) -> Tuple[np.ndarray, np.ndarray, float, float, float, float]:
-    axis_u, axis_v = role_axes(role)
+def island_projected_bounds(
+    arr: np.ndarray,
+    faces: List[Face],
+    face_indices: List[int],
+    role: str,
+    up_axis: str = "y",
+) -> Tuple[np.ndarray, np.ndarray, float, float, float, float]:
+    axis_u, axis_v = role_axes(role, up_axis)
     points = [arr[index - 1] for face_index in face_indices for index in faces[face_index]]
     if not points:
         points = [arr[0]]
@@ -509,6 +572,7 @@ def build_uv_layout(
     faces: List[Face],
     authored_face_roles: List[str | None] | None = None,
     layout_strategy: str | None = None,
+    up_axis: str = "y",
 ) -> UvLayout:
     arr = np.array(vertices, dtype=float)
     bb_min = arr.min(axis=0)
@@ -523,23 +587,17 @@ def build_uv_layout(
     force_radial = (layout_strategy or "").lower() == "radial"
     if force_radial:
         radial = True
-        face_roles = [radial_role_for_face(arr, face, normal, bb_min, bb_max) for face, normal in zip(faces, normals)]
+        face_roles = [radial_role_for_face(arr, face, normal, bb_min, bb_max, up_axis) for face, normal in zip(faces, normals)]
     elif authored_roles_valid:
         face_roles = [
-            role if role else planar_role_for_normal(normal)
+            role if role else planar_role_for_normal(normal, up_axis)
             for role, normal in zip(authored_face_roles or [], normals)
         ]
-        role_set = {role for role in face_roles if role}
-        radial = "side" in role_set and role_set.issubset({"top", "bottom", "side", "inner"})
-        if radial:
-            face_roles = [
-                radial_role_for_face(arr, face, normal, bb_min, bb_max) if role == "side" else role
-                for role, face, normal in zip(face_roles, faces, normals)
-            ]
+        radial = False
     else:
-        radial = is_radial_like(vertices, faces)
+        radial = False
         face_roles = [
-            radial_role_for_face(arr, face, normal, bb_min, bb_max) if radial else planar_role_for_normal(normal)
+            radial_role_for_face(arr, face, normal, bb_min, bb_max, up_axis) if radial else planar_role_for_normal(normal, up_axis)
             for face, normal in zip(faces, normals)
         ]
 
@@ -578,7 +636,7 @@ def build_uv_layout(
     provisional_sizes: List[Tuple[int, int]] = []
     bounds: List[Tuple[np.ndarray, np.ndarray, float, float, float, float]] = []
     for role, ids in groups:
-        axis_u, axis_v, min_u, max_u, min_v, max_v = island_projected_bounds(arr, faces, ids, role)
+        axis_u, axis_v, min_u, max_u, min_v, max_v = island_projected_bounds(arr, faces, ids, role, up_axis)
         bounds.append((axis_u, axis_v, min_u, max_u, min_v, max_v))
         if radial:
             radial_rects = RADIAL_HOLLOW_ISLAND_RECTS if any(group_role == "inner" for group_role, _ in groups) else RADIAL_ISLAND_RECTS
@@ -590,14 +648,13 @@ def build_uv_layout(
         density = math.sqrt((ATLAS_W * ATLAS_H * 0.62) / max(float(np.prod(size)), 1e-6))
         provisional_sizes.append((int(span_u * density) + 34, int(span_v * density) + 34))
 
-    rects = (
-        [
+    if radial:
+        rects = [
             (RADIAL_HOLLOW_ISLAND_RECTS if any(group_role == "inner" for group_role, _ in groups) else RADIAL_ISLAND_RECTS)[role]
             for role, _ in groups
         ]
-        if radial
-        else fit_rects_to_square_atlas(pack_rects(provisional_sizes))
-    )
+    else:
+        rects = fit_rects_to_square_atlas(pack_rects(provisional_sizes))
     islands: List[UvIsland] = []
     face_island_indices = [-1] * len(faces)
     for island_index, ((role, ids), rect, bound) in enumerate(zip(groups, rects, bounds)):
@@ -615,6 +672,7 @@ def build_uv_layout(
             max_v=max_v,
             gain=role_gain(role),
             damping=role_damping(role),
+            up_axis=up_axis,
             cylindrical=radial and role in {"side", "inner"},
         )
         islands.append(island)
@@ -704,7 +762,8 @@ def raster_triangle(img: np.ndarray, mask: np.ndarray, pts: List[Tuple[float, fl
         w0 = ((b[1] - c[1]) * (xs - c[0]) + (c[0] - b[0]) * (ys - c[1])) / denom
         w1 = ((c[1] - a[1]) * (xs - c[0]) + (a[0] - c[0]) * (ys - c[1])) / denom
         w2 = 1.0 - w0 - w1
-        inside = (w0 >= 0.0) & (w1 >= 0.0) & (w2 >= 0.0)
+        edge_slop = 0.002
+        inside = (w0 >= -edge_slop) & (w1 >= -edge_slop) & (w2 >= -edge_slop)
         if np.any(inside):
             xi = xs.astype(int)[inside]
             img[y, xi] = color
@@ -731,7 +790,8 @@ def raster_triangle_scalar(
         w0 = ((b[1] - c[1]) * (xs - c[0]) + (c[0] - b[0]) * (ys - c[1])) / denom
         w1 = ((c[1] - a[1]) * (xs - c[0]) + (a[0] - c[0]) * (ys - c[1])) / denom
         w2 = 1.0 - w0 - w1
-        inside = (w0 >= 0.0) & (w1 >= 0.0) & (w2 >= 0.0)
+        edge_slop = 0.002
+        inside = (w0 >= -edge_slop) & (w1 >= -edge_slop) & (w2 >= -edge_slop)
         if np.any(inside):
             xi = xs.astype(int)[inside]
             img[y, xi] = va * w0[inside] + vb * w1[inside] + vc * w2[inside]
@@ -762,6 +822,24 @@ def atlas_image(vertices: List[Vec3], faces: List[Face], layout: UvLayout | None
             for i in range(1, len(pts) - 1):
                 raster_triangle(img, mask, [pts[0], pts[i], pts[i + 1]], SPELL_SOFT_SURFACE * shade)
     return img, mask
+
+
+def uv_generation_guide_image(vertices: List[Vec3], faces: List[Face], layout: UvLayout | None = None) -> np.ndarray:
+    layout = layout or build_uv_layout(vertices, faces)
+    arr = np.array(vertices, dtype=float)
+    bb_min = layout.bb_min
+    bb_max = layout.bb_max
+    img = np.zeros((ATLAS_H, ATLAS_W, 3), dtype=np.float32)
+    mask = np.zeros((ATLAS_H, ATLAS_W), dtype=bool)
+    for island_index, island in enumerate(layout.islands):
+        value = 172.0 + float((island_index % 4) * 14)
+        for face_index in island.face_indices:
+            face = faces[face_index]
+            for pts in project_raster_face_point_sets(arr, face, island, bb_min, bb_max):
+                for i in range(1, len(pts) - 1):
+                    raster_triangle(img, mask, [pts[0], pts[i], pts[i + 1]], np.array([value, value, value], dtype=np.float32))
+    img[~mask] = 0.0
+    return np.clip(img, 0, 255)
 
 
 def fit_gray_to_atlas(image: np.ndarray) -> np.ndarray:
@@ -1030,7 +1108,7 @@ def diffuse_texture(height_map: np.ndarray, source_mask: np.ndarray, layout: UvL
     height = preprocess_height_map(height_map, source_mask, layout)
     base = np.array([236, 231, 221], dtype=np.float32)
     glaze = np.array([214, 222, 255], dtype=np.float32)
-    accent = SPELL_BLUE
+    accent = np.array([112, 116, 124], dtype=np.float32)
     outside = base * 0.82 + glaze * 0.18
     detail = np.clip((height - 0.5) * 2.0, -1.0, 1.0)
     glaze_mix = np.clip(0.28 + detail * 0.22, 0.08, 0.62)
@@ -1081,7 +1159,7 @@ def bake_vertex_scalar_to_atlas(
 def diffuse_texture_from_displacement(displacement_map: np.ndarray, source_mask: np.ndarray, layout: UvLayout) -> np.ndarray:
     base = np.array([236, 231, 221], dtype=np.float32)
     glaze = np.array([214, 222, 255], dtype=np.float32)
-    accent = SPELL_BLUE
+    accent = np.array([112, 116, 124], dtype=np.float32)
     outside = base * 0.82 + glaze * 0.18
     detail = np.clip((displacement_map - 0.5) * 2.0, -1.0, 1.0)
     glaze_mix = np.clip(0.24 + detail * 0.18, 0.08, 0.58)
@@ -1104,11 +1182,8 @@ def reconciled_generated_diffuse(
 ) -> np.ndarray:
     generated = fit_rgb_to_atlas(generated_rgb)
     out = fallback_rgb.astype(np.float32).copy()
-    brightness = np.mean(generated, axis=2)
-    spread = np.max(generated, axis=2) - np.min(generated, axis=2)
-    valid_inside = source_mask & (brightness > 24.0) & ~((brightness > 232.0) & (spread < 28.0))
-    out[valid_inside] = generated[valid_inside] * 0.72 + fallback_rgb[valid_inside] * 0.28
-    out[~source_mask] = fallback_rgb[~source_mask]
+    out[source_mask] = generated[source_mask]
+    out[~source_mask] = 0.0
     out = make_periodic_side_rgb(out, layout)
     out = bleed_rgb(out, source_mask, iterations=32)
     return np.clip(out, 0, 255)
@@ -1198,8 +1273,9 @@ def map_remesh(
     remesh_levels: int | None = None,
     authored_face_roles: List[str | None] | None = None,
     layout_strategy: str | None = None,
+    up_axis: str = "y",
 ) -> Tuple[List[Vec3], List[Face], List[Vec3], List[Vec3], UvLayout, List[int], List[float], List[Vec3]]:
-    source_layout = build_uv_layout(vertices, faces, authored_face_roles, layout_strategy)
+    source_layout = build_uv_layout(vertices, faces, authored_face_roles, layout_strategy, up_axis)
     _, source_mask = atlas_image(vertices, faces, source_layout)
     height_map = preprocess_height_map(height_map, source_mask, source_layout)
     island_baselines, island_scales = island_height_stats(height_map, source_mask, source_layout)
@@ -1486,8 +1562,9 @@ def apply_height(
     amount: float,
     authored_face_roles: List[str | None] | None = None,
     layout_strategy: str | None = None,
+    up_axis: str = "y",
 ) -> Tuple[List[Vec3], List[Face], List[Vec3], List[Vec3], UvLayout, List[int], List[float], List[Vec3]]:
-    source_layout = build_uv_layout(vertices, faces, authored_face_roles, layout_strategy)
+    source_layout = build_uv_layout(vertices, faces, authored_face_roles, layout_strategy, up_axis)
     sub_vertices, sub_faces, parent_faces = subdivide(vertices, faces, levels)
     uv_vertices = list(sub_vertices)
     sub_vertices = fair_subdivided_surface(sub_vertices, sub_faces, iterations=8 if levels > 0 else 0)
@@ -1696,6 +1773,7 @@ def main() -> None:
     parser.add_argument("input")
     parser.add_argument("--target", required=True)
     parser.add_argument("--atlas-out")
+    parser.add_argument("--source-guide-out")
     parser.add_argument("--debug-source-uv-out")
     parser.add_argument("--debug-final-uv-out")
     parser.add_argument("--processed-height-out")
@@ -1715,13 +1793,18 @@ def main() -> None:
     text = Path(args.input).read_text()
     header, vertices, faces, authored_face_roles = parse_obj_with_uv_islands(text, args.target)
     layout_strategy = parse_uv_hint_strategy(text, args.target)
-    source_layout = build_uv_layout(vertices, faces, authored_face_roles, layout_strategy)
+    up_axis = parse_up_axis(text)
+    source_layout = build_uv_layout(vertices, faces, authored_face_roles, layout_strategy, up_axis)
     if args.atlas_out:
         atlas, _ = atlas_image(vertices, faces, source_layout)
         write_ppm(Path(args.atlas_out), atlas)
+    if args.source_guide_out:
+        polygon_vertices, polygons, polygon_roles = parse_obj_polygons_with_uv_islands(text, args.target)
+        polygon_layout = build_uv_layout(polygon_vertices, polygons, polygon_roles, layout_strategy, up_axis)
+        write_png(Path(args.source_guide_out), uv_generation_guide_image(polygon_vertices, polygons, polygon_layout))
     if args.debug_source_uv_out:
         polygon_vertices, polygons, polygon_roles = parse_obj_polygons_with_uv_islands(text, args.target)
-        polygon_layout = build_uv_layout(polygon_vertices, polygons, polygon_roles, layout_strategy)
+        polygon_layout = build_uv_layout(polygon_vertices, polygons, polygon_roles, layout_strategy, up_axis)
         atlas, _ = atlas_image(polygon_vertices, polygons, polygon_layout)
         write_png(
             Path(args.debug_source_uv_out),
@@ -1748,6 +1831,7 @@ def main() -> None:
                 args.remesh_levels,
                 authored_face_roles,
                 layout_strategy,
+                up_axis,
             )
         else:
             (
@@ -1760,7 +1844,7 @@ def main() -> None:
                 displacement_values,
                 uv_vertices,
             ) = apply_height(
-                vertices, faces, height_map, args.levels, args.amount, authored_face_roles, layout_strategy
+                vertices, faces, height_map, args.levels, args.amount, authored_face_roles, layout_strategy, up_axis
             )
         Path(args.out).write_text(
             write_obj(
