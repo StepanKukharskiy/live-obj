@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:24-bookworm-slim
 
 # SvelteKit adapter-node defaults to 512K, which is too small for video frame uploads.
 ENV BODY_SIZE_LIMIT=8M
