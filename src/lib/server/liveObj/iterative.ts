@@ -4,6 +4,7 @@ export type IterativePartSpec = {
 	id: string;
 	role?: string;
 	prompt?: string;
+	subparts?: IterativeSubpartSpec[];
 	dependencies?: string[];
 	method?: string;
 	postProcess?: IterativePartPostProcess;
@@ -12,6 +13,14 @@ export type IterativePartSpec = {
 	cameraFocus?: string[];
 	controls?: IterativeControlSpec[];
 	controlPostOps?: string[];
+};
+
+export type IterativeSubpartSpec = {
+	id: string;
+	role?: string;
+	prompt?: string;
+	dependencies?: string[];
+	validationHints?: string[];
 };
 
 export type IterativePartPostProcess = {

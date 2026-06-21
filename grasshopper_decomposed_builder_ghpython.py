@@ -92,6 +92,15 @@ Return only JSON with this shape:
       "dependencies": ["prior_part_id"],
       "cameraFocus": ["this_part_id", "supporting_part_id"],
       "prompt": "specific instructions for generating only this part",
+      "subparts": [
+        {
+          "id": "stable_child_object_or_feature_id",
+          "role": "major visible child/component inside this part",
+          "dependencies": ["sibling_subpart_id"],
+          "prompt": "specific nested instruction for this child/component",
+          "validationHints": ["bbox/contact/detail expectations"]
+        }
+      ],
       "controls": [
         { "key": "part_width", "label": "Part width", "kind": "slider", "default": 1, "min": 0.5, "max": 1.8, "step": 0.05 }
       ],
@@ -105,8 +114,13 @@ Return only JSON with this shape:
 }
 
 Planning rules:
-- Prefer 5-8 parts for rich scenes; fewer for simple objects.
-- First pass should be compact semantic massing: major ground/support, primary structure, main envelope/shell, major infill/openings, and one restrained interior/context part only when important.
+- Prefer 3-7 top-level parts for rich scenes; fewer for simple objects. Top-level parts are build steps/object groups, not every visible component.
+- Use nested "subparts" to describe the main components inside a top-level part. Keep each top-level part to at most 7 subparts, and keep each subpart major enough to be worth naming.
+- For collections, kits, and sets, make each requested asset or coherent asset family a top-level part, then use up to 7 subparts to describe that asset's body, attachments, interaction/collision-relevant features, and material zones.
+- For multi-object scenes, make each independently meaningful subject, environment group, or context group a top-level part when it has its own silhouette, placement, dependencies, or internal component structure.
+- Use a separate top-level part when a subject would otherwise consume most of another group's subpart budget or needs its own dependency/camera/material/validation intent.
+- The "prompt" for a top-level part must summarize how to generate the whole object/group and explicitly incorporate the nested subparts; do not rely on subparts as independent queued build steps.
+- First pass should be compact semantic massing: major ground/support, primary subject groups, main envelope/shell, major infill/openings, and one restrained interior/context part only when important.
 - Build from coarse support/massing to envelope, structure, major infill, then one optional accent/detail part.
 - Merge related elements into one part instead of producing many small parts.
 - Do not plan separate first-pass parts for seams, fasteners, bolts, handles, bollards, expansion joints, connection plates, tiny context objects, or micro facade details unless the user explicitly asks for them.
