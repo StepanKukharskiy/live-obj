@@ -12,9 +12,11 @@ RUN python3.11 -m pip install --no-cache-dir --break-system-packages cadquery tr
 WORKDIR /app
 # Copy package files
 COPY package*.json ./
-# Install dependencies and prepare
+# Install dependencies (skip Playwright browser download — not needed in production)
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci
-RUN npm run prepare
+# Generate SvelteKit types without running the full prepare script (which installs Playwright)
+RUN npx svelte-kit sync
 # Copy application code
 COPY . .
 # Build the application
