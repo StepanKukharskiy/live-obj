@@ -390,16 +390,21 @@ function spliceTexturePreservedObjectScene(
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	const body = (await request.json().catch(() => null)) as {
+	let body: {
 		liveObj?: string;
 		targetObjectId?: string;
 		heightBmpDataUrl?: string;
-		diffusePngDataUrl?: string;
 		diffuseBmpDataUrl?: string;
 		amount?: number;
 		shade?: 'smooth' | 'flat';
 		mode?: 'displace' | 'map-remesh';
 	} | null;
+	try {
+		body = (await request.json()) as typeof body;
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		throw error(413, `Invalid or oversized UV dream enhancement request body: ${message}`);
+	}
 	if (!body?.liveObj?.trim()) throw error(400, 'liveObj is required');
 	if (!body.targetObjectId?.trim()) throw error(400, 'targetObjectId is required');
 	if (!body.heightBmpDataUrl?.trim()) throw error(400, 'heightBmpDataUrl is required');

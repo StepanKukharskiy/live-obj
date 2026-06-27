@@ -2464,7 +2464,6 @@ f 4 5 1
 				liveObj: sourceLiveObj,
 				targetObjectId: args.targetObjectId,
 				heightBmpDataUrl,
-				diffusePngDataUrl,
 				diffuseBmpDataUrl,
 				mode,
 				amount,
