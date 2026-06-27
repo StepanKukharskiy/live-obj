@@ -2338,6 +2338,8 @@ f 4 5 1
 	}) {
 		const mode = args.mode ?? uvDreamModeFromPrompt(args.text);
 		const amount = Number.isFinite(args.amount) ? Math.max(0, Math.min(2, args.amount ?? 1)) : 1;
+		const sourceLiveObj = liveObjText.trim() || executedObjText.trim();
+		if (!sourceLiveObj) throw new Error('UV dream enhancement needs a non-empty scene source.');
 		throwIfAborted(args.signal);
 		statusLine = `Unwrapping ${args.targetObjectId} into a UV atlas.`;
 		appendProgressMessage(`UV dream: unwrapping ${args.targetObjectId}.`, 'building source atlas');
@@ -2346,7 +2348,7 @@ f 4 5 1
 			headers: { 'Content-Type': 'application/json' },
 			signal: args.signal,
 			body: JSON.stringify({
-				liveObj: liveObjText.trim(),
+				liveObj: sourceLiveObj,
 				targetObjectId: args.targetObjectId
 			})
 		});
@@ -2459,7 +2461,7 @@ f 4 5 1
 			headers: { 'Content-Type': 'application/json' },
 			signal: args.signal,
 			body: JSON.stringify({
-				liveObj: liveObjText.trim(),
+				liveObj: sourceLiveObj,
 				targetObjectId: args.targetObjectId,
 				heightBmpDataUrl,
 				diffusePngDataUrl,
