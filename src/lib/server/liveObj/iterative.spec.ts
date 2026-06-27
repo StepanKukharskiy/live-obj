@@ -277,6 +277,54 @@ describe('iterative Live OBJ helpers', () => {
 		expect(rawObjControlIssues(source)).toEqual([]);
 	});
 
+	it('accepts uv dream workflow controls without raw post transform metadata', () => {
+		const source = [
+			'o capsule_body',
+			'#@source: llm_mesh',
+			'#@workflow_step: uv_dream_enhance',
+			'#@params: dream_displacement_amount=1.0000, dream_shade=smooth, dream_topology=texture_preserve',
+			'#@controls:',
+			'#@ - slider key=dream_displacement_amount label=Displacement min=0 max=2 step=0.05',
+			'#@ - select key=dream_shade label=Shading options=smooth|flat',
+			'#@post:',
+			'#@ - material name=capsule_body_uv_dream_mat',
+			'#@texture: kind=diffuse path=/api/temp-assets/diffuse',
+			'#@texture: kind=height path=/api/temp-assets/height',
+			'#@debug_image: kind=source_uv path=/api/temp-assets/source',
+			'#@debug_image: kind=final_uv path=/api/temp-assets/final',
+			'#@shade: smooth',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 0 1 0',
+			'f 1 2 3'
+		].join('\n');
+
+		expect(rawObjControlIssues(source)).toEqual([]);
+	});
+
+	it('still requires raw post metadata for ordinary controls on uv dream objects', () => {
+		const source = [
+			'o capsule_body',
+			'#@source: llm_mesh',
+			'#@workflow_step: uv_dream_enhance',
+			'#@params: dream_displacement_amount=1.0000, dream_shade=smooth, body_width=1',
+			'#@controls:',
+			'#@ - slider key=dream_displacement_amount label=Displacement min=0 max=2 step=0.05',
+			'#@ - select key=dream_shade label=Shading options=smooth|flat',
+			'#@ - slider key=body_width label=Width min=0.5 max=2 step=0.05',
+			'#@texture: kind=height path=/api/temp-assets/height',
+			'v 0 0 0',
+			'v 1 0 0',
+			'v 0 1 0',
+			'f 1 2 3'
+		].join('\n');
+
+		expect(rawObjControlIssues(source)).toEqual([
+			"Object 'capsule_body' control 'body_width' is not referenced by executable #@post metadata.",
+			"Object 'capsule_body' has controls but no editable dimension/scale transform; add width, height, depth, or scale controls that drive #@post transform scale."
+		]);
+	});
+
 	it('can add neutral fallback controls to visible raw OBJ objects', () => {
 		const source = [
 			'o bag_base_cup',

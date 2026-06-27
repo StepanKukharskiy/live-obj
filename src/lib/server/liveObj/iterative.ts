@@ -325,6 +325,25 @@ function postBodiesFromBlock(block: string): string[] {
 	return bodies;
 }
 
+const WORKFLOW_BACKED_CONTROL_KEYS = new Set(['dream_displacement_amount', 'dream_shade']);
+
+function hasUvDreamWorkflow(block: string): boolean {
+	return (
+		/^\s*#@workflow_step:\s*uv_dream_enhance\b/m.test(block) ||
+		/^\s*#@texture:\s*.*\bkind=height\b/m.test(block) ||
+		/^\s*#@params:\s*.*\bdream_displacement_amount\s*=/m.test(block)
+	);
+}
+
+function workflowBackedControlKeys(block: string, controlKeys: Set<string>): Set<string> {
+	const keys = new Set<string>();
+	if (!hasUvDreamWorkflow(block)) return keys;
+	for (const key of controlKeys) {
+		if (WORKFLOW_BACKED_CONTROL_KEYS.has(key)) keys.add(key);
+	}
+	return keys;
+}
+
 function hasDimensionalScaleControl(block: string, controlKeys = controlKeysFromBlock(block)): boolean {
 	if (controlKeys.size === 0) return false;
 	const keyPattern = [...controlKeys].map((key) => key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
@@ -349,17 +368,22 @@ export function rawObjControlIssues(sourceText: string): string[] {
 		}
 		const paramKeys = paramKeysFromBlock(block);
 		const postBodies = postBodiesFromBlock(block);
+		const workflowKeys = workflowBackedControlKeys(block, controlKeys);
+		const ordinaryControlKeys = new Set([...controlKeys].filter((key) => !workflowKeys.has(key)));
 		for (const key of controlKeys) {
 			if (!paramKeys.has(key)) {
 				issues.push(`Object '${name}' control '${key}' is missing a default value in #@params.`);
 			}
-			if (!postBodies.some((body) => new RegExp(`\\b${key}\\b`).test(body))) {
+			if (
+				!workflowKeys.has(key) &&
+				!postBodies.some((body) => new RegExp(`\\b${key}\\b`).test(body))
+			) {
 				issues.push(
 					`Object '${name}' control '${key}' is not referenced by executable #@post metadata.`
 				);
 			}
 		}
-		if (!hasDimensionalScaleControl(block, controlKeys)) {
+		if (ordinaryControlKeys.size > 0 && !hasDimensionalScaleControl(block, ordinaryControlKeys)) {
 			issues.push(
 				`Object '${name}' has controls but no editable dimension/scale transform; add width, height, depth, or scale controls that drive #@post transform scale.`
 			);
