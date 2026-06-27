@@ -1,7 +1,8 @@
 FROM node:24-bookworm-slim
 
-# SvelteKit adapter-node defaults to 512K, which is too small for video frame uploads.
-ENV BODY_SIZE_LIMIT=8M
+# SvelteKit adapter-node defaults to 512K. UV dream enhancement sends
+# base64 BMP atlases plus the scene source, which can exceed 8M in production.
+ENV BODY_SIZE_LIMIT=24M
 
 # Install Python 3.11 and X11/graphics libraries for OCP
 RUN apt-get update \
