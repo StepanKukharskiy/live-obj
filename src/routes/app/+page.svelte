@@ -91,6 +91,20 @@
 		feedbackLoop?: boolean;
 		feedbackPasses?: number;
 	};
+	type EditorTransformMode = 'select' | 'translate' | 'rotate' | 'scale';
+	type PartTransformUpdate = {
+		objectName: string;
+		position: [number, number, number];
+		rotation: [number, number, number];
+		scale: [number, number, number];
+		pivot?: [number, number, number];
+	};
+	type PartTransformState = {
+		position: [number, number, number];
+		rotation: [number, number, number];
+		scale: [number, number, number];
+		pivot: [number, number, number];
+	};
 
 	type CanvasAspectRatio =
 		| 'fill'
@@ -267,11 +281,16 @@ f 4 5 1
 `);
 	let currentSceneMode = $state<'live_obj' | 'raw_obj'>('raw_obj');
 	let selectedTargetObjectId = $state('');
+	let editorTransformMode = $state<EditorTransformMode>('select');
 	const targetObjectOptions = $derived(objectNamesFromLiveObj(liveObjText));
+	const selectedObjectTransform = $derived(
+		partTransformFromLiveObj(liveObjText, selectedTargetObjectId)
+	);
 	let rawLlmText = $state('');
 	let executedObjText = $state('');
 	let sceneEpoch = $state(0);
 	let sourceApplyBusy = $state(false);
+	let suppressNextAutoFrame = false;
 	let kernelDefault = $state<'auto' | 'cadquery'>('cadquery');
 	let renderingMode = $state<'standard' | 'outline' | 'toon'>('standard');
 	let outlineThickness = $state(1);
@@ -1111,6 +1130,10 @@ f 4 5 1
 		});
 		if (upAxis === 'z') group.rotation.x = -Math.PI / 2;
 		else if (upAxis === 'x') group.rotation.z = Math.PI / 2;
+		if (suppressNextAutoFrame) {
+			group.userData.skipAutoFrame = true;
+			suppressNextAutoFrame = false;
+		}
 		renderObject = group;
 		applyObjectControls();
 	}
@@ -1278,6 +1301,42 @@ f 4 5 1
 		return blocks;
 	}
 
+	function parseTransformVec(
+		raw: string | undefined,
+		fallback: [number, number, number]
+	): [number, number, number] {
+		if (!raw) return fallback;
+		const values = raw
+			.replace(/^\[|\]$/g, '')
+			.split(',')
+			.map((value) => Number(value.trim()));
+		return [0, 1, 2].map((index) =>
+			Number.isFinite(values[index]) ? values[index] : fallback[index]
+		) as [number, number, number];
+	}
+
+	function transformToken(raw: string, key: string): string | undefined {
+		return raw.match(new RegExp(`(?:^|\\s)${key}=(\\[[^\\]]+\\]|\\S+)`))?.[1];
+	}
+
+	function partTransformFromLiveObj(sourceText: string, objectName: string): PartTransformState {
+		const identity: PartTransformState = {
+			position: [0, 0, 0],
+			rotation: [0, 0, 0],
+			scale: [1, 1, 1],
+			pivot: [0, 0, 0]
+		};
+		const block = objectBlocksByName(sourceText).get(objectName);
+		if (!block) return identity;
+		const line = block.match(/^\s*#@\s*-\s*transform\s+(.+)$/im)?.[1] ?? '';
+		return {
+			position: parseTransformVec(transformToken(line, 'position'), identity.position),
+			rotation: parseTransformVec(transformToken(line, 'rotation'), identity.rotation),
+			scale: parseTransformVec(transformToken(line, 'scale'), identity.scale),
+			pivot: parseTransformVec(transformToken(line, 'pivot'), identity.pivot)
+		};
+	}
+
 	function mergeMetadataOnlyEdit(fullSource: string, editedSource: string): string {
 		if (hasObjMeshGeometry(editedSource) || !hasObjMeshGeometry(fullSource)) return editedSource;
 		const editedBlocks = objectBlocksByName(editedSource);
@@ -1308,8 +1367,86 @@ f 4 5 1
 					);
 				const meshSuffix = fullLines.slice(fullMeshAt);
 				return [...editedPrefix, ...hiddenDreamCache, ...meshSuffix].join('\n');
-			});
+		});
 		return `${editedHeader.trimEnd()}\n${mergedBlocks.join('\n').trimEnd()}\n`;
+	}
+
+	function formatTransformNumber(value: number): string {
+		const numeric = Number(value);
+		if (!Number.isFinite(numeric)) return '0';
+		const rounded = Math.abs(numeric) < 1e-8 ? 0 : numeric;
+		return Number(rounded.toFixed(5)).toString();
+	}
+
+	function formatTransformVec(values: [number, number, number], fallback: [number, number, number]): string {
+		const next = values.map((value, index) => {
+			const numeric = Number(value);
+			return Number.isFinite(numeric) ? numeric : fallback[index];
+		}) as [number, number, number];
+		return `[${next.map(formatTransformNumber).join(',')}]`;
+	}
+
+	function removeEmptyPostBlock(lines: string[], postIndex: number): string[] {
+		const next = [...lines];
+		let scan = postIndex + 1;
+		while (scan < next.length && /^\s*#@\s*-\s*/.test(next[scan])) scan += 1;
+		const hasPostItems = next.slice(postIndex + 1, scan).some((line) => /^\s*#@\s*-\s*/.test(line));
+		if (!hasPostItems) next.splice(postIndex, 1);
+		return next;
+	}
+
+	function rewriteObjectTransformBlock(
+		block: string,
+		transform: PartTransformUpdate | null
+	): string {
+		const lines = block.split(/\r?\n/);
+		const meshIndex = lines.findIndex(objMeshLine);
+		const insertIndex = meshIndex >= 0 ? meshIndex : lines.length;
+		const transformLine = transform
+			? `#@ - transform position=${formatTransformVec(transform.position, [0, 0, 0])} rotation=${formatTransformVec(transform.rotation, [0, 0, 0])} scale=${formatTransformVec(transform.scale, [1, 1, 1])} pivot=${formatTransformVec(transform.pivot ?? [0, 0, 0], [0, 0, 0])}`
+			: '';
+		const next: string[] = [];
+		let postIndex = -1;
+		let replaced = false;
+		let insidePost = false;
+		for (const line of lines) {
+			if (/^\s*#@post:\s*$/i.test(line)) {
+				postIndex = next.length;
+				insidePost = true;
+				next.push(line);
+				continue;
+			}
+			if (insidePost && /^\s*#@\s*-\s*transform\b/i.test(line)) {
+				if (transform && !replaced) next.push(transformLine);
+				replaced = true;
+				continue;
+			}
+			if (insidePost && !/^\s*#@\s*-\s*/.test(line)) insidePost = false;
+			next.push(line);
+		}
+		if (transform && !replaced) {
+			if (postIndex >= 0) next.splice(postIndex + 1, 0, transformLine);
+			else next.splice(insertIndex, 0, '#@post:', transformLine);
+		}
+		if (!transform && postIndex >= 0) return removeEmptyPostBlock(next, postIndex).join('\n');
+		return next.join('\n');
+	}
+
+	function rewriteLiveObjObjectTransform(
+		sourceText: string,
+		objectName: string,
+		transform: PartTransformUpdate | null
+	): string {
+		if (!sourceText.trim() || !objectName.trim()) return sourceText;
+		const blocks = sourceText.split(/(?=^\s*o\s+)/gm);
+		let changed = false;
+		const rewritten = blocks.map((block) => {
+			const name = block.match(/^\s*o\s+([^\s#]+)/m)?.[1];
+			if (name !== objectName) return block;
+			changed = true;
+			return rewriteObjectTransformBlock(block, transform);
+		});
+		return changed ? `${rewritten.join('').trimEnd()}\n` : sourceText;
 	}
 
 	function objElementRefs(line: string): number[] {
@@ -3667,6 +3804,22 @@ f 4 5 1
 		}
 	}
 
+	async function applyPartTransform(update: PartTransformUpdate) {
+		if (!update.objectName.trim()) return;
+		const nextSource = rewriteLiveObjObjectTransform(liveObjText, update.objectName, update);
+		selectedTargetObjectId = update.objectName;
+		suppressNextAutoFrame = true;
+		await applyEditedSource(nextSource);
+	}
+
+	async function resetPartTransform(objectName: string) {
+		if (!objectName.trim()) return;
+		const nextSource = rewriteLiveObjObjectTransform(liveObjText, objectName, null);
+		selectedTargetObjectId = objectName;
+		suppressNextAutoFrame = true;
+		await applyEditedSource(nextSource);
+	}
+
 	async function openLiveObj(sceneText: string) {
 		const text = String(sceneText ?? '').trim();
 		if (!text) return;
@@ -3763,6 +3916,14 @@ f 4 5 1
 				{cameraFov}
 				{toneMappingExposure}
 				autoFrameOnObjectChange={true}
+				suppressAutoFrame={Boolean(selectedTargetObjectId || editorTransformMode !== 'select')}
+				{editorTransformMode}
+				selectedObjectName={selectedTargetObjectId}
+				{selectedObjectTransform}
+				onSelectObject={(objectName) => {
+					selectedTargetObjectId = objectName;
+				}}
+				onTransformCommit={(update) => void applyPartTransform(update)}
 			/>
 			{#if (busy && !iterativeGenerationActive && !feedbackLoopActive) || sourceApplyBusy}
 				<div class="canvas-loading-overlay" aria-live="polite" aria-busy="true">
@@ -3795,6 +3956,7 @@ f 4 5 1
 		bind:toonSteps
 		bind:toonOutline
 		bind:selectedTargetObjectId
+		bind:editorTransformMode
 		{targetObjectOptions}
 		bind:objectColor
 		bind:objectScale
@@ -3821,6 +3983,8 @@ f 4 5 1
 			}
 		}}
 		onApplyEditedSource={(text) => void applyEditedSource(text)}
+		onApplyPartTransform={(update) => void applyPartTransform(update)}
+		onResetPartTransform={(objectName) => void resetPartTransform(objectName)}
 		onOpenLiveObj={(text) => void openLiveObj(text)}
 		bind:providerSettings
 		onSend={(p) => void sendPrompt(p)}

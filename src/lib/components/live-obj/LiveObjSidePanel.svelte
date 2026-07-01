@@ -34,6 +34,14 @@
 		feedbackLoop?: boolean;
 		feedbackPasses?: number;
 	};
+	type EditorTransformMode = 'select' | 'translate' | 'rotate' | 'scale';
+	type PartTransformUpdate = {
+		objectName: string;
+		position: [number, number, number];
+		rotation: [number, number, number];
+		scale: [number, number, number];
+		pivot?: [number, number, number];
+	};
 	type PanelTab = 'chat' | 'provider' | 'adjust' | 'tools' | 'scene' | 'render';
 	type RenderingMode = 'standard' | 'outline' | 'toon';
 	type CanvasAspectRatio =
@@ -151,9 +159,12 @@
 		toonSteps = $bindable<2 | 3 | 4 | 5>(3),
 		toonOutline = $bindable(true),
 		selectedTargetObjectId = $bindable(''),
+		editorTransformMode = $bindable<EditorTransformMode>('select'),
 		targetObjectOptions = [],
 		onLiveObjMetadataChange,
 		onApplyEditedSource,
+		onApplyPartTransform,
+		onResetPartTransform,
 		providerSettings = $bindable({
 			provider: 'openai',
 			apiKey: '',
@@ -216,9 +227,12 @@
 		toonSteps?: 2 | 3 | 4 | 5;
 		toonOutline?: boolean;
 		selectedTargetObjectId?: string;
+		editorTransformMode?: EditorTransformMode;
 		targetObjectOptions?: string[];
 		onLiveObjMetadataChange?: (updatedLiveObjText: string) => void;
 		onApplyEditedSource?: (sceneText: string) => void | Promise<void>;
+		onApplyPartTransform?: (update: PartTransformUpdate) => void | Promise<void>;
+		onResetPartTransform?: (objectName: string) => void | Promise<void>;
 		providerSettings?: {
 			provider: string;
 			apiKey: string;
@@ -448,8 +462,13 @@
 					{executedObjText}
 					{sceneEpoch}
 					{sourceApplyBusy}
+					bind:selectedTargetObjectId
+					bind:editorTransformMode
+					{targetObjectOptions}
 					{onLiveObjMetadataChange}
 					{onApplyEditedSource}
+					{onApplyPartTransform}
+					{onResetPartTransform}
 				/>
 			{:else if activeTab === 'tools'}
 				<LiveObjToolsTab />
