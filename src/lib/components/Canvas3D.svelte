@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import * as THREE from 'three';
+	import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 	import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 	import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
 	import { CadEdgeRenderer } from './cadEdgePass';
@@ -34,6 +35,7 @@
 	export let cameraFov = 50;
 	export let cameraProjection: 'perspective' | 'orthographic' = 'perspective';
 	export let autoFrameOnObjectChange = false;
+	export let suppressAutoFrame = false;
 	export let toneMappingExposure = 1;
 	export let renderMode: 'standard' | 'outline' | 'overlay' | 'toon' = 'standard';
 	export let outlineColor = '#000000';
@@ -43,6 +45,26 @@
 	export let outlineNormalSensitivity = 1;
 	export let toonSteps: 2 | 3 | 4 | 5 = 3;
 	export let toonOutline = true;
+	export let editorTransformMode: 'select' | 'translate' | 'rotate' | 'scale' = 'select';
+	export let selectedObjectName = '';
+	export let selectedObjectTransform:
+		| {
+				position: [number, number, number];
+				rotation: [number, number, number];
+				scale: [number, number, number];
+				pivot: [number, number, number];
+		  }
+		| null = null;
+	export let onSelectObject: ((objectName: string) => void) | undefined = undefined;
+	export let onTransformCommit:
+		| ((update: {
+				objectName: string;
+				position: [number, number, number];
+				rotation: [number, number, number];
+				scale: [number, number, number];
+				pivot: [number, number, number];
+		  }) => void | Promise<void>)
+		| undefined = undefined;
 	// Deprecated props kept for backward-compat with demo2; currently unused.
 	export let outlineThresholdAngle: number | undefined = undefined;
 	export let outlineStylePreset: string | undefined = undefined;
@@ -63,6 +85,24 @@
 	let containerHeight = 600;
 	let canvasShell: HTMLDivElement | undefined;
 	let cadEdges: CadEdgeRenderer | null = null;
+	let transformControls: TransformControls | null = null;
+	let transformHelper: THREE.Object3D | null = null;
+	let editorPivot: THREE.Object3D | null = null;
+	let selectionBox: THREE.BoxHelper | null = null;
+	let selectedTransformObject: THREE.Object3D | null = null;
+	let transformDragging = false;
+	let transformDragStart:
+		| {
+				pivotPosition: THREE.Vector3;
+				transform: {
+					position: [number, number, number];
+					rotation: [number, number, number];
+					scale: [number, number, number];
+					pivot: [number, number, number];
+				};
+		  }
+		| null = null;
+	let suppressNextCanvasClick = false;
 	let loadedBackgroundImage: HTMLImageElement | null = null;
 	let loadedBackgroundImageUrl = '';
 	let animationPaused = false; // Pause animation during cleanup
@@ -75,6 +115,26 @@
 		color: '#ffffff',
 		side: THREE.DoubleSide
 	});
+	const selectionBoxColor = new THREE.Color('#0000eb');
+	const transformRaycaster = new THREE.Raycaster();
+	const transformPointer = new THREE.Vector2();
+
+	function markEditorHelper(object: THREE.Object3D | null) {
+		if (!object) return;
+		object.userData.editorHelper = true;
+		object.traverse((child) => {
+			child.userData.editorHelper = true;
+		});
+	}
+
+	function isEditorHelper(object: any): boolean {
+		let current = object;
+		while (current) {
+			if (current.userData?.editorHelper) return true;
+			current = current.parent;
+		}
+		return false;
+	}
 
 	function isShadowGroundPlane(object: any) {
 		return object === objects?.groundPlane || object?.name === 'shadow_ground_plane';
@@ -140,7 +200,7 @@
 		if (!scene) return renderFn();
 		const swapped: Array<{ mesh: any; original: any }> = [];
 		scene.traverse((child: any) => {
-			if (isShadowGroundPlane(child)) return;
+			if (isShadowGroundPlane(child) || isEditorHelper(child)) return;
 			if (!child?.isMesh || !child.material || child.visible === false) return;
 			const original = child.material;
 			if (Array.isArray(original)) {
@@ -276,7 +336,7 @@
 			Math.min(camera.far ?? 2000, depthNear + span * 3.5)
 		);
 		scene.traverse((child: any) => {
-			if (isShadowGroundPlane(child)) return;
+			if (isShadowGroundPlane(child) || isEditorHelper(child)) return;
 			if (!child?.isMesh || !child.material || child.visible === false) return;
 			const original = child.material;
 			if (Array.isArray(original)) {
@@ -326,7 +386,7 @@
 		const contextMaterial = makeXrayMaterial('#7f8792', 0.16, false);
 		const swapped: Array<{ mesh: any; original: any }> = [];
 		scene.traverse((child: any) => {
-			if (isShadowGroundPlane(child)) return;
+			if (isShadowGroundPlane(child) || isEditorHelper(child)) return;
 			if (!child?.isMesh || !child.material || child.visible === false) return;
 			swapped.push({ mesh: child, original: child.material });
 			if (focusSet.has(child.name)) {
@@ -391,6 +451,173 @@
 		return matched ? bounds : null;
 	}
 
+	function selectableObjectName(object: THREE.Object3D | null): string {
+		let current = object;
+		while (current && current !== mountedRenderObject) {
+			if (current.name && !isEditorHelper(current)) return current.name;
+			current = current.parent;
+		}
+		return '';
+	}
+
+	function findSelectedObject(): THREE.Object3D | null {
+		if (!mountedRenderObject || !selectedObjectName.trim()) return null;
+		let exact: THREE.Object3D | null = null;
+		mountedRenderObject.traverse((object: THREE.Object3D) => {
+			if (exact || isEditorHelper(object)) return;
+			if (object.name === selectedObjectName) exact = object;
+		});
+		return exact;
+	}
+
+	function selectedPivot(object: THREE.Object3D): [number, number, number] {
+		const bounds = new THREE.Box3().setFromObject(object);
+		if (bounds.isEmpty()) return [0, 0, 0];
+		const center = bounds.getCenter(new THREE.Vector3());
+		const localCenter = object.worldToLocal(center.clone());
+		return [localCenter.x, localCenter.y, localCenter.z];
+	}
+
+	function sourceRotationQuaternion(rotation: [number, number, number] | undefined): THREE.Quaternion {
+		// raw_obj_post_executor rotates vertices around X, then Y, then Z; Three represents that
+		// same matrix with Euler order ZYX for the authored [rx, ry, rz] values.
+		return new THREE.Quaternion().setFromEuler(
+			new THREE.Euler(
+				THREE.MathUtils.degToRad(rotation?.[0] ?? 0),
+				THREE.MathUtils.degToRad(rotation?.[1] ?? 0),
+				THREE.MathUtils.degToRad(rotation?.[2] ?? 0),
+				'ZYX'
+			)
+		);
+	}
+
+	function displayQuaternionFromSourceRotation(
+		rotation: [number, number, number] | undefined
+	): THREE.Quaternion {
+		mountedRenderObject?.updateWorldMatrix(true, true);
+		const rootQuaternion = mountedRenderObject
+			? mountedRenderObject.getWorldQuaternion(new THREE.Quaternion())
+			: new THREE.Quaternion();
+		return rootQuaternion.multiply(sourceRotationQuaternion(rotation));
+	}
+
+	function sourceRotationFromDisplayQuaternion(quaternion: THREE.Quaternion): [number, number, number] {
+		mountedRenderObject?.updateWorldMatrix(true, true);
+		const rootQuaternion = mountedRenderObject
+			? mountedRenderObject.getWorldQuaternion(new THREE.Quaternion())
+			: new THREE.Quaternion();
+		const sourceQuaternion = rootQuaternion.invert().multiply(quaternion.clone());
+		const sourceEuler = new THREE.Euler().setFromQuaternion(sourceQuaternion, 'ZYX');
+		return [
+			THREE.MathUtils.radToDeg(sourceEuler.x),
+			THREE.MathUtils.radToDeg(sourceEuler.y),
+			THREE.MathUtils.radToDeg(sourceEuler.z)
+		];
+	}
+
+	function updateSelectionHelper() {
+		if (!selectionBox || !transformControls || !transformHelper || !editorPivot) return;
+		if (transformDragging) {
+			if (selectedTransformObject) selectionBox.setFromObject(selectedTransformObject);
+			return;
+		}
+		const target = findSelectedObject();
+		selectedTransformObject = target;
+		if (!target) {
+			selectionBox.visible = false;
+			transformControls.detach();
+			transformHelper.visible = false;
+			return;
+		}
+		selectionBox.setFromObject(target);
+		selectionBox.visible = true;
+		target.updateWorldMatrix(true, false);
+		mountedRenderObject?.updateWorldMatrix(true, true);
+		const bounds = new THREE.Box3().setFromObject(target);
+		const center = bounds.isEmpty()
+			? target.getWorldPosition(new THREE.Vector3())
+			: bounds.getCenter(new THREE.Vector3());
+		editorPivot.position.copy(center);
+		editorPivot.quaternion.copy(displayQuaternionFromSourceRotation(selectedObjectTransform?.rotation));
+		editorPivot.scale.set(1, 1, 1);
+		if (editorTransformMode === 'select') {
+			transformControls.detach();
+			transformHelper.visible = false;
+			return;
+		}
+		transformControls.attach(editorPivot);
+		transformControls.setMode(editorTransformMode);
+		transformControls.setSpace('local');
+		transformHelper.visible = true;
+	}
+
+	function commitSelectedTransform() {
+		if (!selectedTransformObject || !editorPivot || !selectedObjectName || !onTransformCommit) return;
+		const start = transformDragStart;
+		const base = start?.transform ?? {
+			position: selectedObjectTransform?.position ?? [0, 0, 0],
+			rotation: selectedObjectTransform?.rotation ?? [0, 0, 0],
+			scale: selectedObjectTransform?.scale ?? [1, 1, 1],
+			pivot: selectedObjectTransform?.pivot ?? selectedPivot(selectedTransformObject)
+		};
+		const startPivot = start?.pivotPosition ?? editorPivot.position;
+		const delta = editorPivot.position.clone().sub(startPivot);
+		const sourceDelta = mountedRenderObject
+			? mountedRenderObject
+					.worldToLocal(startPivot.clone().add(delta))
+					.sub(mountedRenderObject.worldToLocal(startPivot.clone()))
+			: delta;
+		void onTransformCommit({
+			objectName: selectedObjectName,
+			position: [
+				base.position[0] + sourceDelta.x,
+				base.position[1] + sourceDelta.y,
+				base.position[2] + sourceDelta.z
+			],
+			rotation: sourceRotationFromDisplayQuaternion(editorPivot.quaternion),
+			scale:
+				editorTransformMode === 'scale'
+					? [
+							base.scale[0] * editorPivot.scale.x,
+							base.scale[1] * editorPivot.scale.y,
+							base.scale[2] * editorPivot.scale.z
+						]
+					: base.scale,
+			pivot: base.pivot
+		});
+		transformDragStart = null;
+	}
+
+	function handleCanvasClick(event: MouseEvent) {
+		if (!canvas || !camera || !mountedRenderObject || transformDragging) return;
+		if (suppressNextCanvasClick) {
+			suppressNextCanvasClick = false;
+			return;
+		}
+		const rect = canvas.getBoundingClientRect();
+		transformPointer.x = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 2 - 1;
+		transformPointer.y = -(((event.clientY - rect.top) / Math.max(rect.height, 1)) * 2 - 1);
+		transformRaycaster.setFromCamera(transformPointer, camera);
+		const candidates: THREE.Object3D[] = [];
+		mountedRenderObject.traverse((object: THREE.Object3D) => {
+			if ((object as THREE.Mesh).isMesh && !isEditorHelper(object)) candidates.push(object);
+		});
+		const hit = transformRaycaster.intersectObjects(candidates, false)[0]?.object ?? null;
+		const name = selectableObjectName(hit);
+		onSelectObject?.(name);
+	}
+
+	function withEditorHelpersHidden<T>(renderFn: () => T): T {
+		const helpers = [transformHelper, selectionBox].filter(Boolean) as THREE.Object3D[];
+		const states = helpers.map((helper) => ({ helper, visible: helper.visible }));
+		for (const helper of helpers) helper.visible = false;
+		try {
+			return renderFn();
+		} finally {
+			for (const { helper, visible } of states) helper.visible = visible;
+		}
+	}
+
 	function frameMountedRenderObject(
 		padding = 1.05,
 		viewDirectionInput?: [number, number, number],
@@ -452,13 +679,15 @@
 			xraySupportObjectNames
 		} = options;
 		if (autoFrame) frameScene(framePadding, viewDirection, focusObjectNames);
-		if (xrayFocusObjectNames?.length) {
-			withXrayMaterials(xrayFocusObjectNames, xraySupportObjectNames, () => {
-				renderer.render(scene, camera);
-			});
-		} else {
-			renderFrame();
-		}
+		withEditorHelpersHidden(() => {
+			if (xrayFocusObjectNames?.length) {
+				withXrayMaterials(xrayFocusObjectNames, xraySupportObjectNames, () => {
+					renderer.render(scene, camera);
+				});
+			} else {
+				renderFrame();
+			}
+		});
 
 		const sourceCanvas = document.createElement('canvas');
 		sourceCanvas.width = renderer.domElement.width;
@@ -480,7 +709,7 @@
 			}
 			sourceContext.drawImage(renderer.domElement, 0, 0, sourceCanvas.width, sourceCanvas.height);
 		}
-		if (xrayFocusObjectNames?.length) renderFrame();
+		if (xrayFocusObjectNames?.length) withEditorHelpersHidden(() => renderFrame());
 
 		const initialScale =
 			typeof maxWidth === 'number' && maxWidth > 0 && sourceCanvas.width > maxWidth
@@ -740,9 +969,16 @@
 		if (renderObject) {
 			mountedRenderObject = renderObject;
 			scene.add(mountedRenderObject);
-			if (autoFrameOnObjectChange && framedRenderObject !== renderObject)
+			if (
+				autoFrameOnObjectChange &&
+				!suppressAutoFrame &&
+				framedRenderObject !== renderObject &&
+				!renderObject.userData?.skipAutoFrame
+			) {
 				frameMountedRenderObject(1.05);
+			}
 		}
+		updateSelectionHelper();
 
 		// New mesh must pick up current objectColor / wireframe even if those props did not change.
 		if (scene && objects) {
@@ -887,6 +1123,7 @@
 			controls.update();
 		}
 		camera = nextCamera;
+		if (transformControls) transformControls.camera = camera;
 		applyCameraResize(containerWidth, containerHeight);
 	}
 
@@ -925,6 +1162,41 @@
 
 		// Setup controls
 		controls = setupControls(camera, renderer);
+		transformControls = new TransformControls(camera, renderer.domElement);
+		transformHelper = transformControls.getHelper();
+		markEditorHelper(transformHelper);
+		transformHelper.visible = false;
+		editorPivot = new THREE.Object3D();
+		markEditorHelper(editorPivot);
+		scene.add(editorPivot);
+		transformControls.addEventListener('dragging-changed', (event: any) => {
+			transformDragging = Boolean(event.value);
+			suppressNextCanvasClick = transformDragging || suppressNextCanvasClick;
+			if (controls) controls.enabled = !transformDragging;
+			if (transformDragging && editorPivot) {
+				transformDragStart = {
+					pivotPosition: editorPivot.position.clone(),
+					transform: {
+						position: selectedObjectTransform?.position ?? [0, 0, 0],
+						rotation: selectedObjectTransform?.rotation ?? [0, 0, 0],
+						scale: selectedObjectTransform?.scale ?? [1, 1, 1],
+						pivot: selectedObjectTransform?.pivot ?? (selectedTransformObject ? selectedPivot(selectedTransformObject) : [0, 0, 0])
+					}
+				};
+			}
+			if (!transformDragging) {
+				commitSelectedTransform();
+			}
+		});
+		transformControls.addEventListener('objectChange', () => {
+			if (selectedTransformObject && selectionBox) selectionBox.setFromObject(selectedTransformObject);
+		});
+		scene.add(transformHelper);
+		selectionBox = new THREE.BoxHelper(new THREE.Object3D(), selectionBoxColor);
+		markEditorHelper(selectionBox);
+		selectionBox.visible = false;
+		scene.add(selectionBox);
+		canvas.addEventListener('click', handleCanvasClick);
 		applySceneControls();
 		updateRenderObject();
 
@@ -947,6 +1219,7 @@
 
 		return () => {
 			window.removeEventListener('resize', handleWindowResize);
+			canvas.removeEventListener('click', handleCanvasClick);
 			if (vv) vv.removeEventListener('resize', handleWindowResize);
 			canvasResizeObserver?.disconnect();
 		};
@@ -958,6 +1231,13 @@
 		}
 		cadEdges?.dispose();
 		cadEdges = null;
+		transformControls?.dispose();
+		transformControls = null;
+		transformHelper = null;
+		editorPivot = null;
+		selectionBox?.geometry.dispose();
+		(selectionBox?.material as THREE.Material | undefined)?.dispose?.();
+		selectionBox = null;
 		toonMaterialCache.forEach((m) => m.dispose());
 		toonMaterialCache.clear();
 		toonGradientCache.forEach((t) => t.dispose());
@@ -1039,6 +1319,13 @@
 
 	$: if (scene && camera && objects && renderObject !== undefined) {
 		updateRenderObject();
+	}
+
+	$: if (scene && transformControls) {
+		void selectedObjectName;
+		void editorTransformMode;
+		void selectedObjectTransform;
+		updateSelectionHelper();
 	}
 
 	$: if (backgroundImageUrl !== loadedBackgroundImageUrl) {
