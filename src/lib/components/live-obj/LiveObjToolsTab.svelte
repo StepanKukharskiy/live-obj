@@ -160,6 +160,220 @@
 						'#@post:\n#@ - array count=frame_count offset=[bay_spacing,0,0] centered=true scale=[1,1,1+sin(t*tau)*wave_amount] pivot=[0,0,0]'
 				},
 				{
+					name: 'scatter',
+					category: '#@post',
+					description:
+						'Duplicates the raw mesh across a rectangular field with seeded random placement.',
+					params: [
+						{ name: 'count', type: 'int', description: 'Number of copies to place', default: '1' },
+						{
+							name: 'width',
+							type: 'number expr',
+							description: 'Field size along the first scatter axis',
+							default: '1'
+						},
+						{
+							name: 'depth',
+							type: 'number expr',
+							description: 'Field size along the second scatter axis',
+							default: '1'
+						},
+						{
+							name: 'axes',
+							type: 'xz | xy | yz',
+							description: 'Plane to scatter on; xz suits y-up scenes',
+							default: 'xz'
+						},
+						{
+							name: 'target',
+							type: 'object id',
+							description: 'Optional mesh object to sample as the placement surface'
+						},
+						{ name: 'seed', type: 'int', description: 'Stable random seed', default: '1' },
+						{
+							name: 'min_distance',
+							type: 'number expr',
+							description: 'Minimum spacing between placements',
+							default: '0'
+						},
+						{
+							name: 'jitter',
+							type: 'number expr',
+							description: 'Extra per-placement offset noise',
+							default: '0'
+						},
+						{
+							name: 'normal_offset',
+							type: 'number expr',
+							description: 'Lift each copy along the sampled surface normal',
+							default: '0'
+						},
+						{
+							name: 'align_to_normal',
+							type: 'boolean',
+							description: 'Tilt local up toward the sampled surface normal',
+							default: 'false'
+						},
+						{
+							name: 'rotation',
+							type: 'vec3 expr',
+							description: 'Per-copy rotation; supports rand/random values',
+							default: '[0,0,0]'
+						},
+						{
+							name: 'scale',
+							type: 'vec3 expr | [min,max]',
+							description: 'Per-copy scale or uniform random scale range',
+							default: '[1,1,1]'
+						},
+						{
+							name: 'position',
+							type: 'vec3 expr',
+							description: 'Extra per-copy offset using px, py, pz, rand, i, count, and t',
+							default: '[0,0,0]'
+						},
+						{
+							name: 'pivot',
+							type: 'vec3 expr',
+							description: 'Scale and rotation pivot',
+							default: '[0,0,0]'
+						}
+					],
+					example:
+						'#@post:\n#@ - scatter count=gate_count target=landscape axes=xz seed=scatter_seed min_distance=gate_spacing jitter=0.25 normal_offset=0.02 rotation=[0,rand*360,0] scale=[0.85,1.15] pivot=[0,0,0]'
+				},
+				{
+					name: 'surface_snap',
+					category: '#@post',
+					description:
+						'Places one raw mesh onto a named mesh surface; array copies snap independently.',
+					params: [
+						{ name: 'target', type: 'object id', description: 'Surface object to project onto' },
+						{
+							name: 'normal_offset',
+							type: 'number expr',
+							description: 'Lift along sampled normal',
+							default: '0'
+						},
+						{
+							name: 'align_to_normal',
+							type: 'boolean',
+							description: 'Tilt local up toward the sampled normal',
+							default: 'false'
+						},
+						{
+							name: 'pivot',
+							type: 'vec3 expr',
+							description: 'Point on this mesh to place on the surface',
+							default: 'bottom center'
+						},
+						{
+							name: 'mode',
+							type: 'instances | object',
+							description: 'Snap remembered array copies or the entire object',
+							default: 'instances'
+						}
+					],
+					example: '#@post:\n#@ - surface_snap target=terrain normal_offset=0.02'
+				},
+				{
+					name: 'conform',
+					category: '#@post',
+					description: 'Projects vertices onto a named surface while preserving local thickness.',
+					params: [
+						{ name: 'target', type: 'object id', description: 'Surface object to conform to' },
+						{ name: 'strength', type: 'number', description: 'Blend amount', default: '1' },
+						{
+							name: 'normal_offset',
+							type: 'number expr',
+							description: 'Lift along sampled normal',
+							default: '0'
+						}
+					],
+					example: '#@post:\n#@ - conform target=terrain strength=1 normal_offset=0.01'
+				},
+				{
+					name: 'path_array',
+					category: '#@post',
+					description: 'Repeats the raw mesh along a named path object vertex polyline.',
+					params: [
+						{
+							name: 'path',
+							type: 'object id',
+							description: 'Path object whose vertices define the route'
+						},
+						{ name: 'count', type: 'int', description: 'Number of copies', default: '2' },
+						{ name: 'spacing', type: 'number expr', description: 'Distance between copies' },
+						{
+							name: 'rotation_mode',
+							type: 'tangent | none',
+							description: 'Orient copies along path direction',
+							default: 'tangent'
+						},
+						{
+							name: 'scale',
+							type: 'vec3 expr | [min,max]',
+							description: 'Per-copy scale or uniform random range',
+							default: '[1,1,1]'
+						}
+					],
+					example:
+						'#@post:\n#@ - path_array path=trail spacing=1.2 rotation_mode=tangent scale=[0.95,1.05]'
+				},
+				{
+					name: 'surface_array',
+					category: '#@post',
+					description: 'Repeats the raw mesh in an ordered grid or hex pattern on a named surface.',
+					params: [
+						{ name: 'target', type: 'object id', description: 'Surface object to populate' },
+						{ name: 'spacing', type: 'number expr', description: 'Pattern spacing', default: '1' },
+						{ name: 'pattern', type: 'grid | hex', description: 'Ordered layout', default: 'grid' },
+						{ name: 'count', type: 'int', description: 'Maximum copies' },
+						{
+							name: 'align_to_normal',
+							type: 'boolean',
+							description: 'Tilt local up toward each sampled normal',
+							default: 'false'
+						}
+					],
+					example:
+						'#@post:\n#@ - surface_array target=terrain spacing=1.5 pattern=hex normal_offset=0.02'
+				},
+				{
+					name: 'orient',
+					category: '#@post',
+					description: 'Rotates a mesh to face toward or away from a point or object.',
+					params: [
+						{ name: 'mode', type: 'face | away', description: 'Orientation mode', default: 'face' },
+						{ name: 'target', type: 'object id', description: 'Object to face' },
+						{
+							name: 'point',
+							type: 'vec3',
+							description: 'Point to face when no target is supplied'
+						},
+						{
+							name: 'pivot',
+							type: 'vec3 expr',
+							description: 'Rotation pivot',
+							default: 'mesh center'
+						}
+					],
+					example: '#@post:\n#@ - orient mode=face target=center_marker'
+				},
+				{
+					name: 'clip',
+					category: '#@post',
+					description: 'Conservatively removes faces outside an axis or box range.',
+					params: [
+						{ name: 'axis', type: 'x | y | z', description: 'Axis for min/max clipping' },
+						{ name: 'min', type: 'number expr', description: 'Minimum kept coordinate' },
+						{ name: 'max', type: 'number expr', description: 'Maximum kept coordinate' },
+						{ name: 'center', type: 'vec3 expr', description: 'Optional clipping box center' },
+						{ name: 'size', type: 'vec3 expr', description: 'Optional clipping box size' }
+					],
+					example: '#@post:\n#@ - clip axis=y min=0 max=2.5'
+				},
+				{
 					name: 'deform',
 					category: '#@post',
 					description: 'Moves each vertex with an expression after previous post ops.',
