@@ -7,11 +7,18 @@ raw LLM-authored OBJ vertices/faces as the base geometry, then applies a small
 `#@post:` modifier stack on top.
 
 Supported post ops:
-    transform position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz] pivot=[x,y,z]
+    transform selection=group_name position=[x,y,z] rotation=[rx,ry,rz] scale=[sx,sy,sz] pivot=[x,y,z]
     symmetrize axis=x|y|z side=positive|negative
     mirror axis=x|y|z
     array count=n offset=[x,y,z] centered=true|false scale=[sx,sy,sz] position=[x,y,z] pivot=[x,y,z]
-    deform position=[x,y,z]
+    scatter count=n width=x depth=z seed=n min_distance=v jitter=v rotation=[rx,ry,rz] scale=[sx,sy,sz] position=[x,y,z] pivot=[x,y,z]
+    surface_snap target=object normal_offset=v align_to_normal=true|false
+    conform target=object strength=v normal_offset=v
+    path_array path=object count=n spacing=v rotation_mode=tangent
+    surface_array target=object spacing=v pattern=grid|hex
+    orient mode=face target=object pivot=[x,y,z]
+    clip axis=x|y|z min=v max=v
+    deform selection=group_name position=[x,y,z]
     subdivide level=n
     smooth iterations=n strength=v
     simplify ratio=v
@@ -31,6 +38,7 @@ from __future__ import annotations
 import argparse
 import ast
 import math
+import random
 import re
 import sys
 from dataclasses import dataclass, field
@@ -46,14 +54,24 @@ Face = List[int]
 class Mesh:
     vertices: List[Vec3] = field(default_factory=list)
     faces: List[Face] = field(default_factory=list)
+    groups: List[List[int]] = field(default_factory=list)
+    named_groups: Dict[str, List[int]] = field(default_factory=dict)
 
     def copy(self) -> "Mesh":
-        return Mesh(vertices=list(self.vertices), faces=[list(f) for f in self.faces])
+        return Mesh(
+            vertices=list(self.vertices),
+            faces=[list(f) for f in self.faces],
+            groups=[list(group) for group in self.groups],
+            named_groups={name: list(group) for name, group in self.named_groups.items()},
+        )
 
     def extend(self, other: "Mesh") -> None:
         offset = len(self.vertices)
         self.vertices.extend(other.vertices)
         self.faces.extend([[i + offset for i in f] for f in other.faces])
+        self.groups.extend([[i + offset for i in group] for group in other.groups])
+        for name, group in other.named_groups.items():
+            self.named_groups.setdefault(name, []).extend([i + offset for i in group])
 
 
 @dataclass
@@ -87,11 +105,147 @@ EXPR_FUNCTIONS = {
 EXPR_CONSTANTS = {"pi": math.pi, "tau": math.tau}
 TEMPLATE_PLACEHOLDER_RE = re.compile(r"\$\{[^}]+\}|(?<!\[)\{[A-Za-z_][A-Za-z0-9_]*\}")
 SUPPORTED_POST_ATTRIBUTES = {
-    "transform": {"position", "rotation", "scale", "pivot"},
+    "transform": {"selection", "group", "position", "translate", "rotation", "scale", "pivot"},
     "symmetrize": {"axis", "side", "tolerance"},
     "mirror": {"axis"},
     "array": {"count", "offset", "centered", "center", "scale", "position", "pivot"},
-    "deform": {"position", "expr", "xyz"},
+    "scatter": {
+        "count",
+        "width",
+        "depth",
+        "area",
+        "size",
+        "axes",
+        "plane",
+        "target",
+        "surface",
+        "on",
+        "center",
+        "seed",
+        "min_distance",
+        "spacing",
+        "jitter",
+        "attempts",
+        "mode",
+        "align_to_normal",
+        "normal_offset",
+        "surface_offset",
+        "height_offset",
+        "scale",
+        "scale_min",
+        "scale_max",
+        "min_scale",
+        "max_scale",
+        "uniform_scale",
+        "position",
+        "rotation",
+        "rotation_x",
+        "rotation_y",
+        "rotation_z",
+        "pivot",
+        "height_min",
+        "height_max",
+        "slope_min",
+        "slope_max",
+        "avoid",
+        "clearance",
+        "cluster_count",
+        "clusters",
+        "cluster_radius",
+    },
+    "surface_snap": {
+        "target",
+        "surface",
+        "on",
+        "axes",
+        "plane",
+        "pivot",
+        "normal_offset",
+        "surface_offset",
+        "height_offset",
+        "align_to_normal",
+        "mode",
+    },
+    "conform": {
+        "target",
+        "surface",
+        "on",
+        "axes",
+        "plane",
+        "strength",
+        "normal_offset",
+        "surface_offset",
+        "height_offset",
+    },
+    "path_array": {
+        "path",
+        "target",
+        "curve",
+        "count",
+        "spacing",
+        "closed",
+        "rotation_mode",
+        "rotation",
+        "rotation_x",
+        "rotation_y",
+        "rotation_z",
+        "scale",
+        "scale_min",
+        "scale_max",
+        "min_scale",
+        "max_scale",
+        "uniform_scale",
+        "position",
+        "pivot",
+        "seed",
+    },
+    "surface_array": {
+        "target",
+        "surface",
+        "on",
+        "count",
+        "spacing",
+        "pattern",
+        "axes",
+        "plane",
+        "normal_offset",
+        "surface_offset",
+        "height_offset",
+        "align_to_normal",
+        "rotation",
+        "rotation_x",
+        "rotation_y",
+        "rotation_z",
+        "scale",
+        "scale_min",
+        "scale_max",
+        "min_scale",
+        "max_scale",
+        "uniform_scale",
+        "position",
+        "pivot",
+        "seed",
+    },
+    "orient": {
+        "mode",
+        "target",
+        "point",
+        "pivot",
+        "axis",
+        "up",
+        "rotation",
+    },
+    "clip": {
+        "axis",
+        "min",
+        "max",
+        "below",
+        "above",
+        "center",
+        "size",
+        "invert",
+    },
+    "deform": {"selection", "group", "position", "expr", "xyz"},
     "subdivide": {"level"},
     "smooth": {"iterations", "strength"},
     "simplify": {"ratio"},
@@ -322,6 +476,7 @@ def parse_obj(path: Path) -> Scene:
     current: Optional[RawObject] = None
     global_vertex_index_to_local: Dict[int, Tuple[RawObject, int]] = {}
     global_vertex_count = 0
+    current_group_names: List[str] = []
 
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
@@ -329,12 +484,17 @@ def parse_obj(path: Path) -> Scene:
             declaration, name = stripped.split(maxsplit=1)
             current = RawObject(name=name.strip(), declaration=declaration)
             scene.objects.append(current)
+            current_group_names = []
             continue
         if current is None:
             scene.header_lines.append(line)
             continue
         if stripped.startswith("g "):
-            current.raw_nonlive_lines.append(line)
+            current_group_names = [
+                part.strip()
+                for part in stripped.split()[1:]
+                if part.strip()
+            ]
             continue
         if stripped.startswith("#@"):
             current.meta_lines.append(line)
@@ -364,6 +524,9 @@ def parse_obj(path: Path) -> Scene:
                     face.append(local_idx)
             if len(face) >= 3:
                 current.mesh.faces.append(face)
+                for group_name in current_group_names:
+                    group = current.mesh.named_groups.setdefault(group_name, [])
+                    group.extend(face)
             continue
         current.raw_nonlive_lines.append(line)
 
@@ -591,6 +754,7 @@ def op_array(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
         scale = parse_vec3(op.get("scale", [1, 1, 1]), params, (1.0, 1.0, 1.0), scope)
         position = parse_vec3(op.get("position", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope)
         pivot = parse_vec3(op.get("pivot", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope)
+        source_groups = mesh.groups or [list(range(1, len(mesh.vertices) + 1))]
         copy = Mesh(
             [
                 (
@@ -601,6 +765,8 @@ def op_array(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
                 for v in mesh.vertices
             ],
             [list(face) for face in mesh.faces],
+            [list(group) for group in source_groups],
+            {name: list(group) for name, group in mesh.named_groups.items()},
         )
         out.extend(copy)
     return out
@@ -617,6 +783,60 @@ def parse_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def unique_indices(indices: List[int]) -> List[int]:
+    seen = set()
+    out: List[int] = []
+    for idx in indices:
+        if idx in seen:
+            continue
+        seen.add(idx)
+        out.append(idx)
+    return out
+
+
+def selected_vertex_indices(mesh: Mesh, op: Dict[str, Any]) -> Optional[set[int]]:
+    raw = op.get("selection", op.get("group", op.get("part")))
+    if raw is None:
+        return None
+    names: List[str] = []
+    if isinstance(raw, (list, tuple)):
+        names = [str(item).strip() for item in raw if str(item).strip()]
+    else:
+        names = [
+            part.strip()
+            for part in re.split(r"[|,]", str(raw))
+            if part.strip()
+        ]
+    if not names or any(name.lower() in {"*", "all"} for name in names):
+        return None
+
+    selected: set[int] = set()
+    missing: List[str] = []
+    for name in names:
+        group = mesh.named_groups.get(name)
+        if group is None:
+            missing.append(name)
+            continue
+        selected.update(idx for idx in group if 1 <= idx <= len(mesh.vertices))
+    if missing:
+        warn(f"selection group not found: {', '.join(missing)}")
+    return selected
+
+
+def selected_bbox(mesh: Mesh, selected: Optional[set[int]]) -> Tuple[Vec3, Vec3]:
+    if selected is None:
+        return mesh_bbox(mesh)
+    points = [
+        mesh.vertices[idx - 1]
+        for idx in selected
+        if 1 <= idx <= len(mesh.vertices)
+    ]
+    if not points:
+        return mesh_bbox(mesh)
+    xs, ys, zs = zip(*points)
+    return (min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs))
 
 
 def eval_numeric_expr(value: Any, params: Dict[str, Any], scope: Optional[Dict[str, Any]] = None) -> float:
@@ -714,6 +934,369 @@ def parse_vec3(
         return default
 
 
+def parse_pair(
+    value: Any,
+    params: Dict[str, Any],
+    default: Tuple[float, float],
+    scope: Optional[Dict[str, Any]] = None,
+) -> Tuple[float, float]:
+    raw = value
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text in params:
+            raw = params[text]
+        elif text.startswith("[") and text.endswith("]"):
+            raw = split_top_level_commas(text[1:-1])
+    if isinstance(raw, (int, float, str)) and not isinstance(raw, bool):
+        try:
+            value = eval_numeric_expr(raw, params, scope)
+            return (value, value)
+        except Exception:
+            return default
+    if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+        return default
+    try:
+        return (
+            eval_numeric_expr(raw[0], params, scope),
+            eval_numeric_expr(raw[1], params, scope),
+        )
+    except Exception as e:
+        warn(f"invalid pair expression {value!r}: {e}; using default {default}")
+        return default
+
+
+def scatter_plane_axes(op: Dict[str, Any]) -> Tuple[int, int, int]:
+    plane = str(op.get("axes", op.get("plane", "xz"))).strip().lower()
+    axes: List[int] = []
+    for ch in plane:
+        idx = AXIS_INDEX.get(ch)
+        if idx is not None and idx not in axes:
+            axes.append(idx)
+    if len(axes) < 2:
+        axes = [AXIS_INDEX["x"], AXIS_INDEX["z"]]
+    scatter_axes = (axes[0], axes[1])
+    vertical_candidates = [idx for idx in range(3) if idx not in scatter_axes]
+    return scatter_axes[0], scatter_axes[1], vertical_candidates[0]
+
+
+def scatter_numeric(value: Any, params: Dict[str, Any], scope: Dict[str, Any]) -> float:
+    if isinstance(value, str) and value.strip().lower() in {"random", "rand"}:
+        return float(scope.get("rand", 0.0)) * 360.0
+    return eval_numeric_expr(value, params, scope)
+
+
+def scatter_rotation(
+    op: Dict[str, Any],
+    params: Dict[str, Any],
+    scope: Dict[str, Any],
+    vertical_axis: int,
+) -> Vec3:
+    raw = op.get("rotation", [0, 0, 0])
+    if isinstance(raw, str) and raw.strip().lower() in {"random", "rand"}:
+        values = [0.0, 0.0, 0.0]
+        values[vertical_axis] = float(scope.get("rand", 0.0)) * 360.0
+        return (values[0], values[1], values[2])
+    values = list(parse_vec3(raw, params, (0.0, 0.0, 0.0), scope))
+    for axis_name, axis_idx in AXIS_INDEX.items():
+        key = f"rotation_{axis_name}"
+        if key in op:
+            try:
+                values[axis_idx] = scatter_numeric(op[key], params, scope)
+            except Exception as e:
+                warn(f"invalid scatter {key}={op[key]!r}: {e}; using {values[axis_idx]}")
+    return (values[0], values[1], values[2])
+
+
+def scatter_scale(op: Dict[str, Any], params: Dict[str, Any], scope: Dict[str, Any]) -> Vec3:
+    raw = op.get("uniform_scale", op.get("scale"))
+    if raw is not None:
+        if isinstance(raw, str):
+            text = raw.strip()
+            if text in params:
+                raw = params[text]
+            elif text.startswith("[") and text.endswith("]"):
+                raw = split_top_level_commas(text[1:-1])
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            try:
+                lo = eval_numeric_expr(raw[0], params, scope)
+                hi = eval_numeric_expr(raw[1], params, scope)
+                if hi < lo:
+                    lo, hi = hi, lo
+                value = lo + (hi - lo) * float(scope.get("rand_scale", scope.get("rand", 0.0)))
+                return (value, value, value)
+            except Exception as e:
+                warn(f"invalid scatter scale range {raw!r}: {e}; using [1,1,1]")
+                return (1.0, 1.0, 1.0)
+        return parse_vec3(raw, params, (1.0, 1.0, 1.0), scope)
+
+    lo = op.get("scale_min", op.get("min_scale"))
+    hi = op.get("scale_max", op.get("max_scale"))
+    if lo is not None or hi is not None:
+        try:
+            min_scale = eval_numeric_expr(lo if lo is not None else 1.0, params, scope)
+            max_scale = eval_numeric_expr(hi if hi is not None else min_scale, params, scope)
+            if max_scale < min_scale:
+                min_scale, max_scale = max_scale, min_scale
+            value = min_scale + (max_scale - min_scale) * float(scope.get("rand_scale", scope.get("rand", 0.0)))
+            return (value, value, value)
+        except Exception as e:
+            warn(f"invalid scatter scale_min/scale_max: {e}; using [1,1,1]")
+    return (1.0, 1.0, 1.0)
+
+
+def scatter_target_name(op: Dict[str, Any]) -> str:
+    return str(op.get("target", op.get("surface", op.get("on", "")))).strip()
+
+
+def surface_target_name(op: Dict[str, Any]) -> str:
+    return str(op.get("target", op.get("surface", op.get("on", "")))).strip()
+
+
+def path_target_name(op: Dict[str, Any]) -> str:
+    return str(op.get("path", op.get("target", op.get("curve", "")))).strip()
+
+
+def named_object(
+    name: str,
+    scene_objects: Optional[Dict[str, RawObject]],
+    op_name: str,
+) -> Optional[RawObject]:
+    if not name or not scene_objects:
+        warn(f"{op_name} skipped missing target object name")
+        return None
+    target = scene_objects.get(name)
+    if target is None:
+        warn(f"{op_name} target '{name}' not found")
+        return None
+    return target
+
+
+def parse_name_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [part.strip() for part in re.split(r"[, ]+", str(value)) if part.strip()]
+
+
+def surface_triangles(mesh: Mesh) -> List[Tuple[Vec3, Vec3, Vec3, Vec3, float]]:
+    triangles: List[Tuple[Vec3, Vec3, Vec3, Vec3, float]] = []
+    for face in mesh.faces:
+        clean = [idx for idx in face if 1 <= idx <= len(mesh.vertices)]
+        if len(clean) < 3:
+            continue
+        anchor = mesh.vertices[clean[0] - 1]
+        for i in range(1, len(clean) - 1):
+            b = mesh.vertices[clean[i] - 1]
+            c = mesh.vertices[clean[i + 1] - 1]
+            cross = vec_cross(vec_sub(b, anchor), vec_sub(c, anchor))
+            area = vec_length(cross) * 0.5
+            if area <= 1e-10:
+                continue
+            triangles.append((anchor, b, c, vec_normalize(cross, (0.0, 1.0, 0.0)), area))
+    return triangles
+
+
+def sample_surface_point(
+    triangles: List[Tuple[Vec3, Vec3, Vec3, Vec3, float]],
+    rng: random.Random,
+) -> Tuple[Vec3, Vec3]:
+    total_area = sum(item[4] for item in triangles)
+    pick = rng.random() * total_area
+    running = 0.0
+    selected = triangles[-1]
+    for triangle in triangles:
+        running += triangle[4]
+        if pick <= running:
+            selected = triangle
+            break
+    a, b, c, normal, _area = selected
+    r1 = rng.random()
+    r2 = rng.random()
+    sqrt_r1 = math.sqrt(r1)
+    wa = 1.0 - sqrt_r1
+    wb = sqrt_r1 * (1.0 - r2)
+    wc = sqrt_r1 * r2
+    point = (
+        a[0] * wa + b[0] * wb + c[0] * wc,
+        a[1] * wa + b[1] * wb + c[1] * wc,
+        a[2] * wa + b[2] * wb + c[2] * wc,
+    )
+    return point, normal
+
+
+def barycentric_2d(
+    point: Tuple[float, float],
+    a: Tuple[float, float],
+    b: Tuple[float, float],
+    c: Tuple[float, float],
+) -> Optional[Tuple[float, float, float]]:
+    denom = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+    if abs(denom) <= 1e-10:
+        return None
+    w1 = ((b[1] - c[1]) * (point[0] - c[0]) + (c[0] - b[0]) * (point[1] - c[1])) / denom
+    w2 = ((c[1] - a[1]) * (point[0] - c[0]) + (a[0] - c[0]) * (point[1] - c[1])) / denom
+    w3 = 1.0 - w1 - w2
+    tolerance = -1e-6
+    if w1 < tolerance or w2 < tolerance or w3 < tolerance:
+        return None
+    return (w1, w2, w3)
+
+
+def project_to_surface(
+    triangles: List[Tuple[Vec3, Vec3, Vec3, Vec3, float]],
+    point: Vec3,
+    axis_a: int,
+    axis_b: int,
+    vertical_axis: int,
+) -> Optional[Tuple[Vec3, Vec3]]:
+    point2 = (point[axis_a], point[axis_b])
+    best: Optional[Tuple[Vec3, Vec3, float]] = None
+    for a, b, c, normal, _area in triangles:
+        weights = barycentric_2d(
+            point2,
+            (a[axis_a], a[axis_b]),
+            (b[axis_a], b[axis_b]),
+            (c[axis_a], c[axis_b]),
+        )
+        if weights is None:
+            continue
+        w1, w2, w3 = weights
+        projected = [point[0], point[1], point[2]]
+        projected[vertical_axis] = a[vertical_axis] * w1 + b[vertical_axis] * w2 + c[vertical_axis] * w3
+        distance = abs(projected[vertical_axis] - point[vertical_axis])
+        if best is None or distance < best[2]:
+            best = ((projected[0], projected[1], projected[2]), normal, distance)
+    if best is None:
+        return None
+    return best[0], best[1]
+
+
+def mesh_center(mesh: Mesh) -> Vec3:
+    min_corner, max_corner = mesh_bbox(mesh)
+    return (
+        (min_corner[0] + max_corner[0]) * 0.5,
+        (min_corner[1] + max_corner[1]) * 0.5,
+        (min_corner[2] + max_corner[2]) * 0.5,
+    )
+
+
+def mesh_bottom_center(mesh: Mesh, vertical_axis: int) -> Vec3:
+    min_corner, max_corner = mesh_bbox(mesh)
+    values = [
+        (min_corner[0] + max_corner[0]) * 0.5,
+        (min_corner[1] + max_corner[1]) * 0.5,
+        (min_corner[2] + max_corner[2]) * 0.5,
+    ]
+    values[vertical_axis] = min_corner[vertical_axis]
+    return (values[0], values[1], values[2])
+
+
+def bbox_contains_point(mesh: Mesh, point: Vec3, clearance: float = 0.0) -> bool:
+    min_corner, max_corner = mesh_bbox(mesh)
+    return all(min_corner[i] - clearance <= point[i] <= max_corner[i] + clearance for i in range(3))
+
+
+def mesh_polyline(mesh: Mesh, closed: bool = False) -> List[Vec3]:
+    points = list(mesh.vertices)
+    if closed and len(points) > 1 and points[0] != points[-1]:
+        points.append(points[0])
+    return points
+
+
+def polyline_length(points: List[Vec3]) -> float:
+    return sum(vec_length(vec_sub(points[i + 1], points[i])) for i in range(max(0, len(points) - 1)))
+
+
+def sample_polyline(points: List[Vec3], distance: float) -> Tuple[Vec3, Vec3]:
+    if not points:
+        return (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)
+    if len(points) == 1:
+        return points[0], (1.0, 0.0, 0.0)
+    remaining = max(0.0, distance)
+    for i in range(len(points) - 1):
+        start = points[i]
+        end = points[i + 1]
+        segment = vec_sub(end, start)
+        length = vec_length(segment)
+        if length <= 1e-10:
+            continue
+        if remaining <= length:
+            t = remaining / length
+            return vec_add(start, vec_mul(segment, t)), vec_normalize(segment, (1.0, 0.0, 0.0))
+        remaining -= length
+    tangent = vec_normalize(vec_sub(points[-1], points[-2]), (1.0, 0.0, 0.0))
+    return points[-1], tangent
+
+
+def rotate_vector_axis_angle(point: Vec3, axis: Vec3, angle: float) -> Vec3:
+    axis = vec_normalize(axis)
+    if vec_length(axis) <= 1e-12 or abs(angle) <= 1e-12:
+        return point
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    return vec_add(
+        vec_add(vec_mul(point, cos_a), vec_mul(vec_cross(axis, point), sin_a)),
+        vec_mul(axis, vec_dot(axis, point) * (1.0 - cos_a)),
+    )
+
+
+def align_vector_between(point: Vec3, source: Vec3, target: Vec3) -> Vec3:
+    src = vec_normalize(source, (0.0, 1.0, 0.0))
+    dst = vec_normalize(target, src)
+    dot = max(-1.0, min(1.0, vec_dot(src, dst)))
+    if dot > 0.999999:
+        return point
+    if dot < -0.999999:
+        helper = (1.0, 0.0, 0.0) if abs(src[0]) < 0.9 else (0.0, 0.0, 1.0)
+        axis = vec_normalize(vec_cross(src, helper), (0.0, 0.0, 1.0))
+        return rotate_vector_axis_angle(point, axis, math.pi)
+    axis = vec_normalize(vec_cross(src, dst))
+    return rotate_vector_axis_angle(point, axis, math.acos(dot))
+
+
+def yaw_from_direction(direction: Vec3, axis_a: int, axis_b: int, vertical_axis: int) -> Vec3:
+    angle = math.degrees(math.atan2(direction[axis_b], direction[axis_a]))
+    values = [0.0, 0.0, 0.0]
+    values[vertical_axis] = angle
+    return (values[0], values[1], values[2])
+
+
+def transformed_copy(
+    mesh: Mesh,
+    placement: Vec3,
+    rotation: Vec3,
+    scale: Vec3,
+    pivot: Vec3,
+    offset: Vec3 = (0.0, 0.0, 0.0),
+    align_from: Optional[Vec3] = None,
+    align_to: Optional[Vec3] = None,
+) -> Mesh:
+    vertices: List[Vec3] = []
+    for vertex in mesh.vertices:
+        local = (
+            (vertex[0] - pivot[0]) * scale[0],
+            (vertex[1] - pivot[1]) * scale[1],
+            (vertex[2] - pivot[2]) * scale[2],
+        )
+        rotated = rotate_point(local, rotation)
+        if align_from is not None and align_to is not None:
+            rotated = align_vector_between(rotated, align_from, align_to)
+        vertices.append(
+            (
+                rotated[0] + pivot[0] + placement[0] + offset[0],
+                rotated[1] + pivot[1] + placement[1] + offset[1],
+                rotated[2] + pivot[2] + placement[2] + offset[2],
+            )
+        )
+    return Mesh(
+        vertices,
+        [list(face) for face in mesh.faces],
+        [list(group) for group in mesh.groups],
+        {name: list(group) for name, group in mesh.named_groups.items()},
+    )
+
+
 def rotate_point(vertex: Vec3, rotation_degrees: Vec3) -> Vec3:
     x, y, z = vertex
     rx, ry, rz = [math.radians(a) for a in rotation_degrees]
@@ -724,12 +1307,16 @@ def rotate_point(vertex: Vec3, rotation_degrees: Vec3) -> Vec3:
 
 
 def op_transform(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
-    position = parse_vec3(op.get("position", [0, 0, 0]), params, (0.0, 0.0, 0.0))
+    position = parse_vec3(op.get("position", op.get("translate", [0, 0, 0])), params, (0.0, 0.0, 0.0))
     rotation = parse_vec3(op.get("rotation", [0, 0, 0]), params, (0.0, 0.0, 0.0))
     scale = parse_vec3(op.get("scale", [1, 1, 1]), params, (1.0, 1.0, 1.0))
     pivot = parse_vec3(op.get("pivot", [0, 0, 0]), params, (0.0, 0.0, 0.0))
+    selected = selected_vertex_indices(mesh, op)
     vertices: List[Vec3] = []
-    for x, y, z in mesh.vertices:
+    for idx, (x, y, z) in enumerate(mesh.vertices, start=1):
+        if selected is not None and idx not in selected:
+            vertices.append((x, y, z))
+            continue
         x -= pivot[0]
         y -= pivot[1]
         z -= pivot[2]
@@ -740,20 +1327,523 @@ def op_transform(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh
             vertices[-1][1] + pivot[1],
             vertices[-1][2] + pivot[2],
         )
-    return Mesh(vertices, [list(face) for face in mesh.faces])
+    return Mesh(
+        vertices,
+        [list(face) for face in mesh.faces],
+        [list(group) for group in mesh.groups],
+        {name: list(group) for name, group in mesh.named_groups.items()},
+    )
+
+
+def op_surface_snap(
+    mesh: Mesh,
+    op: Dict[str, Any],
+    params: Dict[str, Any],
+    scene_objects: Optional[Dict[str, RawObject]],
+) -> Mesh:
+    axis_a, axis_b, vertical_axis = scatter_plane_axes(op)
+    target = named_object(surface_target_name(op), scene_objects, "surface_snap")
+    if target is None:
+        return mesh
+    triangles = surface_triangles(target.mesh)
+    if not triangles:
+        warn("surface_snap target has no usable faces")
+        return mesh
+    offset = eval_numeric_expr(op.get("normal_offset", op.get("surface_offset", op.get("height_offset", 0.0))), params)
+    align_to_normal = parse_bool(op.get("align_to_normal"), False)
+    mode = str(op.get("mode", "instances" if mesh.groups else "object")).strip().lower()
+    snap_groups = mesh.groups if mode in {"instances", "groups", "copies"} and mesh.groups else [list(range(1, len(mesh.vertices) + 1))]
+    vertices = list(mesh.vertices)
+    snapped_groups: List[List[int]] = []
+    up = [0.0, 0.0, 0.0]
+    up[vertical_axis] = 1.0
+
+    for group in snap_groups:
+        valid = [idx for idx in group if 1 <= idx <= len(vertices)]
+        if not valid:
+            continue
+        group_points = [vertices[idx - 1] for idx in valid]
+        min_corner = (
+            min(point[0] for point in group_points),
+            min(point[1] for point in group_points),
+            min(point[2] for point in group_points),
+        )
+        max_corner = (
+            max(point[0] for point in group_points),
+            max(point[1] for point in group_points),
+            max(point[2] for point in group_points),
+        )
+        pivot_default = [
+            (min_corner[0] + max_corner[0]) * 0.5,
+            (min_corner[1] + max_corner[1]) * 0.5,
+            (min_corner[2] + max_corner[2]) * 0.5,
+        ]
+        pivot_default[vertical_axis] = min_corner[vertical_axis]
+        pivot = parse_vec3(op.get("pivot", pivot_default), params, (pivot_default[0], pivot_default[1], pivot_default[2]))
+        projected = project_to_surface(triangles, pivot, axis_a, axis_b, vertical_axis)
+        if projected is None:
+            continue
+        point, normal = projected
+        destination = vec_add(point, vec_mul(normal, offset))
+        delta_values = [0.0, 0.0, 0.0]
+        delta_values[vertical_axis] = destination[vertical_axis] - pivot[vertical_axis]
+        delta = (delta_values[0], delta_values[1], delta_values[2])
+        pivot_after = vec_add(pivot, delta)
+        for idx in valid:
+            moved = vec_add(vertices[idx - 1], delta)
+            if align_to_normal:
+                moved = vec_add(pivot_after, align_vector_between(vec_sub(moved, pivot_after), tuple(up), normal))
+            vertices[idx - 1] = moved
+        snapped_groups.append(list(group))
+
+    if not snapped_groups:
+        warn("surface_snap found no surface below pivot")
+        return mesh
+    return Mesh(
+        vertices,
+        [list(face) for face in mesh.faces],
+        [list(group) for group in mesh.groups],
+        {name: list(group) for name, group in mesh.named_groups.items()},
+    )
+
+
+def op_conform(
+    mesh: Mesh,
+    op: Dict[str, Any],
+    params: Dict[str, Any],
+    scene_objects: Optional[Dict[str, RawObject]],
+) -> Mesh:
+    axis_a, axis_b, vertical_axis = scatter_plane_axes(op)
+    target = named_object(surface_target_name(op), scene_objects, "conform")
+    if target is None:
+        return mesh
+    triangles = surface_triangles(target.mesh)
+    if not triangles:
+        warn("conform target has no usable faces")
+        return mesh
+    strength = max(0.0, min(1.0, eval_numeric_expr(op.get("strength", 1.0), params)))
+    offset = eval_numeric_expr(op.get("normal_offset", op.get("surface_offset", op.get("height_offset", 0.0))), params)
+    base = mesh_bottom_center(mesh, vertical_axis)
+    vertices: List[Vec3] = []
+    for vertex in mesh.vertices:
+        projected = project_to_surface(triangles, vertex, axis_a, axis_b, vertical_axis)
+        if projected is None:
+            vertices.append(vertex)
+            continue
+        surface_point, normal = projected
+        relative_height = vertex[vertical_axis] - base[vertical_axis]
+        desired = list(vertex)
+        desired[vertical_axis] = surface_point[vertical_axis] + relative_height
+        desired_point = vec_add((desired[0], desired[1], desired[2]), vec_mul(normal, offset))
+        vertices.append(vec_add(vec_mul(vertex, 1.0 - strength), vec_mul(desired_point, strength)))
+    return Mesh(
+        vertices,
+        [list(face) for face in mesh.faces],
+        [list(group) for group in mesh.groups],
+        {name: list(group) for name, group in mesh.named_groups.items()},
+    )
+
+
+def op_path_array(
+    mesh: Mesh,
+    op: Dict[str, Any],
+    params: Dict[str, Any],
+    scene_objects: Optional[Dict[str, RawObject]],
+) -> Mesh:
+    axis_a, axis_b, vertical_axis = scatter_plane_axes(op)
+    path = named_object(path_target_name(op), scene_objects, "path_array")
+    if path is None:
+        return mesh
+    points = mesh_polyline(path.mesh, parse_bool(op.get("closed"), False))
+    if len(points) < 2:
+        warn("path_array path needs at least two vertices")
+        return mesh
+    total = polyline_length(points)
+    spacing_value = op.get("spacing")
+    if spacing_value is not None:
+        spacing = max(1e-6, eval_numeric_expr(spacing_value, params))
+        count = max(1, int(math.floor(total / spacing)) + 1)
+    else:
+        count = max(1, int(round(eval_numeric_expr(op.get("count", 2), params))))
+        spacing = total / max(1, count - 1)
+    seed = int(round(eval_numeric_expr(op.get("seed", 1), params)))
+    rng = random.Random(seed)
+    mode = str(op.get("rotation_mode", "tangent")).strip().lower()
+    out = Mesh()
+    for n in range(count):
+        point, tangent = sample_polyline(points, spacing * n)
+        rand = rng.random()
+        scope = {
+            "i": float(n),
+            "index": float(n),
+            "count": float(count),
+            "t": float(n / max(1, count - 1)),
+            "px": point[0],
+            "py": point[1],
+            "pz": point[2],
+            "tx": tangent[0],
+            "ty": tangent[1],
+            "tz": tangent[2],
+            "rand": rand,
+            "random": rand,
+            "rand_scale": rng.random(),
+        }
+        rotation = scatter_rotation(op, params, scope, vertical_axis)
+        if mode in {"tangent", "path"}:
+            yaw = yaw_from_direction(tangent, axis_a, axis_b, vertical_axis)
+            rotation = (rotation[0] + yaw[0], rotation[1] + yaw[1], rotation[2] + yaw[2])
+        out.extend(
+            transformed_copy(
+                mesh,
+                point,
+                rotation,
+                scatter_scale(op, params, scope),
+                parse_vec3(op.get("pivot", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope),
+                parse_vec3(op.get("position", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope),
+            )
+        )
+    return out
+
+
+def op_surface_array(
+    mesh: Mesh,
+    op: Dict[str, Any],
+    params: Dict[str, Any],
+    scene_objects: Optional[Dict[str, RawObject]],
+) -> Mesh:
+    axis_a, axis_b, vertical_axis = scatter_plane_axes(op)
+    target = named_object(surface_target_name(op), scene_objects, "surface_array")
+    if target is None:
+        return mesh
+    triangles = surface_triangles(target.mesh)
+    if not triangles:
+        warn("surface_array target has no usable faces")
+        return mesh
+    min_corner, max_corner = mesh_bbox(target.mesh)
+    spacing = max(1e-6, eval_numeric_expr(op.get("spacing", 1.0), params))
+    pattern = str(op.get("pattern", "grid")).strip().lower()
+    max_count = int(round(eval_numeric_expr(op.get("count", 1000000), params)))
+    seed = int(round(eval_numeric_expr(op.get("seed", 1), params)))
+    rng = random.Random(seed)
+    up = [0.0, 0.0, 0.0]
+    up[vertical_axis] = 1.0
+    align_to_normal = parse_bool(op.get("align_to_normal"), False)
+    offset = eval_numeric_expr(op.get("normal_offset", op.get("surface_offset", op.get("height_offset", 0.0))), params)
+    out = Mesh()
+    placed = 0
+    row = 0
+    a = min_corner[axis_a]
+    while a <= max_corner[axis_a] + 1e-9 and placed < max_count:
+        b_offset = spacing * 0.5 if pattern == "hex" and row % 2 else 0.0
+        b = min_corner[axis_b] + b_offset
+        while b <= max_corner[axis_b] + 1e-9 and placed < max_count:
+            point = [0.0, 0.0, 0.0]
+            point[axis_a] = a
+            point[axis_b] = b
+            projected = project_to_surface(triangles, (point[0], point[1], point[2]), axis_a, axis_b, vertical_axis)
+            if projected is not None:
+                surface_point, normal = projected
+                placement = vec_add(surface_point, vec_mul(normal, offset))
+                rand = rng.random()
+                scope = {
+                    "i": float(placed),
+                    "index": float(placed),
+                    "count": float(max_count),
+                    "t": float(placed / max(1, max_count - 1)),
+                    "px": placement[0],
+                    "py": placement[1],
+                    "pz": placement[2],
+                    "nx": normal[0],
+                    "ny": normal[1],
+                    "nz": normal[2],
+                    "rand": rand,
+                    "random": rand,
+                    "rand_scale": rng.random(),
+                }
+                out.extend(
+                    transformed_copy(
+                        mesh,
+                        placement,
+                        scatter_rotation(op, params, scope, vertical_axis),
+                        scatter_scale(op, params, scope),
+                        parse_vec3(op.get("pivot", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope),
+                        parse_vec3(op.get("position", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope),
+                        tuple(up) if align_to_normal else None,
+                        normal if align_to_normal else None,
+                    )
+                )
+                placed += 1
+            b += spacing
+        a += spacing
+        row += 1
+    return out if out.vertices else mesh
+
+
+def op_orient(
+    mesh: Mesh,
+    op: Dict[str, Any],
+    params: Dict[str, Any],
+    scene_objects: Optional[Dict[str, RawObject]],
+) -> Mesh:
+    mode = str(op.get("mode", "face")).strip().lower()
+    pivot = parse_vec3(op.get("pivot", mesh_center(mesh)), params, mesh_center(mesh))
+    target_point = coerce_vec3(op.get("point"))
+    target_name = str(op.get("target", "")).strip()
+    if target_point is None and target_name and scene_objects and target_name in scene_objects:
+        target_point = mesh_center(scene_objects[target_name].mesh)
+    if target_point is None:
+        warn("orient skipped missing point or target")
+        return mesh
+    axis_a, axis_b, vertical_axis = scatter_plane_axes(op)
+    direction = vec_sub(target_point, pivot)
+    if mode in {"away", "away_from"}:
+        direction = vec_mul(direction, -1.0)
+    rotation = yaw_from_direction(direction, axis_a, axis_b, vertical_axis)
+    extra = parse_vec3(op.get("rotation", [0, 0, 0]), params, (0.0, 0.0, 0.0))
+    rotation = (rotation[0] + extra[0], rotation[1] + extra[1], rotation[2] + extra[2])
+    return transformed_copy(mesh, (0.0, 0.0, 0.0), rotation, (1.0, 1.0, 1.0), pivot)
+
+
+def op_clip(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
+    invert = parse_bool(op.get("invert"), False)
+    min_corner, max_corner = mesh_bbox(mesh)
+    bounds_min = list(min_corner)
+    bounds_max = list(max_corner)
+    if "center" in op or "size" in op:
+        center = parse_vec3(op.get("center", mesh_center(mesh)), params, mesh_center(mesh))
+        size = parse_vec3(op.get("size", [max_corner[i] - min_corner[i] for i in range(3)]), params, (1.0, 1.0, 1.0))
+        bounds_min = [center[i] - abs(size[i]) * 0.5 for i in range(3)]
+        bounds_max = [center[i] + abs(size[i]) * 0.5 for i in range(3)]
+    axis = str(op.get("axis", "")).strip().lower()
+    if axis in AXIS_INDEX:
+        idx = AXIS_INDEX[axis]
+        if "min" in op or "above" in op:
+            bounds_min[idx] = eval_numeric_expr(op.get("min", op.get("above")), params)
+        if "max" in op or "below" in op:
+            bounds_max[idx] = eval_numeric_expr(op.get("max", op.get("below")), params)
+    kept_faces: List[Face] = []
+    for face in mesh.faces:
+        centroid = face_centroid(mesh, face)
+        inside = all(bounds_min[i] <= centroid[i] <= bounds_max[i] for i in range(3))
+        if inside != invert:
+            kept_faces.append(face)
+    if not kept_faces:
+        warn("clip removed every face; leaving mesh unchanged")
+        return mesh
+    return compact_mesh(mesh, kept_faces)
+
+
+def op_scatter(
+    mesh: Mesh,
+    op: Dict[str, Any],
+    params: Dict[str, Any],
+    scene_objects: Optional[Dict[str, RawObject]] = None,
+) -> Mesh:
+    count = max(1, int(round(eval_numeric_expr(op.get("count", 1), params))))
+    area = parse_pair(op.get("area", op.get("size", [1, 1])), params, (1.0, 1.0))
+    width = max(0.0, eval_numeric_expr(op.get("width", area[0]), params))
+    depth = max(0.0, eval_numeric_expr(op.get("depth", area[1]), params))
+    center = parse_vec3(op.get("center", [0, 0, 0]), params, (0.0, 0.0, 0.0))
+    axis_a, axis_b, vertical_axis = scatter_plane_axes(op)
+    seed = int(round(eval_numeric_expr(op.get("seed", 1), params)))
+    rng = random.Random(seed)
+    min_distance = max(0.0, eval_numeric_expr(op.get("min_distance", op.get("spacing", 0.0)), params))
+    jitter = max(0.0, eval_numeric_expr(op.get("jitter", 0.0), params))
+    attempts = max(count, int(round(eval_numeric_expr(op.get("attempts", count * 200), params))))
+    target_name = scatter_target_name(op)
+    surface_offset = eval_numeric_expr(
+        op.get("normal_offset", op.get("surface_offset", op.get("height_offset", 0.0))), params
+    )
+    align_to_normal = parse_bool(op.get("align_to_normal"), False)
+    up_vector = [0.0, 0.0, 0.0]
+    up_vector[vertical_axis] = 1.0
+    surface_samples: Optional[List[Tuple[Vec3, Vec3, Vec3, Vec3, float]]] = None
+    if target_name:
+        target = scene_objects.get(target_name) if scene_objects else None
+        if target is None:
+            warn(f"scatter target '{target_name}' not found; falling back to rectangular field")
+        else:
+            surface_samples = surface_triangles(target.mesh)
+            if not surface_samples:
+                warn(f"scatter target '{target_name}' has no usable faces; falling back to rectangular field")
+                surface_samples = None
+    avoid_objects = [
+        scene_objects[name]
+        for name in parse_name_list(op.get("avoid"))
+        if scene_objects is not None and name in scene_objects
+    ]
+    clearance = max(0.0, eval_numeric_expr(op.get("clearance", 0.0), params))
+    height_min = op.get("height_min")
+    height_max = op.get("height_max")
+    slope_min = op.get("slope_min")
+    slope_max = op.get("slope_max")
+    cluster_count = max(
+        0,
+        int(round(eval_numeric_expr(op.get("cluster_count", op.get("clusters", 0)), params))),
+    )
+    cluster_radius = max(0.0, eval_numeric_expr(op.get("cluster_radius", 0.0), params))
+    cluster_centers: List[Tuple[Vec3, Vec3]] = []
+    for _ in range(cluster_count):
+        normal = tuple(up_vector)
+        if surface_samples is not None:
+            cluster_point, normal = sample_surface_point(surface_samples, rng)
+        else:
+            point = [center[0], center[1], center[2]]
+            point[axis_a] += rng.uniform(-width * 0.5, width * 0.5)
+            point[axis_b] += rng.uniform(-depth * 0.5, depth * 0.5)
+            cluster_point = (point[0], point[1], point[2])
+        cluster_centers.append((cluster_point, normal))
+
+    placements: List[Tuple[Vec3, Vec3]] = []
+    min_d2 = min_distance * min_distance
+    tries = 0
+    while len(placements) < count and tries < attempts:
+        tries += 1
+        normal = tuple(up_vector)
+        if cluster_centers:
+            cluster_point, normal = cluster_centers[rng.randrange(len(cluster_centers))]
+            angle = rng.random() * math.tau
+            radius = cluster_radius * math.sqrt(rng.random())
+            if surface_samples is not None:
+                tangent_a, tangent_b = plane_basis(normal)
+                sampled = vec_add(
+                    cluster_point,
+                    vec_add(vec_mul(tangent_a, math.cos(angle) * radius), vec_mul(tangent_b, math.sin(angle) * radius)),
+                )
+                projected = project_to_surface(surface_samples, sampled, axis_a, axis_b, vertical_axis)
+                if projected is not None:
+                    sampled, normal = projected
+            else:
+                values = [cluster_point[0], cluster_point[1], cluster_point[2]]
+                values[axis_a] += math.cos(angle) * radius
+                values[axis_b] += math.sin(angle) * radius
+                sampled = (values[0], values[1], values[2])
+            candidate = vec_add(sampled, vec_mul(normal, surface_offset))
+        elif surface_samples is not None:
+            sampled, normal = sample_surface_point(surface_samples, rng)
+            if jitter > 0:
+                tangent_a, tangent_b = plane_basis(normal)
+                sampled = vec_add(
+                    sampled,
+                    vec_add(
+                        vec_mul(tangent_a, rng.uniform(-jitter, jitter)),
+                        vec_mul(tangent_b, rng.uniform(-jitter, jitter)),
+                    ),
+                )
+            candidate = vec_add(sampled, vec_mul(normal, surface_offset))
+        else:
+            a = rng.uniform(-width * 0.5, width * 0.5)
+            b = rng.uniform(-depth * 0.5, depth * 0.5)
+            if jitter > 0:
+                a += rng.uniform(-jitter, jitter)
+                b += rng.uniform(-jitter, jitter)
+            point = [center[0], center[1], center[2]]
+            point[axis_a] += a
+            point[axis_b] += b
+            candidate = (point[0], point[1], point[2])
+        if height_min is not None and candidate[vertical_axis] < eval_numeric_expr(height_min, params):
+            continue
+        if height_max is not None and candidate[vertical_axis] > eval_numeric_expr(height_max, params):
+            continue
+        slope_degrees = math.degrees(
+            math.acos(max(-1.0, min(1.0, abs(vec_dot(vec_normalize(normal), tuple(up_vector))))))
+        )
+        if slope_min is not None and slope_degrees < eval_numeric_expr(slope_min, params):
+            continue
+        if slope_max is not None and slope_degrees > eval_numeric_expr(slope_max, params):
+            continue
+        if any(bbox_contains_point(avoid.mesh, candidate, clearance) for avoid in avoid_objects):
+            continue
+        if min_distance > 0:
+            too_close = False
+            for existing, _existing_normal in placements:
+                da = existing[axis_a] - candidate[axis_a]
+                db = existing[axis_b] - candidate[axis_b]
+                if da * da + db * db < min_d2:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+        placements.append((candidate, normal))
+
+    if len(placements) < count:
+        warn(
+            f"scatter placed {len(placements)}/{count} copies; reduce min_distance or increase target area/width/depth/attempts"
+        )
+
+    scattered = Mesh()
+    for n, (placement, normal) in enumerate(placements):
+        rand = rng.random()
+        scope = {
+            "i": float(n),
+            "index": float(n),
+            "count": float(count),
+            "t": float(n / max(1, count - 1)),
+            "px": placement[0],
+            "py": placement[1],
+            "pz": placement[2],
+            "nx": normal[0],
+            "ny": normal[1],
+            "nz": normal[2],
+            "rand": rand,
+            "random": rand,
+            "rand_scale": rng.random(),
+            "rand_x": rng.random(),
+            "rand_y": rng.random(),
+            "rand_z": rng.random(),
+        }
+        scale = scatter_scale(op, params, scope)
+        rotation = scatter_rotation(op, params, scope, vertical_axis)
+        offset = parse_vec3(op.get("position", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope)
+        pivot = parse_vec3(op.get("pivot", [0, 0, 0]), params, (0.0, 0.0, 0.0), scope)
+        copy_vertices: List[Vec3] = []
+        for vertex in mesh.vertices:
+            local = (
+                (vertex[0] - pivot[0]) * scale[0],
+                (vertex[1] - pivot[1]) * scale[1],
+                (vertex[2] - pivot[2]) * scale[2],
+            )
+            rotated = rotate_point(local, rotation)
+            if align_to_normal:
+                rotated = align_vector_between(rotated, tuple(up_vector), normal)
+            copy_vertices.append(
+                (
+                    rotated[0] + pivot[0] + placement[0] + offset[0],
+                    rotated[1] + pivot[1] + placement[1] + offset[1],
+                    rotated[2] + pivot[2] + placement[2] + offset[2],
+                )
+            )
+        scattered.extend(Mesh(copy_vertices, [list(face) for face in mesh.faces]))
+
+    if str(op.get("mode", "replace")).strip().lower() == "append":
+        out = mesh.copy()
+        out.extend(scattered)
+        return out
+    return scattered
 
 
 def op_deform(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
     expr = op.get("position", op.get("expr", op.get("xyz", ["x", "y", "z"])))
-    min_corner, max_corner = mesh_bbox(mesh)
+    selected = selected_vertex_indices(mesh, op)
+    min_corner, max_corner = selected_bbox(mesh, selected)
     spans = [
         max(max_corner[0] - min_corner[0], 1e-9),
         max(max_corner[1] - min_corner[1], 1e-9),
         max(max_corner[2] - min_corner[2], 1e-9),
     ]
     vertices: List[Vec3] = []
-    vertex_count = max(1, len(mesh.vertices))
+    selected_order = [
+        idx for idx in range(1, len(mesh.vertices) + 1)
+        if selected is None or idx in selected
+    ]
+    selected_rank = {idx: rank for rank, idx in enumerate(selected_order)}
+    vertex_count = max(1, len(selected_order))
     for idx, (x, y, z) in enumerate(mesh.vertices):
+        vertex_idx = idx + 1
+        if selected is not None and vertex_idx not in selected:
+            vertices.append((x, y, z))
+            continue
+        rank = selected_rank.get(vertex_idx, idx)
         scope = {
             "x": x,
             "y": y,
@@ -761,13 +1851,18 @@ def op_deform(mesh: Mesh, op: Dict[str, Any], params: Dict[str, Any]) -> Mesh:
             "u": (x - min_corner[0]) / spans[0],
             "v": (y - min_corner[1]) / spans[1],
             "w": (z - min_corner[2]) / spans[2],
-            "i": float(idx),
-            "index": float(idx),
+            "i": float(rank),
+            "index": float(rank),
             "vertex_count": float(vertex_count),
-            "t": float(idx / max(1, vertex_count - 1)),
+            "t": float(rank / max(1, vertex_count - 1)),
         }
         vertices.append(parse_vec3(expr, params, (x, y, z), scope))
-    return Mesh(vertices, [list(face) for face in mesh.faces])
+    return Mesh(
+        vertices,
+        [list(face) for face in mesh.faces],
+        [list(group) for group in mesh.groups],
+        {name: list(group) for name, group in mesh.named_groups.items()},
+    )
 
 
 def op_subdivide(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
@@ -1782,7 +2877,12 @@ def op_snap_to_ground(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
         values = list(vertex)
         values[ax] += delta
         vertices.append((values[0], values[1], values[2]))
-    return Mesh(vertices, [list(face) for face in mesh.faces])
+    return Mesh(
+        vertices,
+        [list(face) for face in mesh.faces],
+        [list(group) for group in mesh.groups],
+        {name: list(group) for name, group in mesh.named_groups.items()},
+    )
 
 
 def op_center_origin(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
@@ -1800,7 +2900,12 @@ def op_center_origin(mesh: Mesh, op: Dict[str, Any]) -> Mesh:
             if axis in axes:
                 values[idx] -= center[idx]
         vertices.append((values[0], values[1], values[2]))
-    return Mesh(vertices, [list(face) for face in mesh.faces])
+    return Mesh(
+        vertices,
+        [list(face) for face in mesh.faces],
+        [list(group) for group in mesh.groups],
+        {name: list(group) for name, group in mesh.named_groups.items()},
+    )
 
 
 def validate_post_op(obj_name: str, op: Dict[str, Any]) -> None:
@@ -1827,7 +2932,7 @@ def validate_post_op(obj_name: str, op: Dict[str, Any]) -> None:
         warn(f"{obj_name}: deform requires position=[x,y,z]")
 
 
-def apply_post_ops(obj: RawObject) -> None:
+def apply_post_ops(obj: RawObject, scene_objects: Optional[Dict[str, RawObject]] = None) -> None:
     mesh = obj.mesh.copy()
     for op in obj.post_ops:
         cmd = str(op.get("cmd", "")).strip().lower()
@@ -1845,6 +2950,41 @@ def apply_post_ops(obj: RawObject) -> None:
             mesh = op_mirror(mesh, op)
         elif cmd == "array":
             mesh = op_array(mesh, op, obj.params)
+        elif cmd == "scatter":
+            try:
+                mesh = op_scatter(mesh, op, obj.params, scene_objects)
+            except Exception as e:
+                warn(f"{obj.name}: scatter failed: {e}")
+        elif cmd == "surface_snap":
+            try:
+                mesh = op_surface_snap(mesh, op, obj.params, scene_objects)
+            except Exception as e:
+                warn(f"{obj.name}: surface_snap failed: {e}")
+        elif cmd == "conform":
+            try:
+                mesh = op_conform(mesh, op, obj.params, scene_objects)
+            except Exception as e:
+                warn(f"{obj.name}: conform failed: {e}")
+        elif cmd == "path_array":
+            try:
+                mesh = op_path_array(mesh, op, obj.params, scene_objects)
+            except Exception as e:
+                warn(f"{obj.name}: path_array failed: {e}")
+        elif cmd == "surface_array":
+            try:
+                mesh = op_surface_array(mesh, op, obj.params, scene_objects)
+            except Exception as e:
+                warn(f"{obj.name}: surface_array failed: {e}")
+        elif cmd == "orient":
+            try:
+                mesh = op_orient(mesh, op, obj.params, scene_objects)
+            except Exception as e:
+                warn(f"{obj.name}: orient failed: {e}")
+        elif cmd == "clip":
+            try:
+                mesh = op_clip(mesh, op, obj.params)
+            except Exception as e:
+                warn(f"{obj.name}: clip failed: {e}")
         elif cmd == "deform":
             mesh = op_deform(mesh, op, obj.params)
         elif cmd == "subdivide":
@@ -1878,8 +3018,9 @@ def apply_post_ops(obj: RawObject) -> None:
 
 
 def execute_scene(scene: Scene) -> Scene:
+    scene_objects = {obj.name: obj for obj in scene.objects}
     for obj in scene.objects:
-        apply_post_ops(obj)
+        apply_post_ops(obj, scene_objects)
     return scene
 
 
@@ -1901,7 +3042,24 @@ def serialize_scene(scene: Scene) -> str:
                 lines.append(line)
         for x, y, z in obj.mesh.vertices:
             lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")
+        group_sets = {
+            name: set(unique_indices(indices))
+            for name, indices in obj.mesh.named_groups.items()
+            if indices
+        }
+        current_group: Optional[str] = None
         for face in obj.mesh.faces:
+            face_group: Optional[str] = None
+            if group_sets:
+                face_set = set(face)
+                for name, indices in group_sets.items():
+                    if face_set.issubset(indices):
+                        face_group = name
+                        break
+            if face_group != current_group:
+                if face_group is not None:
+                    lines.append(f"g {face_group}")
+                current_group = face_group
             lines.append("f " + " ".join(str(global_index + i - 1) for i in face))
         global_index += len(obj.mesh.vertices)
     return "\n".join(lines) + "\n"
